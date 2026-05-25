@@ -3,14 +3,14 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import List, Optional, Tuple
 
 import typer
 
 from bargeboard import session as session_mod
-from bargeboard.emit import make_emitters
-from bargeboard.providers import make_provider_bundles
+from bargeboard.emit import SessionEmitter, make_emitters
+from bargeboard.providers import make_provider_bundles, make_session_bundle
 from bargeboard.replay import ReplayConfig, ReplayEngine, build_runtimes
 
 app = typer.Typer(add_completion=False, help="Replay F1 race sessions as OpenTelemetry signals.")
@@ -87,19 +87,24 @@ def replay(
     )
 
     bundles = make_provider_bundles(drivers, info, endpoint)
+    session_bundle = make_session_bundle(info, endpoint)
     runtimes = build_runtimes(drivers)
 
-    # Anchor race_t = 0 to wall-clock now, so spans land live in axolot(e)l.
-    wall_start = datetime.now().astimezone()
+    # Anchor race_t = 0 to the actual session start time. Spans get emitted
+    # live (paced by the tick loop) but stamped with the historical race date,
+    # so axolot(e)l's time selector navigates to the real race window.
+    wall_start = info.start_time
+    session_emitter = SessionEmitter(session_bundle, wall_start)
     emitters = make_emitters(bundles, wall_start)
 
     config = ReplayConfig(speed=speed_x, dump=dump, start_at=start_at, end_at=end_at)
-    engine = ReplayEngine(info, runtimes, emitters, config)
+    engine = ReplayEngine(info, session_emitter, runtimes, emitters, config)
 
     try:
         engine.run()
     finally:
         for b in bundles.values():
             b.shutdown()
+        session_bundle.shutdown()
 
     typer.echo("Done.")

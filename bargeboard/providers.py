@@ -23,12 +23,14 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
+from bargeboard import __version__ as BARGEBOARD_VERSION
 from bargeboard.models import DriverInfo, SessionInfo
 
 
 @dataclass
 class ProviderBundle:
     driver: DriverInfo
+    session: SessionInfo
     tracer_provider: TracerProvider
     meter_provider: MeterProvider
     logger_provider: LoggerProvider
@@ -40,18 +42,60 @@ class ProviderBundle:
         self.logger_provider.shutdown()
 
 
-def make_resource(driver: DriverInfo, session: SessionInfo) -> Resource:
+@dataclass
+class SessionBundle:
+    """Provider bundle for the race itself (not any one car).
+
+    Owns the root span every driver's spans hang under, so the whole event is
+    one trace. Only a TracerProvider for now — no metrics/logs at session
+    scope yet.
+    """
+    session: SessionInfo
+    tracer_provider: TracerProvider
+
+    def shutdown(self) -> None:
+        self.tracer_provider.shutdown()
+
+
+def make_session_resource(session: SessionInfo) -> Resource:
+    # Resource = the race itself. service.name is the kind ("race"); the
+    # instance id pins down which one.
+    instance_id = f"{session.year}-{session.round_name.lower().replace(' ', '-')}-{session.session_type.lower()}"
     return Resource.create(
         {
-            "service.name": driver.team,
-            "service.instance.id": driver.code,
-            "f1.driver.code": driver.code,
-            "f1.driver.full_name": driver.full_name,
-            "f1.car.number": driver.car_number,
-            "f1.team": driver.team,
+            "service.name": "race",
+            "service.namespace": "f1",
+            "service.instance.id": instance_id,
+            "service.version": BARGEBOARD_VERSION,
             "f1.session.year": session.year,
             "f1.session.round": session.round_name,
             "f1.session.type": session.session_type,
+        }
+    )
+
+
+def make_session_bundle(session: SessionInfo, endpoint: str) -> SessionBundle:
+    resource = make_session_resource(session)
+    tp = TracerProvider(resource=resource)
+    tp.add_span_processor(
+        BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, insecure=True))
+    )
+    return SessionBundle(session=session, tracer_provider=tp)
+
+
+def make_resource(driver: DriverInfo) -> Resource:
+    # Resource = team/car identity. Session-scoped attributes (year, round,
+    # circuit, type) live on the race span, not here — same car drives many
+    # weekends with the same resource.
+    return Resource.create(
+        {
+            "service.name": driver.team,
+            "service.namespace": "f1",
+            "service.instance.id": driver.code,
+            "service.version": BARGEBOARD_VERSION,
+            "f1.driver.code": driver.code,
+            "f1.driver.full_name": driver.full_name,
+            "f1.car.number": driver.car_number,
         }
     )
 
@@ -61,7 +105,7 @@ def make_provider_bundle(
     session: SessionInfo,
     endpoint: str,
 ) -> ProviderBundle:
-    resource = make_resource(driver, session)
+    resource = make_resource(driver)
 
     # Traces
     tp = TracerProvider(resource=resource)
@@ -84,6 +128,7 @@ def make_provider_bundle(
 
     return ProviderBundle(
         driver=driver,
+        session=session,
         tracer_provider=tp,
         meter_provider=mp,
         logger_provider=lp,

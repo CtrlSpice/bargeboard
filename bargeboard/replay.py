@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, List
 
-from bargeboard.emit import DriverEmitter
+from bargeboard.emit import DriverEmitter, SessionEmitter
 from bargeboard.models import DriverInfo, DriverState, Event, SessionInfo
 
 log = logging.getLogger(__name__)
@@ -53,20 +53,25 @@ class ReplayEngine:
     def __init__(
         self,
         session: SessionInfo,
+        session_emitter: SessionEmitter,
         runtimes: Dict[str, DriverRuntime],
         emitters: Dict[str, DriverEmitter],
         config: ReplayConfig,
     ):
         self.session = session
+        self.session_emitter = session_emitter
         self.runtimes = runtimes
         self.emitters = emitters
         self.config = config
         self.end_at = config.end_at if config.end_at is not None else session.duration
 
     def run(self) -> None:
-        # Open the root race span for every driver.
+        # Open the race-wide root span first, then per-driver spans as children
+        # so the whole race lives in one trace.
+        self.session_emitter.start_session()
+        parent_ctx = self.session_emitter.parent_context()
         for code, em in self.emitters.items():
-            em.start_race()
+            em.start_race(parent_ctx)
             self.runtimes[code].state = DriverState.RACING
 
         race_t = self.config.start_at
@@ -86,7 +91,8 @@ class ReplayEngine:
                         # We're behind — skip the sleep but don't accumulate drift.
                         wall_next = time.monotonic()
         finally:
-            # Close every still-open root span at whatever race_t we reached.
+            # Close every still-open driver span at whatever race_t we reached,
+            # then close the race-wide root.
             for code, em in self.emitters.items():
                 rt = self.runtimes[code]
                 final_state = (
@@ -95,6 +101,7 @@ class ReplayEngine:
                     else rt.state
                 )
                 em.end_race(final_state, race_t)
+            self.session_emitter.end_session(race_t)
 
     def _tick(self, race_t: timedelta) -> None:
         for code, rt in self.runtimes.items():
