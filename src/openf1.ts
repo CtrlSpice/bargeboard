@@ -111,29 +111,51 @@ export interface OF1RaceControl {
 
 async function fetchJson<T>(path: string): Promise<T[]> {
   const url = `${BASE}/${path}`;
-  // OpenF1 rate-limits aggressively; back off on 429/5xx and retry.
-  const maxAttempts = 8;
+  // OpenF1 rate-limits aggressively. Retry policy:
+  //  - 12 attempts (worst case wait ~10 min total)
+  //  - exponential backoff capped at 60s, with full jitter to avoid
+  //    everybody retrying in sync after a burst
+  //  - honour the Retry-After header when OpenF1 sends one
+  //  - 404 means empty date window — treat as empty array, not an error
+  const maxAttempts = 12;
+  const baseDelay = 1000;
+  const maxDelay = 60_000;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const res = await fetch(url);
       if (res.ok) return (await res.json()) as T[];
-      // OpenF1 returns 404 for an empty date window. Treat as empty result.
       if (res.status === 404) return [];
       if (res.status === 429 || (res.status >= 500 && res.status < 600)) {
-        const wait = Math.min(30_000, 1000 * 2 ** (attempt - 1));
-        log.debug(`OpenF1 ${path} -> ${res.status}, retrying in ${wait}ms (attempt ${attempt}/${maxAttempts})`);
+        const retryAfter = parseRetryAfter(res.headers.get("Retry-After"));
+        const wait = retryAfter ?? jitteredBackoff(attempt, baseDelay, maxDelay);
+        if (attempt >= 3) {
+          log.info(`OpenF1 ${path} -> ${res.status}, retrying in ${wait}ms (attempt ${attempt}/${maxAttempts})`);
+        }
         await new Promise((r) => setTimeout(r, wait));
         continue;
       }
       throw new Error(`OpenF1 ${path} -> ${res.status} ${res.statusText}`);
     } catch (e) {
       if (attempt === maxAttempts) throw e;
-      const wait = Math.min(30_000, 1000 * 2 ** (attempt - 1));
+      const wait = jitteredBackoff(attempt, baseDelay, maxDelay);
       log.debug(`OpenF1 ${path} threw: ${(e as Error).message}; retrying in ${wait}ms`);
       await new Promise((r) => setTimeout(r, wait));
     }
   }
   throw new Error(`OpenF1 ${path} -> exhausted retries`);
+}
+
+/** Exponential backoff with full jitter: random in [0, min(max, base * 2^(n-1))]. */
+function jitteredBackoff(attempt: number, base: number, max: number): number {
+  const ceiling = Math.min(max, base * 2 ** (attempt - 1));
+  return Math.floor(Math.random() * ceiling);
+}
+
+/** Parse HTTP Retry-After (seconds-int form only — OpenF1 doesn't use HTTP-date). */
+function parseRetryAfter(header: string | null): number | null {
+  if (!header) return null;
+  const seconds = Number(header);
+  return Number.isFinite(seconds) ? seconds * 1000 : null;
 }
 
 /** URL-encode a key=value pair, leaving the API's `>` / `<` operators intact. */
