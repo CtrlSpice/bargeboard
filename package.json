@@ -1,0 +1,37 @@
+{
+  "name": "bargeboard",
+  "version": "0.2.0",
+  "description": "Replay F1 race sessions as OpenTelemetry traces, metrics, and logs.",
+  "type": "module",
+  "bin": {
+    "bargeboard": "./dist/index.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/api-logs": "^0.57.0",
+    "@opentelemetry/exporter-logs-otlp-grpc": "^0.57.0",
+    "@opentelemetry/exporter-metrics-otlp-grpc": "^0.57.0",
+    "@opentelemetry/exporter-trace-otlp-grpc": "^0.57.0",
+    "@opentelemetry/resources": "^1.30.0",
+    "@opentelemetry/sdk-logs": "^0.57.0",
+    "@opentelemetry/sdk-metrics": "^1.30.0",
+    "@opentelemetry/sdk-trace-base": "^1.30.0",
+    "@opentelemetry/sdk-trace-node": "^1.30.0",
+    "@opentelemetry/semantic-conventions": "^1.28.0",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
