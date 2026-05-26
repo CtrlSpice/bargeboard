@@ -8,10 +8,10 @@ from typing import List, Optional, Tuple
 
 import typer
 
-from bargeboard import session as session_mod
+from bargeboard import extract, session as session_mod
 from bargeboard.emit import SessionEmitter, make_emitters
 from bargeboard.providers import make_provider_bundles, make_session_bundle
-from bargeboard.replay import ReplayConfig, ReplayEngine, build_runtimes
+from bargeboard.replay import ReplayConfig, ReplayEngine, build_runtimes, fan_out_events
 
 app = typer.Typer(add_completion=False, help="Replay F1 race sessions as OpenTelemetry signals.")
 
@@ -77,7 +77,10 @@ def _run_one_race(
 
     bundles = make_provider_bundles(drivers, info, endpoint)
     session_bundle = make_session_bundle(info, endpoint)
-    runtimes = build_runtimes(drivers)
+
+    events = extract.extract_events(fastf1_session)
+    per_driver_queues = fan_out_events(events, [d.code for d in drivers])
+    runtimes = build_runtimes(drivers, per_driver_queues)
 
     # Anchor race_t = 0 to the actual session start time. Spans get emitted
     # live (paced by the tick loop) but stamped with the historical race date,

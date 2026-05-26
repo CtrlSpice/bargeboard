@@ -88,6 +88,12 @@ class Telemetry:
     brake: float      # 0–100
     gear: int         # 0–8
     drs: bool
+    # Track-local position in meters (from FastF1 pos_data). Defaulted to 0.0
+    # so older constructors / sources without pos_data still work — the
+    # extractor should fill these in when pos_data is available.
+    x_m: float = 0.0
+    y_m: float = 0.0
+    z_m: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -171,6 +177,19 @@ class Retirement:
     reason: str        # e.g. "power unit failure"
 
 
+@dataclass(frozen=True)
+class DefensiveMove:
+    """Derived event: detected lateral movement during a braking zone with a
+    chaser close behind. Produced by a pre-replay detection pass over pos_data
+    + car_data, not directly extracted from FastF1.
+    """
+    race_t: timedelta
+    driver_code: str           # the defender
+    lateral_meters: float      # how far they moved perpendicular to heading
+    chaser_code: str
+    chaser_gap_m: float        # distance to the chaser at start of braking zone
+
+
 Event = Union[
     LapStart,
     SectorBoundary,
@@ -182,5 +201,6 @@ Event = Union[
     Flag,
     Penalty,
     Investigation,
+    DefensiveMove,
     Retirement,
 ]

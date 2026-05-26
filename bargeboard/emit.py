@@ -22,6 +22,7 @@ from opentelemetry.trace import Span, Status, StatusCode
 
 from bargeboard import __version__ as BARGEBOARD_VERSION
 from bargeboard.models import (
+    DefensiveMove,
     DriverInfo,
     DriverState,
     Event,
@@ -173,6 +174,9 @@ class DriverEmitter:
         self.g_brake     = m.create_gauge("f1.car.brake",    description="Brake pressure", unit="%")
         self.g_gear      = m.create_gauge("f1.car.gear",     description="Selected gear", unit="{gear}")
         self.g_drs       = m.create_gauge("f1.car.drs",      description="DRS open (1) or closed (0)", unit="{bool}")
+        self.g_pos_x     = m.create_gauge("f1.car.position_x", description="Track-local X position", unit="m")
+        self.g_pos_y     = m.create_gauge("f1.car.position_y", description="Track-local Y position", unit="m")
+        self.g_pos_z     = m.create_gauge("f1.car.position_z", description="Track-local Z position (elevation)", unit="m")
 
         # WORKSHOP: standings_position needs lap-cadence position data from FastF1.
         self.g_position  = m.create_gauge("f1.driver.standings_position",
@@ -187,6 +191,9 @@ class DriverEmitter:
         self.c_investigations = m.create_counter("f1.driver.investigations",
                                                  description="Incidents opened against this driver (counted at under_investigation)",
                                                  unit="{incident}")
+        self.c_defensive_moves = m.create_counter("f1.driver.defensive_moves",
+                                                  description="Lateral moves under braking detected with a chaser close behind",
+                                                  unit="{move}")
 
         # Up-down counter — championship points can drop on DSQ.
         # WORKSHOP: needs cross-race / season state, not pushed live yet.
@@ -284,6 +291,8 @@ class DriverEmitter:
             self._on_penalty(ev, ts_ns)
         elif isinstance(ev, Investigation):
             self._on_investigation(ev, ts_ns)
+        elif isinstance(ev, DefensiveMove):
+            self._on_defensive_move(ev, ts_ns)
         elif isinstance(ev, Retirement):
             self._on_retirement(ev, ts_ns)
 
@@ -401,6 +410,9 @@ class DriverEmitter:
         self.g_brake.set(ev.brake)
         self.g_gear.set(ev.gear)
         self.g_drs.set(1 if ev.drs else 0)
+        self.g_pos_x.set(ev.x_m)
+        self.g_pos_y.set(ev.y_m)
+        self.g_pos_z.set(ev.z_m)
         if ev.speed_kph > self.lap_top_speed:
             self.lap_top_speed = ev.speed_kph
 
@@ -464,6 +476,25 @@ class DriverEmitter:
         severity = _PENALTY_SEVERITY.get(ev.type, SeverityNumber.WARN)
         body = f"{ev.type.value} penalty: {ev.reason}"
         self._emit_log(ts_ns, severity, body, attrs)
+
+    def _on_defensive_move(self, ev: DefensiveMove, ts_ns: int) -> None:
+        # Derived event from the pos_data / car_data pass. Lands on the
+        # active sector span, bumps the counter, and logs at WARN — they're
+        # genuinely interesting and probably stewards-worthy.
+        attrs = {
+            "f1.defensive_move.lateral_m": ev.lateral_meters,
+            "f1.defensive_move.chaser_code": ev.chaser_code,
+            "f1.defensive_move.chaser_gap_m": ev.chaser_gap_m,
+        }
+        self._add_event(ts_ns, "defensive_move", attrs)
+        self.c_defensive_moves.add(1)
+        self._emit_log(
+            ts_ns,
+            SeverityNumber.WARN,
+            f"Defensive move under braking: {ev.lateral_meters:.1f}m lateral, "
+            f"chaser {ev.chaser_code} {ev.chaser_gap_m:.1f}m back",
+            attrs,
+        )
 
     def _on_investigation(self, ev: Investigation, ts_ns: int) -> None:
         attrs = {

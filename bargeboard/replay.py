@@ -15,7 +15,7 @@ import logging
 import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 from bargeboard.emit import DriverEmitter, SessionEmitter
 from bargeboard.models import DriverInfo, DriverState, Event, SessionInfo
@@ -117,12 +117,18 @@ class ReplayEngine:
                 # PitEntry -> PIT, PitExit -> RACING, Retirement -> DNF, etc.
 
 
-def build_runtimes(drivers: List[DriverInfo]) -> Dict[str, DriverRuntime]:
-    """One DriverRuntime per driver, with empty event queues."""
-    # WORKSHOP: populate `queue` from FastF1 lap/telemetry/race-control data.
-    # When events are produced, route them through `fan_out_events` so
-    # session-wide messages (driver_code == "*") land on every driver.
-    return {d.code: DriverRuntime(info=d) for d in drivers}
+def build_runtimes(
+    drivers: List[DriverInfo],
+    queues: Optional[Dict[str, List[Event]]] = None,
+) -> Dict[str, DriverRuntime]:
+    """One DriverRuntime per driver. `queues` is per-driver pre-sorted event
+    lists, typically the output of `fan_out_events(extract_events(...))`.
+    Drivers with no events get an empty queue."""
+    queues = queues or {}
+    return {
+        d.code: DriverRuntime(info=d, queue=queues.get(d.code, []))
+        for d in drivers
+    }
 
 
 def fan_out_events(
