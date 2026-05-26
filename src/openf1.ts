@@ -111,11 +111,29 @@ export interface OF1RaceControl {
 
 async function fetchJson<T>(path: string): Promise<T[]> {
   const url = `${BASE}/${path}`;
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`OpenF1 ${path} -> ${res.status} ${res.statusText}`);
+  // OpenF1 rate-limits aggressively; back off on 429/5xx and retry.
+  const maxAttempts = 8;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await fetch(url);
+      if (res.ok) return (await res.json()) as T[];
+      // OpenF1 returns 404 for an empty date window. Treat as empty result.
+      if (res.status === 404) return [];
+      if (res.status === 429 || (res.status >= 500 && res.status < 600)) {
+        const wait = Math.min(30_000, 1000 * 2 ** (attempt - 1));
+        log.debug(`OpenF1 ${path} -> ${res.status}, retrying in ${wait}ms (attempt ${attempt}/${maxAttempts})`);
+        await new Promise((r) => setTimeout(r, wait));
+        continue;
+      }
+      throw new Error(`OpenF1 ${path} -> ${res.status} ${res.statusText}`);
+    } catch (e) {
+      if (attempt === maxAttempts) throw e;
+      const wait = Math.min(30_000, 1000 * 2 ** (attempt - 1));
+      log.debug(`OpenF1 ${path} threw: ${(e as Error).message}; retrying in ${wait}ms`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
   }
-  return (await res.json()) as T[];
+  throw new Error(`OpenF1 ${path} -> exhausted retries`);
 }
 
 /** URL-encode a key=value pair, leaving the API's `>` / `<` operators intact. */

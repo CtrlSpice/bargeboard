@@ -380,7 +380,7 @@ export async function loadEvents(
   );
   log.info(`Fetching telemetry for ${targetDrivers.length} drivers...`);
 
-  const POOL = 4;
+  const POOL = 2;  // OpenF1 rate-limits hard; keep concurrency low
   let cursor = 0;
   const telemEvents: Telemetry[] = [];
   async function worker(): Promise<void> {
@@ -393,7 +393,7 @@ export async function loadEvents(
           getLocation(session.session_key, d.car_number, sessionStart, sessionEnd),
         ]);
         const t = telemetryToEvents(carData, location, sessionStart, d.code);
-        telemEvents.push(...t);
+        for (const ev of t) telemEvents.push(ev);  // avoid spread blowing the call stack on large arrays
         log.info(`  ${d.code}: ${t.length} telemetry samples`);
       } catch (e) {
         log.warn(`  ${d.code}: telemetry fetch failed: ${(e as Error).message}`);
@@ -402,7 +402,7 @@ export async function loadEvents(
   }
   await Promise.all(Array.from({ length: POOL }, () => worker()));
 
-  events.push(...telemEvents);
+  for (const ev of telemEvents) events.push(ev);
   events.sort((a, b) => a.race_t - b.race_t);
   return events;
 }
