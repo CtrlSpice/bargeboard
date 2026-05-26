@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Union
+from typing import Optional, Union
 
 
 class DriverState(str, Enum):
@@ -92,9 +92,76 @@ class Telemetry:
 
 @dataclass(frozen=True)
 class RaceControl:
+    """Catch-all for race-control messages that don't fit a typed category
+    (warnings, track-limits notes, generic info). Typed events below cover
+    flags, penalties, and investigations."""
     race_t: timedelta
     driver_code: str   # may be a sentinel like "*" for session-wide messages
     message: str
+
+
+class FlagColor(str, Enum):
+    YELLOW = "yellow"
+    DOUBLE_YELLOW = "double_yellow"
+    GREEN = "green"
+    RED = "red"
+    BLUE = "blue"
+    WHITE = "white"
+    CHEQUERED = "chequered"
+    BLACK = "black"
+    BLACK_AND_WHITE = "black_and_white"   # warning, unsporting behaviour
+    BLACK_AND_ORANGE = "black_and_orange"  # mechanical, return to pits
+    SC = "sc"     # safety car
+    VSC = "vsc"   # virtual safety car
+
+
+class FlagStatus(str, Enum):
+    DEPLOYED = "deployed"
+    WITHDRAWN = "withdrawn"
+    ENDING = "ending"   # VSC ending phase, SC in-this-lap, etc.
+
+
+@dataclass(frozen=True)
+class Flag:
+    race_t: timedelta
+    driver_code: str               # "*" for session-wide (most flags)
+    color: FlagColor
+    status: FlagStatus
+    scope: Optional[str] = None    # "track" | "sector_1" | "sector_2" | "sector_3"
+
+
+class PenaltyType(str, Enum):
+    FIVE_SECOND = "5_second"
+    TEN_SECOND = "10_second"
+    DRIVE_THROUGH = "drive_through"
+    STOP_GO_10 = "stop_go_10"
+    GRID = "grid"
+    REPRIMAND = "reprimand"
+    DSQ = "disqualification"
+
+
+@dataclass(frozen=True)
+class Penalty:
+    race_t: timedelta
+    driver_code: str               # always a specific driver
+    type: PenaltyType
+    reason: str
+    seconds: Optional[float] = None  # for time penalties
+
+
+class InvestigationStatus(str, Enum):
+    NOTED = "noted"
+    UNDER_INVESTIGATION = "under_investigation"
+    NO_ACTION = "no_action"
+    PENALTY = "penalty"   # resolved with a penalty (see Penalty event for details)
+
+
+@dataclass(frozen=True)
+class Investigation:
+    race_t: timedelta
+    driver_code: str
+    status: InvestigationStatus
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -112,5 +179,8 @@ Event = Union[
     TyreChange,
     Telemetry,
     RaceControl,
+    Flag,
+    Penalty,
+    Investigation,
     Retirement,
 ]

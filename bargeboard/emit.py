@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Iterable, Optional
 
 from opentelemetry import trace
-from opentelemetry._logs import get_logger
+from opentelemetry._logs import SeverityNumber, get_logger
 from opentelemetry.context import Context
 from opentelemetry.trace import Span, Status, StatusCode
 
@@ -25,7 +25,13 @@ from bargeboard.models import (
     DriverInfo,
     DriverState,
     Event,
+    Flag,
+    FlagColor,
+    Investigation,
+    InvestigationStatus,
     LapStart,
+    Penalty,
+    PenaltyType,
     PitEntry,
     PitExit,
     RaceControl,
@@ -35,6 +41,40 @@ from bargeboard.models import (
     TyreChange,
 )
 from bargeboard.providers import ProviderBundle, SessionBundle
+
+# --- log severities for each event kind --------------------------------------
+# Keyed for clarity. Lookup helpers live below.
+_FLAG_SEVERITY = {
+    FlagColor.GREEN: SeverityNumber.INFO,
+    FlagColor.CHEQUERED: SeverityNumber.INFO,
+    FlagColor.YELLOW: SeverityNumber.WARN,
+    FlagColor.DOUBLE_YELLOW: SeverityNumber.WARN,
+    FlagColor.SC: SeverityNumber.WARN,
+    FlagColor.VSC: SeverityNumber.WARN,
+    FlagColor.WHITE: SeverityNumber.INFO,
+    FlagColor.BLACK_AND_WHITE: SeverityNumber.WARN,
+    FlagColor.BLACK_AND_ORANGE: SeverityNumber.WARN,
+    FlagColor.BLACK: SeverityNumber.ERROR,
+    FlagColor.RED: SeverityNumber.ERROR,
+    FlagColor.BLUE: SeverityNumber.DEBUG,
+}
+
+_PENALTY_SEVERITY = {
+    PenaltyType.REPRIMAND: SeverityNumber.INFO,
+    PenaltyType.FIVE_SECOND: SeverityNumber.WARN,
+    PenaltyType.TEN_SECOND: SeverityNumber.WARN,
+    PenaltyType.DRIVE_THROUGH: SeverityNumber.WARN,
+    PenaltyType.STOP_GO_10: SeverityNumber.WARN,
+    PenaltyType.GRID: SeverityNumber.WARN,
+    PenaltyType.DSQ: SeverityNumber.ERROR,
+}
+
+_INVESTIGATION_SEVERITY = {
+    InvestigationStatus.NOTED: SeverityNumber.INFO,
+    InvestigationStatus.UNDER_INVESTIGATION: SeverityNumber.INFO,
+    InvestigationStatus.NO_ACTION: SeverityNumber.DEBUG,
+    InvestigationStatus.PENALTY: SeverityNumber.WARN,
+}
 
 log = logging.getLogger(__name__)
 
@@ -58,7 +98,20 @@ class SessionEmitter:
         self.session = bundle.session
         self.wall_start = wall_start
         self.tracer = bundle.tracer_provider.get_tracer(SCOPE_NAME, SCOPE_VERSION)
+        self.meter = bundle.meter_provider.get_meter(SCOPE_NAME, SCOPE_VERSION)
+        # Session-scoped instruments: things that aren't about a single car.
+        self.cars_on_track = self.meter.create_up_down_counter(
+            "f1.session.cars_on_track",
+            description="Number of cars still circulating (non-DNF, non-FINISHED).",
+            unit="{car}",
+        )
         self.root_span: Optional[Span] = None
+
+    def car_started(self) -> None:
+        self.cars_on_track.add(1)
+
+    def car_retired(self) -> None:
+        self.cars_on_track.add(-1)
 
     def start_session(self) -> None:
         name = (
@@ -95,23 +148,78 @@ class DriverEmitter:
     how each maps onto OTLP.
     """
 
-    def __init__(self, bundle: ProviderBundle, wall_start: datetime):
+    def __init__(
+        self,
+        bundle: ProviderBundle,
+        wall_start: datetime,
+        session_emitter: SessionEmitter,
+    ):
         self.bundle = bundle
         self.driver: DriverInfo = bundle.driver
         self.wall_start = wall_start  # wall-clock at race_t = 0
+        self.session_emitter = session_emitter
         self.tracer = bundle.tracer_provider.get_tracer(SCOPE_NAME, SCOPE_VERSION)
         self.meter = bundle.meter_provider.get_meter(SCOPE_NAME, SCOPE_VERSION)
         self.logger = get_logger(
             SCOPE_NAME, SCOPE_VERSION, logger_provider=bundle.logger_provider
         )
-        # WORKSHOP: gauge instruments hang off self.meter (telemetry)
-        # WORKSHOP: log records emit via self.logger (race-control / pit / tyre)
+
+        # --- instruments --------------------------------------------------
+        # Telemetry gauges (one push per Telemetry event).
+        m = self.meter
+        self.g_speed     = m.create_gauge("f1.car.speed",    description="Speed", unit="km/h")
+        self.g_rpm       = m.create_gauge("f1.car.rpm",      description="Engine RPM", unit="{rpm}")
+        self.g_throttle  = m.create_gauge("f1.car.throttle", description="Throttle position", unit="%")
+        self.g_brake     = m.create_gauge("f1.car.brake",    description="Brake pressure", unit="%")
+        self.g_gear      = m.create_gauge("f1.car.gear",     description="Selected gear", unit="{gear}")
+        self.g_drs       = m.create_gauge("f1.car.drs",      description="DRS open (1) or closed (0)", unit="{bool}")
+
+        # WORKSHOP: standings_position needs lap-cadence position data from FastF1.
+        self.g_position  = m.create_gauge("f1.driver.standings_position",
+                                          description="Current race position (1 = leader)",
+                                          unit="{position}")
+
+        # Counters — monotonic.
+        self.c_laps         = m.create_counter("f1.driver.laps_completed", description="Laps completed", unit="{lap}")
+        self.c_pit_stops    = m.create_counter("f1.driver.pit_stops",      description="Pit stops completed", unit="{stop}")
+        self.c_blue_flags   = m.create_counter("f1.driver.blue_flags",     description="Blue flags shown to this driver", unit="{flag}")
+        self.c_penalties    = m.create_counter("f1.driver.penalties",      description="Penalties received", unit="{penalty}")
+        self.c_investigations = m.create_counter("f1.driver.investigations",
+                                                 description="Incidents opened against this driver (counted at under_investigation)",
+                                                 unit="{incident}")
+
+        # Up-down counter — championship points can drop on DSQ.
+        # WORKSHOP: needs cross-race / season state, not pushed live yet.
+        self.udc_points = m.create_up_down_counter("f1.driver.championship_points",
+                                                   description="Championship points (can decrease via DSQ)",
+                                                   unit="{point}")
+
+        # Explicit-bucket histograms.
+        self.h_lap_time      = m.create_histogram("f1.driver.lap_time",      description="Lap time", unit="s")
+        self.h_sector_time   = m.create_histogram("f1.driver.sector_time",   description="Sector time", unit="s")
+        self.h_pit_duration  = m.create_histogram("f1.driver.pit_duration",  description="Pit lane duration", unit="s")
+
+        # Exponential histograms (promoted via View on the MeterProvider).
+        self.h_top_speed     = m.create_histogram("f1.driver.top_speed",     description="Top speed per lap", unit="km/h")
+        # WORKSHOP: gap_to_leader needs lap-cadence timing extraction.
+        self.h_gap_to_leader = m.create_histogram("f1.driver.gap_to_leader", description="Gap to race leader", unit="s")
+
+        # --- span state ---------------------------------------------------
         self.race_span: Optional[Span] = None
         self.lap_span: Optional[Span] = None
         self.lap_number: int = 0
         self.sector_span: Optional[Span] = None
         self.sector_number: int = 0
         self.pit_span: Optional[Span] = None
+
+        # --- timing state for histograms ----------------------------------
+        self.lap_start_ts: Optional[int] = None   # ns when current lap opened
+        self.sector_start_ts: Optional[int] = None
+        self.pit_entry_ts: Optional[int] = None
+        self.lap_top_speed: float = 0.0           # max km/h seen during current lap
+
+        # --- per-driver state used elsewhere ------------------------------
+        self.retired: bool = False
 
     # --- lifecycle ----------------------------------------------------------
 
@@ -163,26 +271,35 @@ class DriverEmitter:
         elif isinstance(ev, PitEntry):
             self._on_pit_entry(ts_ns)
         elif isinstance(ev, PitExit):
-            self._close_pit(ts_ns)
+            self._on_pit_exit(ts_ns)
         elif isinstance(ev, TyreChange):
-            # WORKSHOP: attach as span event on the active pit span (or lap if no pit)
-            log.debug("[%s] %s tyres (age %d)", self.driver.code, ev.compound, ev.age_laps)
+            self._on_tyre_change(ev, ts_ns)
         elif isinstance(ev, Telemetry):
-            pass  # WORKSHOP: write to gauges
+            self._on_telemetry(ev)
         elif isinstance(ev, RaceControl):
-            # WORKSHOP: emit as log record + add span event on race root
-            log.debug("[%s] race control: %s", self.driver.code, ev.message)
+            self._on_race_control(ev, ts_ns)
+        elif isinstance(ev, Flag):
+            self._on_flag(ev, ts_ns)
+        elif isinstance(ev, Penalty):
+            self._on_penalty(ev, ts_ns)
+        elif isinstance(ev, Investigation):
+            self._on_investigation(ev, ts_ns)
         elif isinstance(ev, Retirement):
-            log.debug("[%s] retired: %s", self.driver.code, ev.reason)
+            self._on_retirement(ev, ts_ns)
 
     # --- span lifecycle helpers --------------------------------------------
 
     def _on_lap_start(self, ev: LapStart, ts_ns: int) -> None:
-        # New lap closes any leftover sector/pit from the previous lap, then
-        # the previous lap span itself, then opens lap N + sector 1.
+        # Close the previous lap and record its histograms before opening N.
         self._close_pit(ts_ns)
         self._close_sector(ts_ns)
+        if self.lap_span is not None and self.lap_start_ts is not None:
+            lap_seconds = (ts_ns - self.lap_start_ts) / 1e9
+            self.h_lap_time.record(lap_seconds, {"f1.lap.number": self.lap_number})
+            if self.lap_top_speed > 0:
+                self.h_top_speed.record(self.lap_top_speed, {"f1.lap.number": self.lap_number})
         self._close_lap(ts_ns)
+
         if self.race_span is None:
             return
         race_ctx = trace.set_span_in_context(self.race_span)
@@ -193,14 +310,24 @@ class DriverEmitter:
             attributes={"f1.lap.number": ev.lap_number},
         )
         self.lap_number = ev.lap_number
+        self.lap_start_ts = ts_ns
+        self.lap_top_speed = 0.0
+        self.c_laps.add(1)
         self._open_sector(1, ts_ns)
 
     def _on_sector_boundary(self, ev: SectorBoundary, ts_ns: int) -> None:
-        # Boundary fires at the END of sector N. Close N, open N+1 (if any).
+        # Boundary fires at the END of sector N. Record its time, close N,
+        # open N+1 (if any).
         if self.sector_span is None or self.sector_number != ev.sector:
             log.debug(
                 "[%s] sector boundary %d with no matching open sector (have %d)",
                 self.driver.code, ev.sector, self.sector_number,
+            )
+        if self.sector_span is not None and self.sector_start_ts is not None:
+            sector_seconds = (ts_ns - self.sector_start_ts) / 1e9
+            self.h_sector_time.record(
+                sector_seconds,
+                {"f1.lap.number": self.lap_number, "f1.sector.number": ev.sector},
             )
         self._close_sector(ts_ns)
         if ev.sector < 3 and self.lap_span is not None:
@@ -216,6 +343,15 @@ class DriverEmitter:
             start_time=ts_ns,
             attributes={"f1.lap.number": self.lap_number},
         )
+        self.pit_entry_ts = ts_ns
+
+    def _on_pit_exit(self, ts_ns: int) -> None:
+        # Record pit duration histogram + bump stop counter, then close span.
+        if self.pit_entry_ts is not None:
+            pit_seconds = (ts_ns - self.pit_entry_ts) / 1e9
+            self.h_pit_duration.record(pit_seconds, {"f1.lap.number": self.lap_number})
+        self.c_pit_stops.add(1)
+        self._close_pit(ts_ns)
 
     def _open_sector(self, n: int, ts_ns: int) -> None:
         if self.lap_span is None:
@@ -228,29 +364,168 @@ class DriverEmitter:
             attributes={"f1.lap.number": self.lap_number, "f1.sector.number": n},
         )
         self.sector_number = n
+        self.sector_start_ts = ts_ns
 
     def _close_sector(self, ts_ns: int) -> None:
         if self.sector_span is not None:
             self.sector_span.end(end_time=ts_ns)
             self.sector_span = None
             self.sector_number = 0
+            self.sector_start_ts = None
 
     def _close_lap(self, ts_ns: int) -> None:
         if self.lap_span is not None:
             self.lap_span.end(end_time=ts_ns)
             self.lap_span = None
+            self.lap_start_ts = None
 
     def _close_pit(self, ts_ns: int) -> None:
         if self.pit_span is not None:
             self.pit_span.end(end_time=ts_ns)
             self.pit_span = None
+            self.pit_entry_ts = None
+
+    def _active_span(self) -> Optional[Span]:
+        """Whichever span is the most-specific 'where the driver is right now'.
+        Sector beats lap beats race. Returns None if the driver hasn't started."""
+        return self.sector_span or self.lap_span or self.race_span
+
+    # --- event handlers -----------------------------------------------------
+
+    def _on_telemetry(self, ev: Telemetry) -> None:
+        # Sync gauges — push every value. Note the timestamp wart: OTel sync
+        # instruments stamp at record-time (wall-clock now), not historical.
+        self.g_speed.set(ev.speed_kph)
+        self.g_rpm.set(ev.rpm)
+        self.g_throttle.set(ev.throttle)
+        self.g_brake.set(ev.brake)
+        self.g_gear.set(ev.gear)
+        self.g_drs.set(1 if ev.drs else 0)
+        if ev.speed_kph > self.lap_top_speed:
+            self.lap_top_speed = ev.speed_kph
+
+    def _on_tyre_change(self, ev: TyreChange, ts_ns: int) -> None:
+        attrs = {"f1.tyre.compound": ev.compound, "f1.tyre.age_laps": ev.age_laps}
+        self._add_event(ts_ns, "tyre_change", attrs)
+        self._emit_log(
+            ts_ns,
+            SeverityNumber.DEBUG,
+            f"{ev.compound} tyres fitted (age {ev.age_laps})",
+            {"f1.tyre.compound": ev.compound, "f1.tyre.age_laps": ev.age_laps},
+        )
+
+    def _on_retirement(self, ev: Retirement, ts_ns: int) -> None:
+        # Span event lands on the active span; log records the reason; the
+        # session-level cars_on_track counter decrements once.
+        self._add_event(ts_ns, "retirement", {"f1.retirement.reason": ev.reason})
+        self._emit_log(
+            ts_ns,
+            SeverityNumber.ERROR,
+            f"Retired: {ev.reason}",
+            {"f1.retirement.reason": ev.reason},
+        )
+        if not self.retired:
+            self.session_emitter.car_retired()
+            self.retired = True
+
+    def _on_race_control(self, ev: RaceControl, ts_ns: int) -> None:
+        # Catch-all: free-form race-control messages that don't fit a typed
+        # category. Span event + INFO log.
+        self._add_event(ts_ns, "race_control", {"f1.race_control.message": ev.message})
+        self._emit_log(ts_ns, SeverityNumber.INFO, ev.message, {})
+
+    def _on_flag(self, ev: Flag, ts_ns: int) -> None:
+        attrs = {
+            "f1.flag.color": ev.color.value,
+            "f1.flag.status": ev.status.value,
+        }
+        if ev.scope is not None:
+            attrs["f1.flag.scope"] = ev.scope
+        self._add_event(ts_ns, f"flag.{ev.color.value}", attrs)
+
+        # Blue flags get counted — they're per-driver and meaningful as a tally.
+        if ev.color == FlagColor.BLUE:
+            self.c_blue_flags.add(1)
+
+        severity = _FLAG_SEVERITY.get(ev.color, SeverityNumber.INFO)
+        scope_str = f" ({ev.scope})" if ev.scope else ""
+        self._emit_log(ts_ns, severity, f"{ev.color.value} flag {ev.status.value}{scope_str}", attrs)
+
+    def _on_penalty(self, ev: Penalty, ts_ns: int) -> None:
+        attrs = {
+            "f1.penalty.type": ev.type.value,
+            "f1.penalty.reason": ev.reason,
+        }
+        if ev.seconds is not None:
+            attrs["f1.penalty.seconds"] = ev.seconds
+        self._add_event(ts_ns, f"penalty.{ev.type.value}", attrs)
+        self.c_penalties.add(1, {"f1.penalty.type": ev.type.value})
+
+        severity = _PENALTY_SEVERITY.get(ev.type, SeverityNumber.WARN)
+        body = f"{ev.type.value} penalty: {ev.reason}"
+        self._emit_log(ts_ns, severity, body, attrs)
+
+    def _on_investigation(self, ev: Investigation, ts_ns: int) -> None:
+        attrs = {
+            "f1.investigation.status": ev.status.value,
+            "f1.investigation.reason": ev.reason,
+        }
+        self._add_event(ts_ns, f"investigation.{ev.status.value}", attrs)
+        # Count once per incident: at under_investigation, not at noted (too
+        # early) and not at resolution (would double-count with the open).
+        if ev.status == InvestigationStatus.UNDER_INVESTIGATION:
+            self.c_investigations.add(1)
+
+        severity = _INVESTIGATION_SEVERITY.get(ev.status, SeverityNumber.INFO)
+        body = f"investigation {ev.status.value}: {ev.reason}"
+        self._emit_log(ts_ns, severity, body, attrs)
+
+    # --- emission helpers ---------------------------------------------------
+
+    def _add_event(self, ts_ns: int, name: str, attrs: dict) -> None:
+        """Attach a span event to the most-specific currently-open span
+        (sector → lap → race). Driver code goes on every event automatically."""
+        target = self._active_span()
+        if target is None:
+            log.debug("[%s] dropping %s — no active span", self.driver.code, name)
+            return
+        attrs = {**attrs, "f1.driver.code": self.driver.code}
+        target.add_event(name, attributes=attrs, timestamp=ts_ns)
+
+    def _emit_log(
+        self,
+        ts_ns: int,
+        severity: SeverityNumber,
+        body: str,
+        attrs: dict,
+    ) -> None:
+        """Emit a log record correlated to the currently-active span. Driver
+        code lives on the resource so we don't repeat it here; we DO stamp
+        f1.driver.code as an attribute too so log queries don't have to
+        cross-reference resource attributes."""
+        attrs = {**attrs, "f1.driver.code": self.driver.code}
+        target = self._active_span()
+        ctx = trace.set_span_in_context(target) if target is not None else None
+        self.logger.emit(
+            timestamp=ts_ns,
+            observed_timestamp=ts_ns,
+            severity_number=severity,
+            severity_text=severity.name,
+            body=body,
+            attributes=attrs,
+            context=ctx,
+        )
 
 
 def make_emitters(
     bundles: Dict[str, ProviderBundle],
     wall_start: datetime,
+    session_emitter: SessionEmitter,
 ) -> Dict[str, DriverEmitter]:
-    return {code: DriverEmitter(b, wall_start) for code, b in bundles.items()}
+    return {
+        code: DriverEmitter(b, wall_start, session_emitter)
+        for code, b in bundles.items()
+    }
 
 
 # --- helpers ----------------------------------------------------------------

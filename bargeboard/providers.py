@@ -19,6 +19,10 @@ from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.sdk.metrics.view import (
+    ExponentialBucketHistogramAggregation,
+    View,
+)
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -47,14 +51,16 @@ class SessionBundle:
     """Provider bundle for the race itself (not any one car).
 
     Owns the root span every driver's spans hang under, so the whole event is
-    one trace. Only a TracerProvider for now — no metrics/logs at session
-    scope yet.
+    one trace. Also carries a MeterProvider for session-scoped metrics
+    (e.g. cars_on_track, which isn't per-driver).
     """
     session: SessionInfo
     tracer_provider: TracerProvider
+    meter_provider: MeterProvider
 
     def shutdown(self) -> None:
         self.tracer_provider.shutdown()
+        self.meter_provider.shutdown()
 
 
 def make_session_resource(session: SessionInfo) -> Resource:
@@ -80,7 +86,16 @@ def make_session_bundle(session: SessionInfo, endpoint: str) -> SessionBundle:
     tp.add_span_processor(
         BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, insecure=True))
     )
-    return SessionBundle(session=session, tracer_provider=tp)
+    mp = MeterProvider(
+        resource=resource,
+        metric_readers=[
+            PeriodicExportingMetricReader(
+                OTLPMetricExporter(endpoint=endpoint, insecure=True),
+                export_interval_millis=1000,
+            )
+        ],
+    )
+    return SessionBundle(session=session, tracer_provider=tp, meter_provider=mp)
 
 
 def make_resource(driver: DriverInfo) -> Resource:
@@ -113,12 +128,24 @@ def make_provider_bundle(
         BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, insecure=True))
     )
 
-    # Metrics
+    # Metrics — most instruments use the SDK's default aggregation. The two
+    # histograms that need it get promoted to exponential buckets via View,
+    # since their value range is too wide for sensible fixed boundaries.
     metric_reader = PeriodicExportingMetricReader(
         OTLPMetricExporter(endpoint=endpoint, insecure=True),
         export_interval_millis=1000,
     )
-    mp = MeterProvider(resource=resource, metric_readers=[metric_reader])
+    exp_views = [
+        View(
+            instrument_name="f1.driver.top_speed",
+            aggregation=ExponentialBucketHistogramAggregation(),
+        ),
+        View(
+            instrument_name="f1.driver.gap_to_leader",
+            aggregation=ExponentialBucketHistogramAggregation(),
+        ),
+    ]
+    mp = MeterProvider(resource=resource, metric_readers=[metric_reader], views=exp_views)
 
     # Logs
     lp = LoggerProvider(resource=resource)

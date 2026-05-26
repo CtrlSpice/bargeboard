@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
-from typing import Dict, List
+from typing import Dict, Iterable, List
 
 from bargeboard.emit import DriverEmitter, SessionEmitter
 from bargeboard.models import DriverInfo, DriverState, Event, SessionInfo
+
+SESSION_WIDE = "*"
 
 log = logging.getLogger(__name__)
 
@@ -43,7 +45,7 @@ class DriverRuntime:
 
 @dataclass
 class ReplayConfig:
-    speed: float = 1.0          # race-clock multiplier
+    speed: float = 1.0          # race-clock multiplier (paced mode only)
     dump: bool = False          # if True, no wall-clock pacing — fire as fast as possible
     start_at: timedelta = timedelta(0)
     end_at: timedelta | None = None  # None = session.duration
@@ -73,6 +75,7 @@ class ReplayEngine:
         for code, em in self.emitters.items():
             em.start_race(parent_ctx)
             self.runtimes[code].state = DriverState.RACING
+            self.session_emitter.car_started()
 
         race_t = self.config.start_at
         wall_next = time.monotonic()
@@ -117,4 +120,34 @@ class ReplayEngine:
 def build_runtimes(drivers: List[DriverInfo]) -> Dict[str, DriverRuntime]:
     """One DriverRuntime per driver, with empty event queues."""
     # WORKSHOP: populate `queue` from FastF1 lap/telemetry/race-control data.
+    # When events are produced, route them through `fan_out_events` so
+    # session-wide messages (driver_code == "*") land on every driver.
     return {d.code: DriverRuntime(info=d) for d in drivers}
+
+
+def fan_out_events(
+    events: Iterable[Event],
+    driver_codes: List[str],
+) -> Dict[str, List[Event]]:
+    """Route a mixed stream of events into per-driver queues.
+
+    Events with a real driver code go to that one driver. Events with the
+    session-wide sentinel ("*") are duplicated to every driver's queue
+    with the sentinel replaced by the driver's actual code, so each one
+    lands as a span event on that driver's currently-active span.
+
+    Resulting per-driver lists are sorted by race_t so the engine can
+    consume them in order.
+    """
+    out: Dict[str, List[Event]] = {code: [] for code in driver_codes}
+    for ev in events:
+        code = getattr(ev, "driver_code", None)
+        if code == SESSION_WIDE:
+            for d in driver_codes:
+                out[d].append(replace(ev, driver_code=d))
+        elif code in out:
+            out[code].append(ev)
+        # events for unknown codes (drivers we filtered out) are silently dropped
+    for d in out:
+        out[d].sort(key=lambda e: e.race_t)
+    return out
