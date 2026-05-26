@@ -166,6 +166,16 @@ export interface Retirement {
   reason: string;
 }
 
+/** Derived: marks the moment a driver completes their final lap. Emitted by
+ *  the extractor for every non-retired driver, lets the engine close their
+ *  race span at the actual chequered-flag crossing instead of the engine's
+ *  exit time. */
+export interface RaceFinish {
+  kind: "race_finish";
+  race_t: number;
+  driver_code: string;
+}
+
 export type Event =
   | LapStart
   | SectorBoundary
@@ -178,6 +188,7 @@ export type Event =
   | Penalty
   | Investigation
   | DefensiveMove
-  | Retirement;
+  | Retirement
+  | RaceFinish;
 
 export const SESSION_WIDE = "*";

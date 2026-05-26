@@ -16,6 +16,8 @@ import {
   type PitEntry,
   type PitExit,
   type RaceControl,
+  type RaceFinish,
+  type Retirement,
   type SectorBoundary,
   type SessionInfo,
   type Telemetry,
@@ -29,13 +31,16 @@ import {
   getLocation,
   getPit,
   getRaceControl,
+  getSessionResult,
   getSessions,
+  getStartingGrid,
   getStints,
   type OF1CarData,
   type OF1Lap,
   type OF1Location,
   type OF1Pit,
   type OF1RaceControl,
+  type OF1SessionResult,
   type OF1Stint,
 } from "./openf1.js";
 import { log } from "./util.js";
@@ -144,6 +149,73 @@ export function lapsToEvents(
         sector: 3,
       } satisfies SectorBoundary);
     }
+  }
+  return out;
+}
+
+/** Per-driver max race_t reached across their laps. The end of their last
+ *  completed lap — used as the race_t for both finishes and retirements.
+ *  Falls back gracefully when sector splits or lap_duration are missing. */
+function lastLapEndTimes(
+  laps: OF1Lap[],
+  sessionStart: Date,
+  numberToCode: Map<number, string>,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const lap of laps) {
+    const code = numberToCode.get(lap.driver_number);
+    if (!code || !lap.date_start) continue;
+    const start_t = secondsBetween(lap.date_start, sessionStart);
+    const s1 = lap.duration_sector_1;
+    const s2 = lap.duration_sector_2;
+    const s3 = lap.duration_sector_3;
+    let endT: number;
+    if (s1 != null && s2 != null && s3 != null) endT = start_t + s1 + s2 + s3;
+    else if (lap.lap_duration != null) endT = start_t + lap.lap_duration;
+    else endT = start_t;
+    const prev = out.get(code);
+    if (prev === undefined || endT > prev) out.set(code, endT);
+  }
+  return out;
+}
+
+/** Emit a Retirement per driver who DNF'd or was disqualified, at the end
+ *  of their last completed lap. (OpenF1's session_result has the DNF flag;
+ *  the reason isn't published, so we use a generic label.) DNS drivers are
+ *  skipped — they never participated. */
+export function retirementsToEvents(
+  results: OF1SessionResult[],
+  lastLapEnd: Map<string, number>,
+  numberToCode: Map<number, string>,
+): Retirement[] {
+  const out: Retirement[] = [];
+  for (const r of results) {
+    if (r.dns) continue;
+    if (!r.dnf && !r.dsq) continue;
+    const code = numberToCode.get(r.driver_number);
+    if (!code) continue;
+    const race_t = lastLapEnd.get(code) ?? 0;
+    const reason = r.dsq ? "Disqualified" : "DNF";
+    out.push({ kind: "retirement", race_t, driver_code: code, reason });
+  }
+  return out;
+}
+
+/**
+ * Emit a RaceFinish per driver at their final lap's completion time.
+ * Skips drivers in `retiredCodes` — their race spans close via the
+ * Retirement handler. Computes finish_t per driver as the max
+ * `(lap.date_start + s1 + s2 + s3)` across their laps; falls back to
+ * `lap.date_start + lap.lap_duration` if sector splits are missing.
+ */
+export function raceFinishesToEvents(
+  lastLapEnd: Map<string, number>,
+  retiredCodes: Set<string>,
+): RaceFinish[] {
+  const out: RaceFinish[] = [];
+  for (const [code, race_t] of lastLapEnd) {
+    if (retiredCodes.has(code)) continue;
+    out.push({ kind: "race_finish", race_t, driver_code: code });
   }
   return out;
 }
@@ -344,21 +416,42 @@ export interface LoadedEvents {
  * Fetch everything for a session and turn it into a sorted event stream.
  * Per-driver telemetry fetches run concurrently (bounded by a small pool).
  */
+/** Result of `loadEvents` — events plus the lights-out timestamp (seconds
+ *  from session start). If the session-started message wasn't found we fall
+ *  back to 0, meaning "race begins at session start" (the old behaviour). */
+export interface LoadedSession {
+  events: Event[];
+  raceStartT: number;
+  /** Starting grid: driver code → grid position (1 = pole). Used by the
+   *  engine to stagger driver race-span start times in grid order. */
+  grid: Map<string, number>;
+}
+
+/** Detect the lights-out moment from a `/race_control` "SESSION STARTED"
+ *  message. Returns seconds from session.start_time, or null if absent. */
+export function detectRaceStartT(rc: OF1RaceControl[], sessionStart: Date): number | null {
+  const m = rc.find(
+    (r) => r.category === "SessionStatus" && /SESSION\s+STARTED/i.test(r.message),
+  );
+  return m ? secondsBetween(m.date, sessionStart) : null;
+}
+
 export async function loadEvents(
   session: SessionInfo,
   drivers: DriverInfo[],
   numberToCode: Map<number, string>,
   opts: { driverFilter?: Set<string>; skipTelemetry?: boolean } = {},
-): Promise<Event[]> {
+): Promise<LoadedSession> {
   const sessionStart = session.start_time;
   const sessionEnd = new Date(sessionStart.getTime() + session.duration_s * 1000);
 
-  log.info(`Fetching lap/pit/stint/race_control for session ${session.session_key}...`);
-  const [laps, pits, stints, rc] = await Promise.all([
+  log.info(`Fetching lap/pit/stint/race_control/results for session ${session.session_key}...`);
+  const [laps, pits, stints, rc, results] = await Promise.all([
     getLaps(session.session_key),
     getPit(session.session_key),
     getStints(session.session_key),
     getRaceControl(session.session_key),
+    getSessionResult(session.session_key),
   ]);
 
   const events: Event[] = [
@@ -367,11 +460,35 @@ export async function loadEvents(
     ...stintsToEvents(stints, laps, sessionStart, numberToCode),
     ...raceControlToEvents(rc, sessionStart, numberToCode),
   ];
-  log.info(`Lap/pit/stint/rc events: ${events.length}`);
+  // Race lifecycle: retirement per DNF/DSQ row in session_result, then
+  // RaceFinish for everyone else who actually ran. Both close the driver's
+  // race span at the correct race_t.
+  const lastLapEnd = lastLapEndTimes(laps, sessionStart, numberToCode);
+  const retirements = retirementsToEvents(results, lastLapEnd, numberToCode);
+  const retiredCodes = new Set(retirements.map((r) => r.driver_code));
+  const finishes = raceFinishesToEvents(lastLapEnd, retiredCodes);
+  events.push(...retirements, ...finishes);
+  log.info(`Lap/pit/stint/rc/retirement/finish events: ${events.length} (retirements=${retirements.length}, finishes=${finishes.length})`);
+
+  const raceStartT = detectRaceStartT(rc, sessionStart) ?? 0;
+  if (raceStartT > 0) {
+    log.info(`Lights-out detected at race_t=${raceStartT.toFixed(1)}s (formation period: 0–${raceStartT.toFixed(1)}s)`);
+  }
+
+  // Starting grid: fetch positions just before lights-out so we can stagger
+  // driver race-span start times in grid order.
+  const lightsOutISO = new Date(sessionStart.getTime() + raceStartT * 1000).toISOString();
+  const gridByNumber = await getStartingGrid(session.session_key, lightsOutISO);
+  const grid = new Map<string, number>();
+  for (const [num, pos] of gridByNumber) {
+    const code = numberToCode.get(num);
+    if (code) grid.set(code, pos);
+  }
+  log.info(`Starting grid: ${grid.size} positions resolved.`);
 
   if (opts.skipTelemetry) {
     events.sort((a, b) => a.race_t - b.race_t);
-    return events;
+    return { events, raceStartT, grid };
   }
 
   // Per-driver concurrent telemetry. Throttle to keep OpenF1 happy.
@@ -404,5 +521,5 @@ export async function loadEvents(
 
   for (const ev of telemEvents) events.push(ev);
   events.sort((a, b) => a.race_t - b.race_t);
-  return events;
+  return { events, raceStartT, grid };
 }

@@ -95,6 +95,25 @@ export interface OF1Stint {
   tyre_age_at_start: number;
 }
 
+export interface OF1SessionResult {
+  session_key: number;
+  driver_number: number;
+  position: number | null;       // null for DNF/DNS
+  number_of_laps: number;        // laps completed before retiring (or total for finishers)
+  points: number | null;
+  gap_to_leader: number | string | null;
+  dnf: boolean;
+  dns: boolean;
+  dsq: boolean;
+}
+
+export interface OF1Position {
+  session_key: number;
+  date: string;
+  driver_number: number;
+  position: number;
+}
+
 export interface OF1RaceControl {
   session_key: number;
   date: string;
@@ -192,6 +211,29 @@ export async function getPit(session_key: number): Promise<OF1Pit[]> {
 
 export async function getStints(session_key: number): Promise<OF1Stint[]> {
   return fetchJson<OF1Stint>(`stints?${q({ session_key })}`);
+}
+
+export async function getSessionResult(session_key: number): Promise<OF1SessionResult[]> {
+  return fetchJson<OF1SessionResult>(`session_result?${q({ session_key })}`);
+}
+
+/** Returns starting grid order as Map<driver_number, position>.
+ *  Derived from the latest /position record per driver before lights-out
+ *  (OpenF1's /starting_grid endpoint comes back empty for 2026). */
+export async function getStartingGrid(
+  session_key: number,
+  lightsOutISO: string,
+): Promise<Map<number, number>> {
+  const url = `position?session_key=${session_key}&date<${encodeURIComponent(lightsOutISO)}`;
+  const rows = await fetchJson<OF1Position>(url);
+  const latestByDriver = new Map<number, OF1Position>();
+  for (const r of rows) {
+    const prev = latestByDriver.get(r.driver_number);
+    if (!prev || r.date > prev.date) latestByDriver.set(r.driver_number, r);
+  }
+  const grid = new Map<number, number>();
+  for (const [num, row] of latestByDriver) grid.set(num, row.position);
+  return grid;
 }
 
 export async function getRaceControl(session_key: number): Promise<OF1RaceControl[]> {

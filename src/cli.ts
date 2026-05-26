@@ -128,13 +128,16 @@ async function runOneRace(o: RaceRunOpts): Promise<void> {
   }
   log.info(`Drivers: ${filtered.map((d) => d.code).join(", ")} (${filtered.length})`);
 
-  const events: Event[] = await loadEvents(session, drivers, numberToCode, {
+  const { events, raceStartT, grid } = await loadEvents(session, drivers, numberToCode, {
     driverFilter: o.driverFilter,
   });
   log.info(`Total events: ${events.length}`);
   reportEventCounts(events);
 
-  const perDriverQueues = fanOut(events, filtered.map((d) => d.code));
+  const { formation, perDriver } = fanOut(events, filtered.map((d) => d.code), raceStartT);
+  if (formation.length > 0) {
+    log.info(`Formation phase: ${formation.length} pre-race events on the formation span.`);
+  }
 
   const sessionBundle = makeSessionBundle(session, o.targets);
   const driverBundles = makeDriverBundles(filtered, o.targets);
@@ -144,6 +147,7 @@ async function runOneRace(o: RaceRunOpts): Promise<void> {
     dump: o.dump,
     startAt: o.startAt,
     endAt: o.endBound ?? session.duration_s,
+    raceStartT,
   };
 
   try {
@@ -152,7 +156,9 @@ async function runOneRace(o: RaceRunOpts): Promise<void> {
       drivers: filtered,
       driverBundles,
       sessionBundle,
-      perDriverQueues,
+      formationQueue: formation,
+      perDriverQueues: perDriver,
+      grid,
       config,
     });
   } finally {

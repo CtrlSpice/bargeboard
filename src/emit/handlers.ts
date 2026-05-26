@@ -20,6 +20,7 @@ import type {
   PitEntry,
   PitExit,
   RaceControl,
+  RaceFinish,
   Retirement,
   SectorBoundary,
   Telemetry,
@@ -56,6 +57,7 @@ export function handle(
     case "investigation": return onInvestigation(state, event);
     case "defensive_move": return onDefensiveMove(state, event);
     case "retirement": return onRetirement(state, event);
+    case "race_finish": return onRaceFinish(state, event);
   }
 }
 
@@ -84,14 +86,16 @@ function onLapStart(state: DriverState, ev: LapStart, driver: DriverInfo): Handl
       kind: "record_histogram",
       instrument: "f1.driver.lap_time",
       value: lapSeconds,
-      attributes: { "f1.lap.number": state.lapNumber },
+      // No attributes — histograms aggregate across the race. Per-lap
+      // breakdown lives on the matching span (each lap is one span).
     });
     if (state.lapTopSpeed > 0) {
       effects.push({
         kind: "record_histogram",
         instrument: "f1.driver.top_speed",
         value: state.lapTopSpeed,
-        attributes: { "f1.lap.number": state.lapNumber },
+        // No attributes — histograms aggregate across the race. Per-lap
+      // breakdown lives on the matching span (each lap is one span).
       });
     }
     effects.push({ kind: "end_span", role: "lap", raceT: ev.race_t });
@@ -144,7 +148,8 @@ function onSectorBoundary(state: DriverState, ev: SectorBoundary): HandlerResult
       kind: "record_histogram",
       instrument: "f1.driver.sector_time",
       value: secs,
-      attributes: { "f1.lap.number": state.lapNumber, "f1.sector.number": ev.sector },
+      // No attributes — see f1.driver.lap_time comment. Per-sector drill-down
+      // lives on the sector span.
     });
     effects.push({ kind: "end_span", role: "sector", raceT: ev.race_t });
   }
@@ -200,7 +205,8 @@ function onPitExit(state: DriverState, ev: PitExit): HandlerResult {
       kind: "record_histogram",
       instrument: "f1.driver.pit_duration",
       value: secs,
-      attributes: { "f1.lap.number": state.lapNumber },
+      // No attributes — histograms aggregate across the race. Per-lap
+      // breakdown lives on the matching span (each lap is one span).
     });
   }
   effects.push({ kind: "add_counter", instrument: "f1.driver.pit_stops", delta: 1 });
@@ -214,6 +220,28 @@ function onPitExit(state: DriverState, ev: PitExit): HandlerResult {
 // --- telemetry -------------------------------------------------------------
 
 function onTelemetry(state: DriverState, ev: Telemetry): HandlerResult {
+  // Don't emit gauge effects here — at OpenF1's ~3.7 Hz × 22 drivers ×
+  // 9 gauges per sample, that's 4.5M+ gauge.set calls for a single race.
+  // Instead, just track lap top speed and stash the latest sample; the
+  // engine flushes one batch of gauge effects per tick (see
+  // `flushTelemetryGauges`). Gauges are LastValue, so collapsing
+  // intervening samples within a tick window is semantically identical.
+  const lapTopSpeed = ev.speed_kph > state.lapTopSpeed ? ev.speed_kph : state.lapTopSpeed;
+  return {
+    state: { ...state, lapTopSpeed, latestTelemetry: ev },
+    effects: [],
+  };
+}
+
+/** Emit gauge effects from the most recent Telemetry observed in this tick,
+ *  if any. Clears `latestTelemetry` so the next tick only flushes when a
+ *  fresh sample arrived. */
+export function flushTelemetryGauges(state: DriverState): {
+  state: DriverState;
+  effects: Effect[];
+} {
+  const ev = state.latestTelemetry;
+  if (!ev) return { state, effects: [] };
   const effects: Effect[] = [
     { kind: "set_gauge", instrument: "f1.car.speed", value: ev.speed_kph },
     { kind: "set_gauge", instrument: "f1.car.rpm", value: ev.rpm },
@@ -225,8 +253,7 @@ function onTelemetry(state: DriverState, ev: Telemetry): HandlerResult {
     { kind: "set_gauge", instrument: "f1.car.position_y", value: ev.y_m },
     { kind: "set_gauge", instrument: "f1.car.position_z", value: ev.z_m },
   ];
-  const lapTopSpeed = ev.speed_kph > state.lapTopSpeed ? ev.speed_kph : state.lapTopSpeed;
-  return { state: { ...state, lapTopSpeed }, effects };
+  return { state: { ...state, latestTelemetry: null }, effects };
 }
 
 // --- typed race-control events ---------------------------------------------
@@ -298,7 +325,9 @@ function onPenalty(state: DriverState, ev: Penalty): HandlerResult {
     state,
     effects: [
       { kind: "add_span_event", anchor: "active", raceT: ev.race_t, name: `penalty.${ev.type}`, attributes: attrs },
-      { kind: "add_counter", instrument: "f1.driver.penalties", delta: 1, attributes: { "f1.penalty.type": ev.type } },
+      // Counter keyed by driver (via resource) only — keep cardinality at one
+      // series per driver. Penalty type lives on the span event for drill-down.
+      { kind: "add_counter", instrument: "f1.driver.penalties", delta: 1 },
       {
         kind: "emit_log",
         anchor: "active",
@@ -358,23 +387,69 @@ function onDefensiveMove(state: DriverState, ev: DefensiveMove): HandlerResult {
 }
 
 function onRetirement(state: DriverState, ev: Retirement): HandlerResult {
-  if (state.retired) return { state, effects: [] };
+  if (state.retired || state.raceClosed) return { state, effects: [] };
   const attrs = driverAttrs(state, { "f1.retirement.reason": ev.reason });
   return {
-    state: { ...state, retired: true },
+    state: { ...state, retired: true, raceClosed: true,
+             pitSpanId: null, sectorSpanId: null, lapSpanId: null, raceSpanId: null,
+             pitEntryT: null, sectorStartT: null, lapStartT: null },
     effects: [
-      { kind: "add_span_event", anchor: "active", raceT: ev.race_t, name: "retirement", attributes: attrs },
+      ...closeOpenChildren(state, ev.race_t, `DNF: ${ev.reason}`),
       {
         kind: "emit_log",
-        anchor: "active",
+        anchor: "race",
         raceT: ev.race_t,
         severity: SeverityNumber.ERROR,
         body: `Retired: ${ev.reason}`,
         attributes: attrs,
       },
       { kind: "add_session_up_down_counter", instrument: "f1.session.cars_on_track", delta: -1 },
+      // Close the race span at the retirement moment, not at engine exit.
+      {
+        kind: "end_span",
+        role: "race",
+        raceT: ev.race_t,
+        status: { code: SpanStatusCode.ERROR, message: `DNF: ${ev.reason}` },
+        endEvent: { name: "retirement", attributes: attrs },
+      },
     ],
   };
+}
+
+function onRaceFinish(state: DriverState, ev: RaceFinish): HandlerResult {
+  // Already closed (e.g. driver retired earlier) → no-op.
+  if (state.raceClosed) return { state, effects: [] };
+  return {
+    state: { ...state, raceClosed: true,
+             pitSpanId: null, sectorSpanId: null, lapSpanId: null, raceSpanId: null,
+             pitEntryT: null, sectorStartT: null, lapStartT: null },
+    effects: [
+      ...closeOpenChildren(state, ev.race_t),
+      { kind: "end_span", role: "race", raceT: ev.race_t,
+        status: { code: SpanStatusCode.OK } },
+    ],
+  };
+}
+
+/** Emit end_span effects for any still-open child spans (pit, sector, lap) at
+ *  the given race_t — used by both Retirement and RaceFinish so the race
+ *  span closes cleanly with no orphaned children. When the driver is
+ *  retiring, the still-open child spans get ERROR status too: those are
+ *  literally the spans the car failed in, so clicking through the trace
+ *  shows ERROR all the way from race → lap → sector. */
+function closeOpenChildren(
+  state: DriverState,
+  raceT: number,
+  reason?: string,
+): Effect[] {
+  const status = reason
+    ? { code: SpanStatusCode.ERROR, message: reason }
+    : undefined;
+  const out: Effect[] = [];
+  if (state.pitSpanId) out.push({ kind: "end_span", role: "pit", raceT, status });
+  if (state.sectorSpanId) out.push({ kind: "end_span", role: "sector", raceT, status });
+  if (state.lapSpanId) out.push({ kind: "end_span", role: "lap", raceT, status });
+  return out;
 }
 
 // --- race lifecycle (called by the engine, not from event dispatch) --------
@@ -385,6 +460,74 @@ export function openSessionRoot(name: string, raceT: number): Effect[] {
 
 export function closeSessionRoot(raceT: number): Effect[] {
   return [{ kind: "end_session_span", raceT }];
+}
+
+export function openFormation(raceT: number): Effect[] {
+  return [{ kind: "start_formation_span", raceT }];
+}
+
+export function closeFormation(raceT: number): Effect[] {
+  return [{ kind: "end_formation_span", raceT }];
+}
+
+/** Translate a pre-race event into a span event on the formation span.
+ *  Driver-specific events (stewards notes, etc.) keep their driver code
+ *  as an attribute. Returns [] for event kinds that should never appear
+ *  pre-race (laps, telemetry, etc.) — those would indicate a data bug. */
+export function handleFormation(event: Event): Effect[] {
+  const at = event.race_t;
+  switch (event.kind) {
+    case "race_control":
+      return [{
+        kind: "add_formation_span_event",
+        raceT: at,
+        name: "race_control",
+        attributes: formationAttrs(event.driver_code, {
+          "f1.race_control.message": event.message,
+        }),
+      }];
+    case "flag":
+      return [{
+        kind: "add_formation_span_event",
+        raceT: at,
+        name: `flag.${event.color}`,
+        attributes: formationAttrs(event.driver_code, {
+          "f1.flag.color": event.color,
+          "f1.flag.status": event.status,
+          ...(event.scope ? { "f1.flag.scope": event.scope } : {}),
+        }),
+      }];
+    case "penalty":
+      return [{
+        kind: "add_formation_span_event",
+        raceT: at,
+        name: `penalty.${event.type}`,
+        attributes: formationAttrs(event.driver_code, {
+          "f1.penalty.type": event.type,
+          "f1.penalty.reason": event.reason,
+          ...(event.seconds != null ? { "f1.penalty.seconds": event.seconds } : {}),
+        }),
+      }];
+    case "investigation":
+      return [{
+        kind: "add_formation_span_event",
+        raceT: at,
+        name: `investigation.${event.status}`,
+        attributes: formationAttrs(event.driver_code, {
+          "f1.investigation.status": event.status,
+          "f1.investigation.reason": event.reason,
+        }),
+      }];
+    default:
+      return [];
+  }
+}
+
+function formationAttrs(driverCode: string, extra: Attributes): Attributes {
+  // "*" means session-wide; omit it as an attribute. Otherwise keep the code
+  // so per-driver pre-race events stay attributable.
+  if (driverCode === "*") return extra;
+  return { ...extra, "f1.driver.code": driverCode };
 }
 
 export function openDriverRace(driver: DriverInfo, raceT: number): {
@@ -406,11 +549,13 @@ export function openDriverRace(driver: DriverInfo, raceT: number): {
   };
 }
 
+/** Engine-exit safety net: closes spans for any driver whose race wasn't
+ *  already wrapped up via Retirement or RaceFinish. Most drivers should hit
+ *  one of those during dispatch; this only fires if extraction missed a
+ *  finish for some reason. */
 export function closeDriverRace(state: DriverState, raceT: number): Effect[] {
-  const effects: Effect[] = [];
-  if (state.pitSpanId) effects.push({ kind: "end_span", role: "pit", raceT });
-  if (state.sectorSpanId) effects.push({ kind: "end_span", role: "sector", raceT });
-  if (state.lapSpanId) effects.push({ kind: "end_span", role: "lap", raceT });
+  if (state.raceClosed) return [];
+  const effects: Effect[] = closeOpenChildren(state, raceT);
   if (state.raceSpanId) {
     const status = state.retired
       ? { code: SpanStatusCode.ERROR, message: "DNF" }

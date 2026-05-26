@@ -50,6 +50,9 @@ export type Effect =
   // session-scoped:
   | StartSessionSpan
   | EndSessionSpan
+  | StartFormationSpan
+  | EndFormationSpan
+  | AddFormationSpanEvent
   | AddSessionUpDownCounter;
 
 export interface StartSpan {
@@ -129,6 +132,25 @@ export interface AddSessionUpDownCounter {
   delta: number;
 }
 
+/** Open a "formation" span as a child of the session root. Covers the
+ *  pre-race period (formation laps, grid procedures, aborted starts). */
+export interface StartFormationSpan {
+  kind: "start_formation_span";
+  raceT: number;
+}
+export interface EndFormationSpan {
+  kind: "end_formation_span";
+  raceT: number;
+}
+/** Attach a span event to the formation span (pre-race race-control,
+ *  flags, stewards notes, etc.). */
+export interface AddFormationSpanEvent {
+  kind: "add_formation_span_event";
+  raceT: number;
+  name: string;
+  attributes?: Attributes;
+}
+
 // --- per-driver interpreter -------------------------------------------------
 
 /**
@@ -139,6 +161,7 @@ export class DriverInterpreter {
   private readonly tracer: Tracer;
   private readonly logger: Logger;
   private readonly meter: Meter;
+  private readonly driverCode: string;
 
   private readonly gauges = new Map<string, Gauge>();
   private readonly counters = new Map<string, Counter>();
@@ -154,7 +177,17 @@ export class DriverInterpreter {
     this.tracer = bundle.tracerProvider.getTracer(SCOPE_NAME, SCOPE_VERSION);
     this.logger = bundle.loggerProvider.getLogger(SCOPE_NAME, SCOPE_VERSION);
     this.meter = bundle.meterProvider.getMeter(SCOPE_NAME, SCOPE_VERSION);
+    this.driverCode = bundle.driver.code;
     this.declareInstruments();
+  }
+
+  /** Driver code is on the resource too (service.instance.id / f1.driver.code),
+   *  but stamping it on the datapoint as well lets backends that don't filter
+   *  well by resource attribute still split by driver. Cardinality unchanged
+   *  — service.name=team gives 2 series per metric per team either way. */
+  private metricAttrs(extra?: Attributes): Attributes {
+    if (!extra) return { "f1.driver.code": this.driverCode };
+    return { ...extra, "f1.driver.code": this.driverCode };
   }
 
   /** Pre-create every per-driver instrument so set/add/record never lazily allocates. */
@@ -215,6 +248,9 @@ export class DriverInterpreter {
       case "emit_log": return this.emitLog(effect);
       case "start_session_span":
       case "end_session_span":
+      case "start_formation_span":
+      case "end_formation_span":
+      case "add_formation_span_event":
       case "add_session_up_down_counter":
         return this.sessionInterp.apply(effect);
     }
@@ -274,16 +310,16 @@ export class DriverInterpreter {
   // --- metrics ---
 
   private setGauge(e: SetGauge): void {
-    this.gauges.get(e.instrument)?.record(e.value, e.attributes);
+    this.gauges.get(e.instrument)?.record(e.value, this.metricAttrs(e.attributes));
   }
   private addCounter(e: AddCounter): void {
-    this.counters.get(e.instrument)?.add(e.delta, e.attributes);
+    this.counters.get(e.instrument)?.add(e.delta, this.metricAttrs(e.attributes));
   }
   private addUpDownCounter(e: AddUpDownCounter): void {
-    this.udcs.get(e.instrument)?.add(e.delta, e.attributes);
+    this.udcs.get(e.instrument)?.add(e.delta, this.metricAttrs(e.attributes));
   }
   private recordHistogram(e: RecordHistogram): void {
-    this.histograms.get(e.instrument)?.record(e.value, e.attributes);
+    this.histograms.get(e.instrument)?.record(e.value, this.metricAttrs(e.attributes));
   }
 
   // --- logs ---
@@ -311,6 +347,7 @@ export class SessionInterpreter {
   private readonly tracer: Tracer;
   private readonly meter: Meter;
   private root: Span | null = null;
+  private formation: Span | null = null;
   private readonly udcs = new Map<string, UpDownCounter>();
 
   constructor(
@@ -344,6 +381,24 @@ export class SessionInterpreter {
       this.root.setStatus({ code: SpanStatusCode.OK });
       this.root.end(nanosTimeInput(endTime));
       this.root = null;
+    } else if (effect.kind === "start_formation_span") {
+      if (!this.root) return;
+      const startTime = raceTimeToUnixNanos(this.sessionStart, effect.raceT);
+      const ctx = trace.setSpan(context.active(), this.root);
+      this.formation = this.tracer.startSpan(
+        "formation",
+        { startTime: nanosTimeInput(startTime) },
+        ctx,
+      );
+    } else if (effect.kind === "end_formation_span") {
+      if (!this.formation) return;
+      const endTime = raceTimeToUnixNanos(this.sessionStart, effect.raceT);
+      this.formation.end(nanosTimeInput(endTime));
+      this.formation = null;
+    } else if (effect.kind === "add_formation_span_event") {
+      if (!this.formation) return;
+      const t = raceTimeToUnixNanos(this.sessionStart, effect.raceT);
+      this.formation.addEvent(effect.name, effect.attributes, nanosTimeInput(t));
     } else if (effect.kind === "add_session_up_down_counter") {
       this.udcs.get(effect.instrument)?.add(effect.delta);
     }
