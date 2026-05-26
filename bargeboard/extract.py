@@ -131,8 +131,15 @@ def extract_telemetry(session: fastf1.core.Session) -> List[Telemetry]:
     handles it.
     """
     out: List[Telemetry] = []
-    car_data = getattr(session, "car_data", None)
-    pos_data = getattr(session, "pos_data", None)
+    # FastF1 raises DataNotLoadedError when telemetry hasn't been published
+    # yet (common for races within a day or two of running). Treat as
+    # "no telemetry available" and let the other event streams flow.
+    try:
+        car_data = getattr(session, "car_data", None)
+        pos_data = getattr(session, "pos_data", None)
+    except Exception as e:
+        log.warning("telemetry not available: %s", e)
+        return out
     if not car_data:
         log.warning("session.car_data is empty — no telemetry events")
         return out
