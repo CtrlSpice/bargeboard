@@ -27,7 +27,8 @@
     "@opentelemetry/sdk-trace-base": "^1.30.0",
     "@opentelemetry/sdk-trace-node": "^1.30.0",
     "@opentelemetry/semantic-conventions": "^1.28.0",
-    "commander": "^12.1.0"
+    "commander": "^12.1.0",
+    "parquetjs-lite": "^0.8.7"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

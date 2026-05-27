@@ -22,6 +22,7 @@ interface CliOpts {
   speed: string;
   dump?: boolean;
   dryRun?: boolean;
+  noCache?: boolean;
   from?: string;
   to?: string;
   driver?: string;
@@ -59,6 +60,7 @@ export function buildProgram(): Command {
     .option("--speed <n>", "Playback speed multiplier (e.g. 1x, 5x)", "1x")
     .option("--dump", "Emit everything as fast as possible, no pacing.")
     .option("--dry-run", "Build everything but skip OTLP export (no network).")
+    .option("--no-cache", "Skip the local Parquet cache; always fetch from OpenF1.")
     .option("--from <hms>", "Start point: HH:MM:SS")
     .option("--to <hms>", "End point: HH:MM:SS")
     .option("--driver <codes>", "Comma-separated driver codes (e.g. VER,NOR)")
@@ -91,6 +93,7 @@ export function buildProgram(): Command {
         await runOneRace({
           year, round, targets, speed,
           dump: Boolean(opts.dump),
+          noCache: Boolean(opts.noCache),
           startAt, endBound, driverFilter,
         });
       } else if (opts.season) {
@@ -108,6 +111,7 @@ interface RaceRunOpts {
   targets: ExportTargets;
   speed: number;
   dump: boolean;
+  noCache: boolean;
   startAt: number;
   endBound: number | null;
   driverFilter: Set<string> | undefined;
@@ -130,6 +134,7 @@ async function runOneRace(o: RaceRunOpts): Promise<void> {
 
   const { events, raceStartT, grid } = await loadEvents(session, drivers, numberToCode, {
     driverFilter: o.driverFilter,
+    noCache: o.noCache,
   });
   log.info(`Total events: ${events.length}`);
   reportEventCounts(events);

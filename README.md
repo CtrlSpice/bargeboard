@@ -90,9 +90,22 @@ bargeboard --session 2026-canada [options]
 | `--from` | session start | Start point (`HH:MM:SS`) |
 | `--to` | session end | End point (`HH:MM:SS`) |
 | `--driver` | all | Comma-separated driver codes (`ANT,RUS`) |
+| `--no-cache` | off | Skip local Parquet cache; always fetch from OpenF1 |
 | `-v / --verbose` | off | Debug logging |
 
 `--season` is scaffolded but not implemented; raises an error if used.
+
+## Parquet cache
+
+On the first run bargeboard fetches telemetry from OpenF1 (≈14 s for a full field). Subsequent runs for the same session load from a local Parquet cache at `~/.cache/bargeboard/<session_key>/`:
+
+| File | Contents |
+|---|---|
+| `telemetry.parquet` | All `Telemetry` events (~300k rows per race, column-oriented) |
+| `events.json` | All other events: laps, sectors, pits, flags, retirements, etc. |
+| `meta.json` | `raceStartT`, starting grid, cache version |
+
+The cache is never expired — race data doesn't change once the event is done. Use `--no-cache` to force a fresh fetch (e.g. if OpenF1 back-fills missing data after the fact). Driver-filtered runs (`--driver`) are not cached so a subsequent full-field run always fetches cleanly.
 
 ## Quick start
 

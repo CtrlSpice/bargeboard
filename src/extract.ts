@@ -43,6 +43,7 @@ import {
   type OF1SessionResult,
   type OF1Stint,
 } from "./openf1.js";
+import { hasCachedSession, readCachedSession, writeCachedSession } from "./cache.js";
 import { log } from "./util.js";
 
 // --- session + driver lookup ------------------------------------------------
@@ -440,8 +441,15 @@ export async function loadEvents(
   session: SessionInfo,
   drivers: DriverInfo[],
   numberToCode: Map<number, string>,
-  opts: { driverFilter?: Set<string>; skipTelemetry?: boolean } = {},
+  opts: { driverFilter?: Set<string>; skipTelemetry?: boolean; noCache?: boolean } = {},
 ): Promise<LoadedSession> {
+  // Cache check: skip on --no-cache, skip when a driver filter is active
+  // (filtered runs are partial; caching them would poison a subsequent full run).
+  const canCache = !opts.noCache && !opts.driverFilter && !opts.skipTelemetry;
+  if (canCache && await hasCachedSession(session.session_key)) {
+    log.info(`Cache hit for session ${session.session_key} — loading from ~/.cache/bargeboard/${session.session_key}/`);
+    return readCachedSession(session.session_key);
+  }
   const sessionStart = session.start_time;
   const sessionEnd = new Date(sessionStart.getTime() + session.duration_s * 1000);
 
@@ -521,5 +529,14 @@ export async function loadEvents(
 
   for (const ev of telemEvents) events.push(ev);
   events.sort((a, b) => a.race_t - b.race_t);
-  return { events, raceStartT, grid };
+
+  const result: LoadedSession = { events, raceStartT, grid };
+  if (canCache) {
+    try {
+      await writeCachedSession(session.session_key, result);
+    } catch (e) {
+      log.warn(`Cache write failed: ${(e as Error).message}`);
+    }
+  }
+  return result;
 }
