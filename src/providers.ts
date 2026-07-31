@@ -1,9 +1,11 @@
 /**
  * Build TracerProvider + MeterProvider + LoggerProvider bundles.
  *
- * Per-driver bundles share a team `service.name` but differ on
- * `service.instance.id`. The session bundle owns the race-root span and
- * session-scoped metrics (cars_on_track).
+ * Per-driver bundles (traces + logs only) share a team `service.name` but
+ * differ on `service.instance.id`. The session bundle owns the race-root
+ * span and ALL metrics — every instrument lives on the single "race"
+ * resource with `f1.driver.code` / `f1.team` as datapoint attributes, so
+ * cross-driver queries never span resources.
  *
  * Two metrics promote to exponential histograms via a View: top_speed and
  * gap_to_leader. Their value range is too wide for fixed buckets.
@@ -52,7 +54,6 @@ export interface ExportTargets {
 export interface DriverBundle {
   driver: DriverInfo;
   tracerProvider: NodeTracerProvider;
-  meterProvider: MeterProvider;
   loggerProvider: LoggerProvider;
   shutdown: () => Promise<void>;
 }
@@ -108,7 +109,7 @@ export function makeSessionBundle(session: SessionInfo, t: ExportTargets): Sessi
       exportIntervalMillis: 5000,
     }));
   }
-  const mp = new MeterProvider({ resource, readers });
+  const mp = new MeterProvider({ resource, readers, views: EXP_VIEWS });
 
   return {
     session,
@@ -129,18 +130,6 @@ export function makeDriverBundle(driver: DriverInfo, t: ExportTargets): DriverBu
   if (trExp) tp.addSpanProcessor(new BatchSpanProcessor(trExp));
   if (t.consoleEcho) tp.addSpanProcessor(new SimpleSpanProcessor(new ConsoleSpanExporter()));
 
-  const mExp = makeMetricExporter(t);
-  const readers = mExp
-    ? [new PeriodicExportingMetricReader({ exporter: mExp, exportIntervalMillis: 1000 })]
-    : [];
-  if (t.consoleEcho) {
-    readers.push(new PeriodicExportingMetricReader({
-      exporter: new ConsoleMetricExporter(),
-      exportIntervalMillis: 5000,
-    }));
-  }
-  const mp = new MeterProvider({ resource, readers, views: EXP_VIEWS });
-
   const lp = new LoggerProvider({ resource });
   const lExp = makeLogExporter(t);
   if (lExp) lp.addLogRecordProcessor(new BatchLogRecordProcessor(lExp));
@@ -149,11 +138,9 @@ export function makeDriverBundle(driver: DriverInfo, t: ExportTargets): DriverBu
   return {
     driver,
     tracerProvider: tp,
-    meterProvider: mp,
     loggerProvider: lp,
     shutdown: async () => {
       await tp.shutdown();
-      await mp.shutdown();
       await lp.shutdown();
     },
   };

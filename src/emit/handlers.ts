@@ -325,8 +325,8 @@ function onPenalty(state: DriverState, ev: Penalty): HandlerResult {
     state,
     effects: [
       { kind: "add_span_event", anchor: "active", raceT: ev.race_t, name: `penalty.${ev.type}`, attributes: attrs },
-      // Counter keyed by driver (via resource) only — keep cardinality at one
-      // series per driver. Penalty type lives on the span event for drill-down.
+      // Counter keyed by driver datapoint attribute only — keep cardinality at
+      // one series per driver. Penalty type lives on the span event for drill-down.
       { kind: "add_counter", instrument: "f1.driver.penalties", delta: 1 },
       {
         kind: "emit_log",

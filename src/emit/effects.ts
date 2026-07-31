@@ -160,13 +160,9 @@ export interface AddFormationSpanEvent {
 export class DriverInterpreter {
   private readonly tracer: Tracer;
   private readonly logger: Logger;
-  private readonly meter: Meter;
   private readonly driverCode: string;
+  private readonly team: string;
 
-  private readonly gauges = new Map<string, Gauge>();
-  private readonly counters = new Map<string, Counter>();
-  private readonly udcs = new Map<string, UpDownCounter>();
-  private readonly histograms = new Map<string, Histogram>();
   private readonly spans = new Map<SpanRole, Span>();
 
   constructor(
@@ -176,63 +172,15 @@ export class DriverInterpreter {
   ) {
     this.tracer = bundle.tracerProvider.getTracer(SCOPE_NAME, SCOPE_VERSION);
     this.logger = bundle.loggerProvider.getLogger(SCOPE_NAME, SCOPE_VERSION);
-    this.meter = bundle.meterProvider.getMeter(SCOPE_NAME, SCOPE_VERSION);
     this.driverCode = bundle.driver.code;
-    this.declareInstruments();
+    this.team = bundle.driver.team;
   }
 
-  /** Driver code is on the resource too (service.instance.id / f1.driver.code),
-   *  but stamping it on the datapoint as well lets backends that don't filter
-   *  well by resource attribute still split by driver. Cardinality unchanged
-   *  — service.name=team gives 2 series per metric per team either way. */
+  /** All metrics live on the session's single "race" resource; the driver
+   *  dimension is carried entirely by these datapoint attributes. One series
+   *  per driver per instrument (~22 total) — team subdivides, not multiplies. */
   private metricAttrs(extra?: Attributes): Attributes {
-    if (!extra) return { "f1.driver.code": this.driverCode };
-    return { ...extra, "f1.driver.code": this.driverCode };
-  }
-
-  /** Pre-create every per-driver instrument so set/add/record never lazily allocates. */
-  private declareInstruments(): void {
-    const m = this.meter;
-    const gauge = (name: string, unit: string, description: string): void => {
-      this.gauges.set(name, m.createGauge(name, { unit, description }));
-    };
-    gauge("f1.car.speed", "km/h", "Car speed");
-    gauge("f1.car.rpm", "{rpm}", "Engine RPM");
-    gauge("f1.car.throttle", "%", "Throttle position");
-    gauge("f1.car.brake", "%", "Brake pressure");
-    gauge("f1.car.gear", "{gear}", "Selected gear");
-    gauge("f1.car.drs", "{bool}", "DRS open (1) or closed (0)");
-    gauge("f1.car.position_x", "m", "Track-local X position");
-    gauge("f1.car.position_y", "m", "Track-local Y position");
-    gauge("f1.car.position_z", "m", "Track-local Z position (elevation)");
-    gauge("f1.driver.standings_position", "{position}", "Current race position");
-
-    const counter = (name: string, unit: string, description: string): void => {
-      this.counters.set(name, m.createCounter(name, { unit, description }));
-    };
-    counter("f1.driver.laps_completed", "{lap}", "Laps completed");
-    counter("f1.driver.pit_stops", "{stop}", "Pit stops completed");
-    counter("f1.driver.blue_flags", "{flag}", "Blue flags shown to this driver");
-    counter("f1.driver.penalties", "{penalty}", "Penalties received");
-    counter("f1.driver.investigations", "{incident}", "Incidents opened against this driver");
-    counter("f1.driver.defensive_moves", "{move}", "Defensive moves under braking");
-
-    this.udcs.set(
-      "f1.driver.championship_points",
-      m.createUpDownCounter("f1.driver.championship_points", {
-        unit: "{point}",
-        description: "Championship points",
-      }),
-    );
-
-    const hist = (name: string, unit: string, description: string): void => {
-      this.histograms.set(name, m.createHistogram(name, { unit, description }));
-    };
-    hist("f1.driver.lap_time", "s", "Lap time");
-    hist("f1.driver.sector_time", "s", "Sector time");
-    hist("f1.driver.pit_duration", "s", "Pit lane duration");
-    hist("f1.driver.top_speed", "km/h", "Top speed per lap");
-    hist("f1.driver.gap_to_leader", "s", "Gap to race leader");
+    return { ...extra, "f1.driver.code": this.driverCode, "f1.team": this.team };
   }
 
   apply(effect: Effect): void {
@@ -307,19 +255,19 @@ export class DriverInterpreter {
     span.addEvent(e.name, e.attributes, nanosTimeInput(t));
   }
 
-  // --- metrics ---
+  // --- metrics (delegated to the session's shared instruments) ---
 
   private setGauge(e: SetGauge): void {
-    this.gauges.get(e.instrument)?.record(e.value, this.metricAttrs(e.attributes));
+    this.sessionInterp.setGauge(e.instrument, e.value, this.metricAttrs(e.attributes));
   }
   private addCounter(e: AddCounter): void {
-    this.counters.get(e.instrument)?.add(e.delta, this.metricAttrs(e.attributes));
+    this.sessionInterp.addCounter(e.instrument, e.delta, this.metricAttrs(e.attributes));
   }
   private addUpDownCounter(e: AddUpDownCounter): void {
-    this.udcs.get(e.instrument)?.add(e.delta, this.metricAttrs(e.attributes));
+    this.sessionInterp.addUpDownCounter(e.instrument, e.delta, this.metricAttrs(e.attributes));
   }
   private recordHistogram(e: RecordHistogram): void {
-    this.histograms.get(e.instrument)?.record(e.value, this.metricAttrs(e.attributes));
+    this.sessionInterp.recordHistogram(e.instrument, e.value, this.metricAttrs(e.attributes));
   }
 
   // --- logs ---
@@ -348,7 +296,11 @@ export class SessionInterpreter {
   private readonly meter: Meter;
   private root: Span | null = null;
   private formation: Span | null = null;
+
+  private readonly gauges = new Map<string, Gauge>();
+  private readonly counters = new Map<string, Counter>();
   private readonly udcs = new Map<string, UpDownCounter>();
+  private readonly histograms = new Map<string, Histogram>();
 
   constructor(
     bundle: SessionBundle,
@@ -358,13 +310,67 @@ export class SessionInterpreter {
     void sessionInfo;
     this.tracer = bundle.tracerProvider.getTracer(SCOPE_NAME, SCOPE_VERSION);
     this.meter = bundle.meterProvider.getMeter(SCOPE_NAME, SCOPE_VERSION);
-    this.udcs.set(
-      "f1.session.cars_on_track",
-      this.meter.createUpDownCounter("f1.session.cars_on_track", {
-        unit: "{car}",
-        description: "Number of cars still circulating",
-      }),
-    );
+    this.declareInstruments();
+  }
+
+  /** Every instrument in the app, declared once against the session's "race"
+   *  resource. Driver-scoped instruments split into per-driver series via the
+   *  f1.driver.code / f1.team datapoint attributes stamped by DriverInterpreter. */
+  private declareInstruments(): void {
+    const m = this.meter;
+    const gauge = (name: string, unit: string, description: string): void => {
+      this.gauges.set(name, m.createGauge(name, { unit, description }));
+    };
+    gauge("f1.car.speed", "km/h", "Car speed");
+    gauge("f1.car.rpm", "{rpm}", "Engine RPM");
+    gauge("f1.car.throttle", "%", "Throttle position");
+    gauge("f1.car.brake", "%", "Brake pressure");
+    gauge("f1.car.gear", "{gear}", "Selected gear");
+    gauge("f1.car.drs", "{bool}", "DRS open (1) or closed (0)");
+    gauge("f1.car.position_x", "m", "Track-local X position");
+    gauge("f1.car.position_y", "m", "Track-local Y position");
+    gauge("f1.car.position_z", "m", "Track-local Z position (elevation)");
+    gauge("f1.driver.standings_position", "{position}", "Current race position");
+
+    const counter = (name: string, unit: string, description: string): void => {
+      this.counters.set(name, m.createCounter(name, { unit, description }));
+    };
+    counter("f1.driver.laps_completed", "{lap}", "Laps completed");
+    counter("f1.driver.pit_stops", "{stop}", "Pit stops completed");
+    counter("f1.driver.blue_flags", "{flag}", "Blue flags shown to this driver");
+    counter("f1.driver.penalties", "{penalty}", "Penalties received");
+    counter("f1.driver.investigations", "{incident}", "Incidents opened against this driver");
+    counter("f1.driver.defensive_moves", "{move}", "Defensive moves under braking");
+
+    const udc = (name: string, unit: string, description: string): void => {
+      this.udcs.set(name, m.createUpDownCounter(name, { unit, description }));
+    };
+    udc("f1.driver.championship_points", "{point}", "Championship points");
+    udc("f1.session.cars_on_track", "{car}", "Number of cars still circulating");
+
+    const hist = (name: string, unit: string, description: string): void => {
+      this.histograms.set(name, m.createHistogram(name, { unit, description }));
+    };
+    hist("f1.driver.lap_time", "s", "Lap time");
+    hist("f1.driver.sector_time", "s", "Sector time");
+    hist("f1.driver.pit_duration", "s", "Pit lane duration");
+    hist("f1.driver.top_speed", "km/h", "Top speed per lap");
+    hist("f1.driver.gap_to_leader", "s", "Gap to race leader");
+  }
+
+  // --- shared metric recording (called by DriverInterpreter with driver attrs) ---
+
+  setGauge(instrument: string, value: number, attrs: Attributes): void {
+    this.gauges.get(instrument)?.record(value, attrs);
+  }
+  addCounter(instrument: string, delta: number, attrs: Attributes): void {
+    this.counters.get(instrument)?.add(delta, attrs);
+  }
+  addUpDownCounter(instrument: string, delta: number, attrs: Attributes): void {
+    this.udcs.get(instrument)?.add(delta, attrs);
+  }
+  recordHistogram(instrument: string, value: number, attrs: Attributes): void {
+    this.histograms.get(instrument)?.record(value, attrs);
   }
 
   rootSpan(): Span | undefined {

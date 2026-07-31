@@ -45,7 +45,7 @@ The whole race is **one trace**. The session is the root span (its own resource 
 
 ### Metrics
 
-All per-driver instruments produce one time series per driver (≈ 22 per instrument total). `f1.driver.code` is auto-stamped on every datapoint as a metric attribute in addition to the resource hierarchy, so backends that don't filter well by resource can still split by driver.
+All metrics emit from the single session-level `race` resource — not the per-team driver resources — so every instrument is **one metric** with ≈ 22 series, split by the `f1.driver.code` and `f1.team` attributes auto-stamped on every datapoint. Cross-driver comparisons ("highest top speed in the field", "blue flags per driver") are single group-by queries; no merging across team services required. Traces and logs stay on the per-team resources.
 
 | Instrument | Type | Notes |
 |---|---|---|
@@ -66,12 +66,13 @@ Per-lap drill-down lives on lap spans (each lap *is* a span), not on metric attr
 
 ## Resource model
 
-- **Session resource:** `service.name=race`, `service.namespace=f1`, `service.instance.id=<year>-<round>-<type>` (e.g. `2026-canada-race`), `service.version`, plus `f1.session.{year,round,type}`.
-- **Driver resource:** `service.name=<team>`, `service.namespace=f1`, `service.instance.id=<code>`, `service.version`, plus `f1.driver.{code,full_name}`, `f1.car.number`. Teammates share `service.name` and differ on `service.instance.id`.
+- **Session resource:** `service.name=race`, `service.namespace=f1`, `service.instance.id=<year>-<round>-<type>` (e.g. `2026-canada-race`), `service.version`, plus `f1.session.{year,round,type}`. Owns the session root span and **all metrics**.
+- **Driver resource:** `service.name=<team>`, `service.namespace=f1`, `service.instance.id=<code>`, `service.version`, plus `f1.driver.{code,full_name}`, `f1.car.number`. Teammates share `service.name` and differ on `service.instance.id`. Traces and logs only.
 
 Querying examples:
 - `f1.car.speed{f1.driver.code IN [ANT, RUS]}` → overlay teammates.
-- `service.name="Mercedes"` → aggregate both Mercedes drivers.
+- `max(f1.driver.top_speed) by (f1.driver.code)` → fastest car in the field, one query.
+- `sum(f1.driver.blue_flags) by (f1.team)` → team-level aggregation via the `f1.team` attribute.
 - Same trace_id across all 22 drivers → "the race" is one queryable distributed trace.
 
 ## CLI

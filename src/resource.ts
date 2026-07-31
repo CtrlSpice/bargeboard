@@ -1,8 +1,10 @@
 /**
  * Build OpenTelemetry Resources.
  *
- * - Session resource: the race itself. service.name = "race".
+ * - Session resource: the race itself. service.name = "race". Carries the
+ *   session root span AND all metrics (driver split by datapoint attribute).
  * - Driver resource: the team/car. service.name = team, instance.id = code.
+ *   Traces and logs only — no metrics.
  *
  * Session-scoped facts (year, round, type) live on the race-resource and
  * the race span. Driver-scoped facts live on the driver resource.
