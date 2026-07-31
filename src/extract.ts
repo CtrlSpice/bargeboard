@@ -462,6 +462,14 @@ export async function loadEvents(
     getSessionResult(session.session_key),
   ]);
 
+  // A session with no laps never ran (cancelled race, or OpenF1 hasn't
+  // published data yet). Bail before the expensive grid/telemetry fetches
+  // and never cache the empty shell.
+  if (laps.length === 0) {
+    log.warn(`Session ${session.session_key} has no lap data in OpenF1 — nothing to replay.`);
+    return { events: [], raceStartT: 0, grid: new Map() };
+  }
+
   const events: Event[] = [
     ...lapsToEvents(laps, sessionStart, numberToCode),
     ...pitsToEvents(pits, sessionStart, numberToCode),
