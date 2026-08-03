@@ -122,6 +122,11 @@ interface SumSeries {
   total: number;
   dirty: boolean;
 }
+/** Histograms ship DELTA: each datapoint covers only the observations since
+ *  that series' previous flush, so a heatmap column reads "lap times set in
+ *  this window" — the race's actual texture. Cumulative histograms would put
+ *  every observation since lights-out in every column, which is why the
+ *  heatmap looked identically wide the whole race. */
 interface HistSeries {
   attrs: Attributes;
   counts: number[];        // boundaries.length + 1
@@ -130,27 +135,34 @@ interface HistSeries {
   min: number;
   max: number;
   dirty: boolean;
+  windowStartT: number;    // race_t this delta window opened
 }
 
 /** Base-2 exponential histogram accumulator (positive + zero buckets only —
- *  gaps are non-negative). Sparse bucket map keyed by index; downscales
- *  (merging bucket pairs) when the index range outgrows MAX_EXP_BUCKETS. */
+ *  gaps are non-negative). Fixed scale + fixed bucket window, because the
+ *  viewer's delta merge sums bucket vectors positionally: every window has
+ *  to share one scale/offset for that sum to mean anything. Values outside
+ *  the window clamp to the edge buckets; sum/count/min/max stay exact. */
 interface ExpHistSeries {
   attrs: Attributes;
-  scale: number;
   zeroCount: number;
-  positive: Map<number, number>;   // bucket index → count
-  minIdx: number;
-  maxIdx: number;
+  counts: number[];               // EXP_BUCKET_COUNT entries starting at EXP_OFFSET
   sum: number;
   count: number;
   min: number;
   max: number;
   dirty: boolean;
+  windowStartT: number;
 }
 
-const EXP_START_SCALE = 10;     // base 2^(1/1024) ≈ 0.07% buckets; downscales as range grows
-const MAX_EXP_BUCKETS = 160;    // same budget the SDK uses
+/** Scale 3 = 8 buckets per octave (~9% wide — fine enough to separate a
+ *  0.5s DRS gap from a 1.0s one). The window spans bucket indices
+ *  -35..60, i.e. ~0.047s to ~193s, which covers every real interval
+ *  OpenF1 reports numerically (bigger gaps come through as "+1 LAP" and
+ *  are dropped upstream). */
+const EXP_SCALE = 3;
+const EXP_OFFSET = -35;
+const EXP_BUCKET_COUNT = 96;
 
 /** Stable key for an attribute set. */
 function attrKey(attrs: Attributes): string {
@@ -173,6 +185,7 @@ export class MetricBank {
   private readonly pendingExpHist = new Map<string, DataPoint<ExponentialHistogram>[]>();
 
   private startTime: HrTime = [0, 0];
+  private startRaceT = 0;
   private exportsInFlight = 0;
 
   constructor(
@@ -181,10 +194,11 @@ export class MetricBank {
     private readonly sessionStart: Date,
   ) {}
 
-  /** Cumulative series (sums, histograms) start counting here. Call once at
-   *  lights-out (or startAt). */
+  /** Cumulative series (sums) start counting here; it also opens the first
+   *  delta window for histograms. Call once at lights-out (or startAt). */
   setStartTime(raceT: number): void {
     this.startTime = hrTime(this.sessionStart, raceT);
+    this.startRaceT = raceT;
   }
 
   // --- record APIs (called by the interpreters) ---
@@ -232,6 +246,7 @@ export class MetricBank {
         sum: 0, count: 0,
         min: Infinity, max: -Infinity,
         dirty: false,
+        windowStartT: this.startRaceT,
       };
       series.set(key, s);
     }
@@ -251,32 +266,22 @@ export class MetricBank {
     if (!s) {
       s = {
         attrs,
-        scale: EXP_START_SCALE,
         zeroCount: 0,
-        positive: new Map(),
-        minIdx: Infinity,
-        maxIdx: -Infinity,
+        counts: new Array<number>(EXP_BUCKET_COUNT).fill(0),
         sum: 0, count: 0,
         min: Infinity, max: -Infinity,
         dirty: false,
+        windowStartT: this.startRaceT,
       };
       series.set(key, s);
     }
     if (value === 0) {
       s.zeroCount++;
     } else {
-      let idx = expBucketIndex(value, s.scale);
-      // Downscale (merge bucket pairs) until the index span fits the budget.
-      while (
-        Math.max(s.maxIdx, idx) - Math.min(s.minIdx, idx) + 1 > MAX_EXP_BUCKETS &&
-        s.scale > -10
-      ) {
-        downscale(s);
-        idx = expBucketIndex(value, s.scale);
-      }
-      s.positive.set(idx, (s.positive.get(idx) ?? 0) + 1);
-      if (idx < s.minIdx) s.minIdx = idx;
-      if (idx > s.maxIdx) s.maxIdx = idx;
+      // Clamp into the fixed window: the totals below stay exact either way,
+      // and a clamped edge bucket beats a scale that drifts per series.
+      const slot = expBucketIndex(value, EXP_SCALE) - EXP_OFFSET;
+      s.counts[Math.min(EXP_BUCKET_COUNT - 1, Math.max(0, slot))]!++;
     }
     s.sum += value;
     s.count += 1;
@@ -316,13 +321,14 @@ export class MetricBank {
         });
       }
     }
+    // Histograms are DELTA: emit the window's observations, then zero the
+    // accumulator so the next datapoint covers only what comes next.
     for (const [instrument, series] of this.histSeries) {
       const boundaries = ROSTER[instrument]!.boundaries!;
       for (const s of series.values()) {
         if (!s.dirty) continue;
-        s.dirty = false;
         pendFor(this.pendingHist, instrument).push({
-          startTime: this.startTime,
+          startTime: hrTime(this.sessionStart, s.windowStartT),
           endTime,
           attributes: s.attrs,
           value: {
@@ -333,18 +339,32 @@ export class MetricBank {
             max: s.max,
           },
         });
+        s.counts.fill(0);
+        s.sum = 0;
+        s.count = 0;
+        s.min = Infinity;
+        s.max = -Infinity;
+        s.dirty = false;
+        s.windowStartT = raceT;
       }
     }
     for (const [instrument, series] of this.expHistSeries) {
       for (const s of series.values()) {
         if (!s.dirty) continue;
-        s.dirty = false;
         pendFor(this.pendingExpHist, instrument).push({
-          startTime: this.startTime,
+          startTime: hrTime(this.sessionStart, s.windowStartT),
           endTime,
           attributes: s.attrs,
           value: denseExpBuckets(s),
         });
+        s.counts.fill(0);
+        s.zeroCount = 0;
+        s.sum = 0;
+        s.count = 0;
+        s.min = Infinity;
+        s.max = -Infinity;
+        s.dirty = false;
+        s.windowStartT = raceT;
       }
     }
   }
@@ -404,19 +424,19 @@ export class MetricBank {
       budget -= take.length * HIST_WEIGHT;
       metrics.push({
         descriptor: descriptorFor(instrument, InstrumentType.HISTOGRAM),
-        aggregationTemporality: AggregationTemporality.CUMULATIVE,
+        aggregationTemporality: AggregationTemporality.DELTA,
         dataPointType: DataPointType.HISTOGRAM,
         dataPoints: take,
       });
     }
-    const EXP_WEIGHT = 40;   // up to 160 bucket counts per point
+    const EXP_WEIGHT = 24;   // EXP_BUCKET_COUNT counts per point
     for (const [instrument, dataPoints] of this.pendingExpHist) {
       if (dataPoints.length === 0 || budget <= 0) continue;
       const take = dataPoints.splice(0, Math.max(1, Math.floor(budget / EXP_WEIGHT)));
       budget -= take.length * EXP_WEIGHT;
       metrics.push({
         descriptor: descriptorFor(instrument, InstrumentType.HISTOGRAM),
-        aggregationTemporality: AggregationTemporality.CUMULATIVE,
+        aggregationTemporality: AggregationTemporality.DELTA,
         dataPointType: DataPointType.EXPONENTIAL_HISTOGRAM,
         dataPoints: take,
       });
@@ -501,36 +521,16 @@ function expBucketIndex(value: number, scale: number): number {
   return Math.ceil(Math.log2(value) * 2 ** scale) - 1;
 }
 
-/** Halve the resolution: scale-1, each new bucket absorbs an adjacent pair. */
-function downscale(s: ExpHistSeries): void {
-  const merged = new Map<number, number>();
-  let minIdx = Infinity;
-  let maxIdx = -Infinity;
-  for (const [idx, count] of s.positive) {
-    const half = Math.floor(idx / 2);
-    merged.set(half, (merged.get(half) ?? 0) + count);
-    if (half < minIdx) minIdx = half;
-    if (half > maxIdx) maxIdx = half;
-  }
-  s.positive = merged;
-  s.minIdx = s.positive.size > 0 ? minIdx : Infinity;
-  s.maxIdx = s.positive.size > 0 ? maxIdx : -Infinity;
-  s.scale -= 1;
-}
-
-/** Sparse bucket map → the dense offset+counts shape OTLP wants. */
+/** Snapshot the fixed window in the offset+counts shape OTLP wants. Trailing
+ *  empty buckets are trimmed (a shorter vector is still positionally aligned
+ *  with a longer one at the same offset, so delta merges stay correct). */
 function denseExpBuckets(s: ExpHistSeries): ExponentialHistogram {
-  let offset = 0;
-  let bucketCounts: number[] = [];
-  if (s.positive.size > 0) {
-    offset = s.minIdx;
-    bucketCounts = new Array<number>(s.maxIdx - s.minIdx + 1).fill(0);
-    for (const [idx, count] of s.positive) bucketCounts[idx - s.minIdx] = count;
-  }
+  let end = s.counts.length;
+  while (end > 0 && s.counts[end - 1] === 0) end--;
   return {
-    scale: s.scale,
+    scale: EXP_SCALE,
     zeroCount: s.zeroCount,
-    positive: { offset, bucketCounts },
+    positive: { offset: EXP_OFFSET, bucketCounts: s.counts.slice(0, end) },
     negative: { offset: 0, bucketCounts: [] },
     sum: s.sum,
     count: s.count,

@@ -43,6 +43,8 @@ The whole race is **one trace**, and the trace starts at lights-out — the root
 
 **Metrics are backdated to race time.** The OTel SDK stamps metric datapoints at collection time, which would squeeze a 2-hour race into the couple of minutes the replay takes — so bargeboard bypasses the SDK metric pipeline entirely. A hand-rolled `MetricBank` accumulates values during the replay and emits OTLP datapoints stamped with historical race timestamps (one datapoint per dirty series per 5s of race time), shipped straight through the OTLP exporter. Metrics, traces, and logs all land on the same real-world time axis.
 
+**Histograms are DELTA, counters are CUMULATIVE.** Each histogram datapoint holds only the observations from its own 5-second window, so a heatmap column reads "lap times set *during this window*" and the chart shows the race's texture — stint pace drifting, everyone slowing under a safety car. (Cumulative histograms put every observation since lights-out into every datapoint, which makes every heatmap column identically wide and tells you nothing about *when*.) Counters stay cumulative, so `blue_flags` reads as a running total.
+
 All metrics emit from the single session-level `race` resource — not the per-team driver resources — so every instrument is **one metric** with ≈ 22 series, split by the `f1.driver.code` and `f1.team` attributes auto-stamped on every datapoint. Cross-driver comparisons ("highest top speed in the field", "blue flags per driver") are single group-by queries; no merging across team services required. Traces and logs stay on the per-team resources.
 
 | Instrument | Type | Notes |
