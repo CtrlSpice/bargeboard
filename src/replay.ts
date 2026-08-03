@@ -15,15 +15,15 @@ import type { DriverBundle, SessionBundle } from "./providers.js";
 import { DriverInterpreter, SessionInterpreter, type Effect } from "./emit/effects.js";
 import {
   closeDriverRace,
-  closeFormation,
   closeSessionRoot,
   flushTelemetryGauges,
   handle,
   handleFormation,
+  handleSessionEvent,
   openDriverRace,
-  openFormation,
   openSessionRoot,
 } from "./emit/handlers.js";
+import { FLUSH_EVERY_S } from "./emit/metrics.js";
 import { initialDriverState, type DriverState } from "./emit/state.js";
 import { log, sleep } from "./util.js";
 
@@ -35,8 +35,9 @@ export interface ReplayConfig {
   startAt: number;        // seconds
   endAt: number;          // seconds
   /** Lights-out moment. The engine spends 0..raceStartT in the formation
-   *  phase (formation span open, driver race spans NOT yet open) and
-   *  raceStartT..endAt in the race phase. If 0, the race begins immediately. */
+   *  phase (session root + driver race spans NOT yet open; pre-race events
+   *  land on the root as span events) and raceStartT..endAt in the race
+   *  phase. If 0, the race begins immediately. */
   raceStartT: number;
 }
 
@@ -55,8 +56,11 @@ export interface ReplayContext {
   driverBundles: Map<string, DriverBundle>;
   sessionBundle: SessionBundle;
   /** Pre-race events (race_t < config.raceStartT) handled by the session
-   *  interpreter as span events on the formation span. */
+   *  interpreter as span events on the session root. */
   formationQueue: Event[];
+  /** Session-scoped events (weather) drained every tick in both phases,
+   *  applied to the session interpreter without driver attributes. */
+  sessionQueue: Event[];
   /** Race-phase events per driver (race_t >= config.raceStartT). */
   perDriverQueues: Map<string, Event[]>;
   /** Starting grid: driver code → position (1 = pole). Drivers not in the
@@ -91,19 +95,23 @@ export async function runReplay(ctx: ReplayContext): Promise<void> {
     };
   });
 
-  // Open the session root + the formation span. Driver race spans don't open
-  // until the race phase begins at raceStartT — during formation, pre-race
-  // events attach to the formation span instead.
+  // Open the session root at LIGHTS-OUT, not session start: the race trace
+  // begins at t=0 of the actual race. Driver race spans don't open until the
+  // race phase begins at raceStartT either — pre-race events attach to the
+  // root as span events (with timestamps preceding the span start).
   const rootName = `${ctx.session.year}_${ctx.session.round_name.toLowerCase().replace(/\s+/g, "_")}_${ctx.session.session_type.toLowerCase()}`;
-  apply(sessionInterp, openSessionRoot(rootName, ctx.config.startAt));
+  const rootOpenT = Math.max(ctx.config.startAt, ctx.config.raceStartT);
+  apply(sessionInterp, openSessionRoot(rootName, rootOpenT));
   const hasFormation = ctx.config.raceStartT > ctx.config.startAt;
-  if (hasFormation) {
-    apply(sessionInterp, openFormation(ctx.config.startAt));
-  }
+
+  // Cumulative metric series (sums, histograms) count from lights-out.
+  sessionInterp.bank.setStartTime(Math.max(ctx.config.startAt, ctx.config.raceStartT));
 
   let raceT = ctx.config.startAt;
   let phase: "formation" | "race" = hasFormation ? "formation" : "race";
   let formationPos = 0;
+  let sessionPos = 0;
+  let nextFlushT = ctx.config.startAt + FLUSH_EVERY_S;
   if (phase === "race") openAllDriverRaces(runtimes, ctx.config.raceStartT, ctx.grid);
 
   const wallStart = Date.now();
@@ -118,12 +126,23 @@ export async function runReplay(ctx: ReplayContext): Promise<void> {
         if (raceT >= ctx.config.raceStartT) {
           // Drain any remaining formation events exactly at the boundary, then transition.
           formationPos = drainFormation(ctx.formationQueue, formationPos, ctx.config.raceStartT, sessionInterp);
-          apply(sessionInterp, closeFormation(ctx.config.raceStartT));
           openAllDriverRaces(runtimes, ctx.config.raceStartT, ctx.grid);
           phase = "race";
         }
       } else {
         tick(runtimes, raceT);
+      }
+
+      // Session-scoped events (weather) drain in both phases.
+      sessionPos = drainSession(ctx.sessionQueue, sessionPos, raceT, sessionInterp);
+
+      // Metric datapoints flush on a fixed race-time cadence, stamped with
+      // historical timestamps — this is what keeps metrics on the race's
+      // time axis instead of the replay's.
+      while (raceT >= nextFlushT) {
+        sessionInterp.bank.flush(nextFlushT);
+        sessionInterp.bank.export();
+        nextFlushT += FLUSH_EVERY_S;
       }
 
       if (!ctx.config.dump) {
@@ -137,18 +156,20 @@ export async function runReplay(ctx: ReplayContext): Promise<void> {
       }
     }
   } finally {
-    // If we exited mid-formation (e.g. --to clipped before lights-out), close
-    // the formation span; otherwise close driver spans for anyone whose
-    // race didn't wrap up via Retirement/RaceFinish.
-    if (phase === "formation" && hasFormation) {
-      apply(sessionInterp, closeFormation(raceT));
-    } else {
-      for (const rt of runtimes) {
-        const effects = closeDriverRace(rt.state, raceT);
-        for (const eff of effects) rt.interp.apply(eff);
-      }
+    // Close driver spans for anyone whose race didn't wrap up via
+    // Retirement/RaceFinish (no-op for drivers whose races never opened,
+    // e.g. when --to clipped before lights-out).
+    for (const rt of runtimes) {
+      const effects = closeDriverRace(rt.state, raceT);
+      for (const eff of effects) rt.interp.apply(eff);
     }
-    apply(sessionInterp, closeSessionRoot(raceT));
+    // Root opened at lights-out; never close it before its own start.
+    apply(sessionInterp, closeSessionRoot(Math.max(raceT, rootOpenT)));
+    // Final metric flush + wait for in-flight OTLP exports before the
+    // caller shuts the exporter down.
+    sessionInterp.bank.flush(raceT);
+    sessionInterp.bank.export();
+    await sessionInterp.bank.drain();
     log.info(`Replay finished at race_t=${raceT.toFixed(1)}s`);
   }
 }
@@ -182,6 +203,20 @@ function drainFormation(
 ): number {
   while (pos < queue.length && queue[pos]!.race_t <= raceT) {
     const effects = handleFormation(queue[pos]!);
+    for (const eff of effects) interp.apply(eff);
+    pos++;
+  }
+  return pos;
+}
+
+function drainSession(
+  queue: Event[],
+  pos: number,
+  raceT: number,
+  interp: SessionInterpreter,
+): number {
+  while (pos < queue.length && queue[pos]!.race_t <= raceT) {
+    const effects = handleSessionEvent(queue[pos]!);
     for (const eff of effects) interp.apply(eff);
     pos++;
   }

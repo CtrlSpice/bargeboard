@@ -10,21 +10,23 @@ import { SpanStatusCode, type Attributes } from "@opentelemetry/api";
 import { SeverityNumber } from "@opentelemetry/api-logs";
 
 import type {
-  DefensiveMove,
   DriverInfo,
   Event,
   Flag,
+  GapUpdate,
   Investigation,
   LapStart,
   Penalty,
   PitEntry,
   PitExit,
+  PositionChange,
   RaceControl,
   RaceFinish,
   Retirement,
   SectorBoundary,
   Telemetry,
   TyreChange,
+  Weather,
 } from "../models.js";
 import type { DriverState } from "./state.js";
 import type { Effect } from "./effects.js";
@@ -55,9 +57,11 @@ export function handle(
     case "flag": return onFlag(state, event);
     case "penalty": return onPenalty(state, event);
     case "investigation": return onInvestigation(state, event);
-    case "defensive_move": return onDefensiveMove(state, event);
+    case "position_change": return onPositionChange(state, event);
+    case "gap_update": return onGapUpdate(state, event);
     case "retirement": return onRetirement(state, event);
     case "race_finish": return onRaceFinish(state, event);
+    case "weather": return { state, effects: [] };  // session-scoped; see handleSessionEvent
   }
 }
 
@@ -152,6 +156,16 @@ function onSectorBoundary(state: DriverState, ev: SectorBoundary): HandlerResult
       // lives on the sector span.
     });
     effects.push({ kind: "end_span", role: "sector", raceT: ev.race_t });
+  }
+  // Speed trap tied to this boundary (i1/i2/st) → gauge split by trap attr.
+  if (ev.trap_speed_kph != null) {
+    const trap = ev.sector === 1 ? "i1" : ev.sector === 2 ? "i2" : "st";
+    effects.push({
+      kind: "set_gauge",
+      instrument: "f1.driver.trap_speed",
+      value: ev.trap_speed_kph,
+      attributes: { "f1.trap": trap },
+    });
   }
   let nextSector: 0 | 1 | 2 | 3 = 0;
   let nextSectorSpanId: string | null = null;
@@ -363,27 +377,31 @@ function onInvestigation(state: DriverState, ev: Investigation): HandlerResult {
   return { state, effects };
 }
 
-function onDefensiveMove(state: DriverState, ev: DefensiveMove): HandlerResult {
-  const attrs = driverAttrs(state, {
-    "f1.defensive_move.lateral_m": ev.lateral_meters,
-    "f1.defensive_move.chaser_code": ev.chaser_code,
-    "f1.defensive_move.chaser_gap_m": ev.chaser_gap_m,
-  });
+function onPositionChange(state: DriverState, ev: PositionChange): HandlerResult {
   return {
     state,
     effects: [
-      { kind: "add_span_event", anchor: "active", raceT: ev.race_t, name: "defensive_move", attributes: attrs },
-      { kind: "add_counter", instrument: "f1.driver.defensive_moves", delta: 1 },
-      {
-        kind: "emit_log",
-        anchor: "active",
-        raceT: ev.race_t,
-        severity: SeverityNumber.WARN,
-        body: `Defensive move under braking: ${ev.lateral_meters.toFixed(1)}m lateral, chaser ${ev.chaser_code} ${ev.chaser_gap_m.toFixed(1)}m back`,
-        attributes: attrs,
-      },
+      { kind: "set_gauge", instrument: "f1.driver.standings_position", value: ev.position },
     ],
   };
+}
+
+function onGapUpdate(state: DriverState, ev: GapUpdate): HandlerResult {
+  const effects: Effect[] = [];
+  if (ev.gap_to_leader_s != null) {
+    effects.push({ kind: "set_gauge", instrument: "f1.driver.gap_to_leader", value: ev.gap_to_leader_s });
+  }
+  if (ev.interval_s != null) {
+    effects.push({ kind: "set_gauge", instrument: "f1.driver.interval", value: ev.interval_s });
+    // Also feed the exponential histogram — the interval's ratio scale
+    // (0.05s DRS battles to minute-long gaps) is what exp buckets are for.
+    effects.push({
+      kind: "record_histogram",
+      instrument: "f1.driver.interval_distribution",
+      value: ev.interval_s,
+    });
+  }
+  return { state, effects };
 }
 
 function onRetirement(state: DriverState, ev: Retirement): HandlerResult {
@@ -419,16 +437,43 @@ function onRetirement(state: DriverState, ev: Retirement): HandlerResult {
 function onRaceFinish(state: DriverState, ev: RaceFinish): HandlerResult {
   // Already closed (e.g. driver retired earlier) → no-op.
   if (state.raceClosed) return { state, effects: [] };
+  const effects: Effect[] = [
+    ...closeOpenChildren(state, ev.race_t),
+    { kind: "end_span", role: "race", raceT: ev.race_t,
+      status: { code: SpanStatusCode.OK } },
+  ];
+  // Credit championship points at the flag. Up-down counter: a future DSQ
+  // could subtract them again.
+  if (ev.points != null && ev.points > 0) {
+    effects.push({
+      kind: "add_up_down_counter",
+      instrument: "f1.driver.championship_points",
+      delta: ev.points,
+    });
+  }
   return {
     state: { ...state, raceClosed: true,
              pitSpanId: null, sectorSpanId: null, lapSpanId: null, raceSpanId: null,
              pitEntryT: null, sectorStartT: null, lapStartT: null },
-    effects: [
-      ...closeOpenChildren(state, ev.race_t),
-      { kind: "end_span", role: "race", raceT: ev.race_t,
-        status: { code: SpanStatusCode.OK } },
-    ],
+    effects,
   };
+}
+
+// --- session-scoped events (drained by the engine, applied to the session
+//     interpreter directly — never fanned out per driver) -------------------
+
+/** Weather and any future session-scoped events: metric effects with NO
+ *  driver attributes, applied straight to the SessionInterpreter. */
+export function handleSessionEvent(event: Event): Effect[] {
+  if (event.kind !== "weather") return [];
+  const w: Weather = event;
+  return [
+    { kind: "set_gauge", instrument: "f1.session.air_temp", value: w.air_temp_c },
+    { kind: "set_gauge", instrument: "f1.session.track_temp", value: w.track_temp_c },
+    { kind: "set_gauge", instrument: "f1.session.humidity", value: w.humidity_pct },
+    { kind: "set_gauge", instrument: "f1.session.rainfall", value: w.rainfall },
+    { kind: "set_gauge", instrument: "f1.session.wind_speed", value: w.wind_speed_ms },
+  ];
 }
 
 /** Emit end_span effects for any still-open child spans (pit, sector, lap) at
@@ -462,24 +507,19 @@ export function closeSessionRoot(raceT: number): Effect[] {
   return [{ kind: "end_session_span", raceT }];
 }
 
-export function openFormation(raceT: number): Effect[] {
-  return [{ kind: "start_formation_span", raceT }];
-}
-
-export function closeFormation(raceT: number): Effect[] {
-  return [{ kind: "end_formation_span", raceT }];
-}
-
-/** Translate a pre-race event into a span event on the formation span.
- *  Driver-specific events (stewards notes, etc.) keep their driver code
- *  as an attribute. Returns [] for event kinds that should never appear
- *  pre-race (laps, telemetry, etc.) — those would indicate a data bug. */
+/** Translate a pre-race event into a span event on the session root.
+ *  The root opens at lights-out, so these carry timestamps preceding the
+ *  span start — pre-race context without a formation span eating the
+ *  front of the timeline. Driver-specific events (stewards notes, etc.)
+ *  keep their driver code as an attribute. Returns [] for event kinds
+ *  that should never appear pre-race (laps, telemetry, etc.) — those
+ *  would indicate a data bug. */
 export function handleFormation(event: Event): Effect[] {
   const at = event.race_t;
   switch (event.kind) {
     case "race_control":
       return [{
-        kind: "add_formation_span_event",
+        kind: "add_root_span_event",
         raceT: at,
         name: "race_control",
         attributes: formationAttrs(event.driver_code, {
@@ -488,7 +528,7 @@ export function handleFormation(event: Event): Effect[] {
       }];
     case "flag":
       return [{
-        kind: "add_formation_span_event",
+        kind: "add_root_span_event",
         raceT: at,
         name: `flag.${event.color}`,
         attributes: formationAttrs(event.driver_code, {
@@ -499,7 +539,7 @@ export function handleFormation(event: Event): Effect[] {
       }];
     case "penalty":
       return [{
-        kind: "add_formation_span_event",
+        kind: "add_root_span_event",
         raceT: at,
         name: `penalty.${event.type}`,
         attributes: formationAttrs(event.driver_code, {
@@ -510,7 +550,7 @@ export function handleFormation(event: Event): Effect[] {
       }];
     case "investigation":
       return [{
-        kind: "add_formation_span_event",
+        kind: "add_root_span_event",
         raceT: at,
         name: `investigation.${event.status}`,
         attributes: formationAttrs(event.driver_code, {

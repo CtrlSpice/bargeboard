@@ -12,9 +12,11 @@ import {
   type Flag,
   type FlagColor,
   type FlagStatus,
+  type GapUpdate,
   type LapStart,
   type PitEntry,
   type PitExit,
+  type PositionChange,
   type RaceControl,
   type RaceFinish,
   type Retirement,
@@ -22,26 +24,33 @@ import {
   type SessionInfo,
   type Telemetry,
   type TyreChange,
+  type Weather,
   SESSION_WIDE,
 } from "./models.js";
 import {
   getCarData,
   getDrivers,
+  getIntervals,
   getLaps,
   getLocation,
   getPit,
+  getPositions,
   getRaceControl,
   getSessionResult,
   getSessions,
   getStartingGrid,
   getStints,
+  getWeather,
   type OF1CarData,
+  type OF1Interval,
   type OF1Lap,
   type OF1Location,
   type OF1Pit,
+  type OF1Position,
   type OF1RaceControl,
   type OF1SessionResult,
   type OF1Stint,
+  type OF1Weather,
 } from "./openf1.js";
 import { hasCachedSession, readCachedSession, writeCachedSession } from "./cache.js";
 import { log } from "./util.js";
@@ -126,29 +135,37 @@ export function lapsToEvents(
     const s1 = lap.duration_sector_1;
     const s2 = lap.duration_sector_2;
     const s3 = lap.duration_sector_3;
+    // Speed traps ride their sector's boundary: i1 on S1, i2 on S2, and the
+    // main-straight trap (st) on S3 / lap completion.
     if (s1 != null) {
-      out.push({
+      const ev: SectorBoundary = {
         kind: "sector_boundary",
         race_t: start_t + s1,
         driver_code: code,
         sector: 1,
-      } satisfies SectorBoundary);
+      };
+      if (lap.i1_speed != null) ev.trap_speed_kph = lap.i1_speed;
+      out.push(ev);
     }
     if (s1 != null && s2 != null) {
-      out.push({
+      const ev: SectorBoundary = {
         kind: "sector_boundary",
         race_t: start_t + s1 + s2,
         driver_code: code,
         sector: 2,
-      } satisfies SectorBoundary);
+      };
+      if (lap.i2_speed != null) ev.trap_speed_kph = lap.i2_speed;
+      out.push(ev);
     }
     if (s1 != null && s2 != null && s3 != null) {
-      out.push({
+      const ev: SectorBoundary = {
         kind: "sector_boundary",
         race_t: start_t + s1 + s2 + s3,
         driver_code: code,
         sector: 3,
-      } satisfies SectorBoundary);
+      };
+      if (lap.st_speed != null) ev.trap_speed_kph = lap.st_speed;
+      out.push(ev);
     }
   }
   return out;
@@ -208,15 +225,98 @@ export function retirementsToEvents(
  * Retirement handler. Computes finish_t per driver as the max
  * `(lap.date_start + s1 + s2 + s3)` across their laps; falls back to
  * `lap.date_start + lap.lap_duration` if sector splits are missing.
+ * Carries championship points from /session_result so the finish moment
+ * can credit the points counter.
  */
 export function raceFinishesToEvents(
   lastLapEnd: Map<string, number>,
   retiredCodes: Set<string>,
+  results: OF1SessionResult[],
+  numberToCode: Map<number, string>,
 ): RaceFinish[] {
+  const pointsByCode = new Map<string, number>();
+  for (const r of results) {
+    const code = numberToCode.get(r.driver_number);
+    if (code && r.points != null) pointsByCode.set(code, r.points);
+  }
   const out: RaceFinish[] = [];
   for (const [code, race_t] of lastLapEnd) {
     if (retiredCodes.has(code)) continue;
-    out.push({ kind: "race_finish", race_t, driver_code: code });
+    const ev: RaceFinish = { kind: "race_finish", race_t, driver_code: code };
+    const points = pointsByCode.get(code);
+    if (points != null) ev.points = points;
+    out.push(ev);
+  }
+  return out;
+}
+
+/** Position feed → PositionChange events, deduped per driver: one initial
+ *  fix plus one event per actual change. */
+export function positionsToEvents(
+  rows: OF1Position[],
+  sessionStart: Date,
+  numberToCode: Map<number, string>,
+): PositionChange[] {
+  const sorted = [...rows].sort((a, b) => a.date.localeCompare(b.date));
+  const lastByDriver = new Map<string, number>();
+  const out: PositionChange[] = [];
+  for (const r of sorted) {
+    const code = numberToCode.get(r.driver_number);
+    if (!code) continue;
+    const race_t = secondsBetween(r.date, sessionStart);
+    if (race_t < 0) continue;
+    if (lastByDriver.get(code) === r.position) continue;
+    lastByDriver.set(code, r.position);
+    out.push({ kind: "position_change", race_t, driver_code: code, position: r.position });
+  }
+  return out;
+}
+
+/** Numeric-or-null from OpenF1's gap fields ("+1 LAP" and friends → null). */
+function numericGap(v: number | string | null): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+export function intervalsToEvents(
+  rows: OF1Interval[],
+  sessionStart: Date,
+  numberToCode: Map<number, string>,
+): GapUpdate[] {
+  const out: GapUpdate[] = [];
+  for (const r of rows) {
+    const code = numberToCode.get(r.driver_number);
+    if (!code) continue;
+    const race_t = secondsBetween(r.date, sessionStart);
+    if (race_t < 0) continue;
+    const gap = numericGap(r.gap_to_leader);
+    const interval = numericGap(r.interval);
+    if (gap == null && interval == null) continue;   // nothing to feed
+    out.push({
+      kind: "gap_update",
+      race_t,
+      driver_code: code,
+      gap_to_leader_s: gap,
+      interval_s: interval,
+    });
+  }
+  return out;
+}
+
+export function weatherToEvents(rows: OF1Weather[], sessionStart: Date): Weather[] {
+  const out: Weather[] = [];
+  for (const r of rows) {
+    const race_t = secondsBetween(r.date, sessionStart);
+    if (race_t < 0) continue;
+    out.push({
+      kind: "weather",
+      race_t,
+      driver_code: SESSION_WIDE,
+      air_temp_c: r.air_temperature,
+      track_temp_c: r.track_temperature,
+      humidity_pct: r.humidity,
+      rainfall: r.rainfall,
+      wind_speed_ms: r.wind_speed,
+    });
   }
   return out;
 }
@@ -447,19 +547,27 @@ export async function loadEvents(
   // (filtered runs are partial; caching them would poison a subsequent full run).
   const canCache = !opts.noCache && !opts.driverFilter && !opts.skipTelemetry;
   if (canCache && await hasCachedSession(session.session_key)) {
-    log.info(`Cache hit for session ${session.session_key} — loading from ~/.cache/bargeboard/${session.session_key}/`);
-    return readCachedSession(session.session_key);
+    try {
+      log.info(`Cache hit for session ${session.session_key} — loading from ~/.cache/bargeboard/${session.session_key}/`);
+      return await readCachedSession(session.session_key);
+    } catch (e) {
+      // Stale cache version (or corrupt entry) — treat as a miss and refetch.
+      log.warn(`Cache read failed (${(e as Error).message}); refetching from OpenF1.`);
+    }
   }
   const sessionStart = session.start_time;
   const sessionEnd = new Date(sessionStart.getTime() + session.duration_s * 1000);
 
-  log.info(`Fetching lap/pit/stint/race_control/results for session ${session.session_key}...`);
-  const [laps, pits, stints, rc, results] = await Promise.all([
+  log.info(`Fetching lap/pit/stint/race_control/results/position/intervals/weather for session ${session.session_key}...`);
+  const [laps, pits, stints, rc, results, positions, intervals, weather] = await Promise.all([
     getLaps(session.session_key),
     getPit(session.session_key),
     getStints(session.session_key),
     getRaceControl(session.session_key),
     getSessionResult(session.session_key),
+    getPositions(session.session_key, sessionStart, sessionEnd),
+    getIntervals(session.session_key, sessionStart, sessionEnd),
+    getWeather(session.session_key),
   ]);
 
   // A session with no laps never ran (cancelled race, or OpenF1 hasn't
@@ -475,6 +583,9 @@ export async function loadEvents(
     ...pitsToEvents(pits, sessionStart, numberToCode),
     ...stintsToEvents(stints, laps, sessionStart, numberToCode),
     ...raceControlToEvents(rc, sessionStart, numberToCode),
+    ...positionsToEvents(positions, sessionStart, numberToCode),
+    ...intervalsToEvents(intervals, sessionStart, numberToCode),
+    ...weatherToEvents(weather, sessionStart),
   ];
   // Race lifecycle: retirement per DNF/DSQ row in session_result, then
   // RaceFinish for everyone else who actually ran. Both close the driver's
@@ -482,9 +593,9 @@ export async function loadEvents(
   const lastLapEnd = lastLapEndTimes(laps, sessionStart, numberToCode);
   const retirements = retirementsToEvents(results, lastLapEnd, numberToCode);
   const retiredCodes = new Set(retirements.map((r) => r.driver_code));
-  const finishes = raceFinishesToEvents(lastLapEnd, retiredCodes);
+  const finishes = raceFinishesToEvents(lastLapEnd, retiredCodes, results, numberToCode);
   events.push(...retirements, ...finishes);
-  log.info(`Lap/pit/stint/rc/retirement/finish events: ${events.length} (retirements=${retirements.length}, finishes=${finishes.length})`);
+  log.info(`Base events: ${events.length} (retirements=${retirements.length}, finishes=${finishes.length}, positions/gaps/weather included)`);
 
   const raceStartT = detectRaceStartT(rc, sessionStart) ?? 0;
   if (raceStartT > 0) {

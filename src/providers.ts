@@ -7,8 +7,10 @@
  * resource with `f1.driver.code` / `f1.team` as datapoint attributes, so
  * cross-driver queries never span resources.
  *
- * Two metrics promote to exponential histograms via a View: top_speed and
- * gap_to_leader. Their value range is too wide for fixed buckets.
+ * Metrics deliberately bypass the SDK MeterProvider: datapoints need
+ * historical race timestamps, which the SDK can't produce. The session
+ * bundle exposes the raw OTLPMetricExporter; emit/metrics.ts (MetricBank)
+ * builds the datapoints.
  *
  * No providers are registered globally — every emitter takes its bundle by
  * reference. Shutdown flushes traces/logs/metrics in that order.
@@ -25,16 +27,9 @@ import {
   type LogRecordExporter,
 } from "@opentelemetry/sdk-logs";
 import {
-  MeterProvider,
-  PeriodicExportingMetricReader,
-  View,
-  ExponentialHistogramAggregation,
-  ConsoleMetricExporter,
-  type PushMetricExporter,
-} from "@opentelemetry/sdk-metrics";
-import {
   NodeTracerProvider,
 } from "@opentelemetry/sdk-trace-node";
+import type { Resource } from "@opentelemetry/resources";
 import {
   BatchSpanProcessor,
   ConsoleSpanExporter,
@@ -60,8 +55,12 @@ export interface DriverBundle {
 
 export interface SessionBundle {
   session: SessionInfo;
+  resource: Resource;
   tracerProvider: NodeTracerProvider;
-  meterProvider: MeterProvider;
+  /** Raw OTLP metric exporter for the MetricBank (null in dry-run). The SDK
+   *  MeterProvider pipeline is deliberately absent — it stamps datapoints at
+   *  collection time, and we need historical race timestamps. */
+  metricExporter: OTLPMetricExporter | null;
   shutdown: () => Promise<void>;
 }
 
@@ -70,7 +69,7 @@ function makeTraceExporter(t: ExportTargets): SpanExporter | null {
   return new OTLPTraceExporter({ url: `http://${t.endpoint}` });
 }
 
-function makeMetricExporter(t: ExportTargets): PushMetricExporter | null {
+function makeMetricExporter(t: ExportTargets): OTLPMetricExporter | null {
   if (t.dryRun) return null;
   return new OTLPMetricExporter({ url: `http://${t.endpoint}` });
 }
@@ -80,17 +79,6 @@ function makeLogExporter(t: ExportTargets): LogRecordExporter | null {
   return new OTLPLogExporter({ url: `http://${t.endpoint}` });
 }
 
-const EXP_VIEWS = [
-  new View({
-    instrumentName: "f1.driver.top_speed",
-    aggregation: new ExponentialHistogramAggregation(),
-  }),
-  new View({
-    instrumentName: "f1.driver.gap_to_leader",
-    aggregation: new ExponentialHistogramAggregation(),
-  }),
-];
-
 export function makeSessionBundle(session: SessionInfo, t: ExportTargets): SessionBundle {
   const resource = makeSessionResource(session);
 
@@ -99,25 +87,16 @@ export function makeSessionBundle(session: SessionInfo, t: ExportTargets): Sessi
   if (trExp) tp.addSpanProcessor(new BatchSpanProcessor(trExp));
   if (t.consoleEcho) tp.addSpanProcessor(new SimpleSpanProcessor(new ConsoleSpanExporter()));
 
-  const mExp = makeMetricExporter(t);
-  const readers = mExp
-    ? [new PeriodicExportingMetricReader({ exporter: mExp, exportIntervalMillis: 1000 })]
-    : [];
-  if (t.consoleEcho) {
-    readers.push(new PeriodicExportingMetricReader({
-      exporter: new ConsoleMetricExporter(),
-      exportIntervalMillis: 5000,
-    }));
-  }
-  const mp = new MeterProvider({ resource, readers, views: EXP_VIEWS });
+  const metricExporter = makeMetricExporter(t);
 
   return {
     session,
+    resource,
     tracerProvider: tp,
-    meterProvider: mp,
+    metricExporter,
     shutdown: async () => {
       await tp.shutdown();
-      await mp.shutdown();
+      if (metricExporter) await metricExporter.shutdown();
     },
   };
 }

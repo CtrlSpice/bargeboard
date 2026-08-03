@@ -17,7 +17,9 @@ import parquet from "parquetjs-lite";
 import type { Event, Telemetry } from "./models.js";
 import { log } from "./util.js";
 
-const CACHE_VERSION = 1;
+// v2: position_change / gap_update / weather events, trap speeds on sector
+// boundaries, points on race_finish, defensive_move removed.
+const CACHE_VERSION = 2;
 
 // --- schema -----------------------------------------------------------------
 
@@ -68,10 +70,11 @@ export interface CachedSession {
 export async function hasCachedSession(sessionKey: number): Promise<boolean> {
   const dir = sessionCacheDir(sessionKey);
   try {
-    await access(join(dir, "meta.json"));
     await access(join(dir, "telemetry.parquet"));
     await access(join(dir, "events.json"));
-    return true;
+    // A cache entry from an older schema version is not a usable cache entry.
+    const meta: CacheMeta = JSON.parse(await readFile(join(dir, "meta.json"), "utf-8"));
+    return meta.version === CACHE_VERSION;
   } catch {
     return false;
   }

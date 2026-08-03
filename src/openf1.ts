@@ -114,6 +114,28 @@ export interface OF1Position {
   position: number;
 }
 
+export interface OF1Interval {
+  session_key: number;
+  driver_number: number;
+  date: string;
+  /** Number of seconds, or a string like "+1 LAP" for lapped cars, or null
+   *  (leader / no data). */
+  gap_to_leader: number | string | null;
+  interval: number | string | null;
+}
+
+export interface OF1Weather {
+  session_key: number;
+  date: string;
+  air_temperature: number;
+  track_temperature: number;
+  humidity: number;
+  pressure: number;
+  rainfall: number;          // 0 | 1
+  wind_direction: number;
+  wind_speed: number;
+}
+
 export interface OF1RaceControl {
   session_key: number;
   date: string;
@@ -240,6 +262,30 @@ export async function getRaceControl(session_key: number): Promise<OF1RaceContro
   return fetchJson<OF1RaceControl>(`race_control?${q({ session_key })}`);
 }
 
+/** Full /position feed for the session (a few thousand rows, not capped in
+ *  practice — but paginate defensively anyway). */
+export async function getPositions(
+  session_key: number,
+  startDate: Date,
+  endDate: Date,
+): Promise<OF1Position[]> {
+  return paginateByDate<OF1Position>("position", session_key, startDate, endDate);
+}
+
+/** Timing gaps at ~4s cadence for the whole field. */
+export async function getIntervals(
+  session_key: number,
+  startDate: Date,
+  endDate: Date,
+): Promise<OF1Interval[]> {
+  return paginateByDate<OF1Interval>("intervals", session_key, startDate, endDate);
+}
+
+/** Track weather, ~1 sample/min. Small enough to fetch unpaginated. */
+export async function getWeather(session_key: number): Promise<OF1Weather[]> {
+  return fetchJson<OF1Weather>(`weather?${q({ session_key })}`);
+}
+
 /**
  * Paginate `car_data` for one driver across the session.
  *
@@ -255,7 +301,7 @@ export async function getCarData(
   startDate: Date,
   endDate: Date,
 ): Promise<OF1CarData[]> {
-  return paginateByDate<OF1CarData>("car_data", session_key, driver_number, startDate, endDate);
+  return paginateByDate<OF1CarData>("car_data", session_key, startDate, endDate, driver_number);
 }
 
 export async function getLocation(
@@ -264,22 +310,23 @@ export async function getLocation(
   startDate: Date,
   endDate: Date,
 ): Promise<OF1Location[]> {
-  return paginateByDate<OF1Location>("location", session_key, driver_number, startDate, endDate);
+  return paginateByDate<OF1Location>("location", session_key, startDate, endDate, driver_number);
 }
 
 async function paginateByDate<T extends { date: string }>(
   endpoint: string,
   session_key: number,
-  driver_number: number,
   startDate: Date,
   endDate: Date,
+  driver_number?: number,
 ): Promise<T[]> {
   const all: T[] = [];
   let cursor = startDate.toISOString();
   const endIso = endDate.toISOString();
+  const driverParam = driver_number != null ? `&driver_number=${driver_number}` : "";
 
   for (let page = 0; page < 200; page++) {     // hard stop, prevents runaway loops
-    const url = `${endpoint}?session_key=${session_key}&driver_number=${driver_number}&date>${cursor}&date<${endIso}`;
+    const url = `${endpoint}?session_key=${session_key}${driverParam}&date>${cursor}&date<${endIso}`;
     const rows = await fetchJson<T>(url);
     if (rows.length === 0) break;
     all.push(...rows);
@@ -289,6 +336,6 @@ async function paginateByDate<T extends { date: string }>(
     const nextMs = new Date(last).getTime() + 1;
     cursor = new Date(nextMs).toISOString();
   }
-  log.debug(`${endpoint}: driver ${driver_number} -> ${all.length} rows`);
+  log.debug(`${endpoint}: ${driver_number != null ? `driver ${driver_number} ` : ""}-> ${all.length} rows`);
   return all;
 }

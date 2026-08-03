@@ -80,6 +80,10 @@ export interface SectorBoundary {
   race_t: number;
   driver_code: string;
   sector: 1 | 2 | 3;        // fires at END of this sector
+  /** Speed-trap reading tied to this sector: i1 rides S1, i2 rides S2, and
+   *  the main straight trap (st) rides S3. From /laps, absent when OpenF1
+   *  has no reading. */
+  trap_speed_kph?: number;
 }
 
 export interface PitEntry {
@@ -150,13 +154,36 @@ export interface Investigation {
   reason: string;
 }
 
-export interface DefensiveMove {
-  kind: "defensive_move";
+/** Running-order change from the /position feed. Deduped: only emitted when
+ *  a driver's position actually changes (plus one initial fix per driver). */
+export interface PositionChange {
+  kind: "position_change";
   race_t: number;
   driver_code: string;
-  lateral_meters: number;
-  chaser_code: string;
-  chaser_gap_m: number;
+  position: number;
+}
+
+/** Timing-gap sample from /intervals (~4s cadence during the race). Values
+ *  are null when OpenF1 reports a non-numeric gap (e.g. "+1 LAP", leader). */
+export interface GapUpdate {
+  kind: "gap_update";
+  race_t: number;
+  driver_code: string;
+  gap_to_leader_s: number | null;
+  interval_s: number | null;
+}
+
+/** Track conditions from /weather (~1 sample/min). Session-scoped: always
+ *  SESSION_WIDE, feeds session gauges without driver attributes. */
+export interface Weather {
+  kind: "weather";
+  race_t: number;
+  driver_code: string;      // always "*"
+  air_temp_c: number;
+  track_temp_c: number;
+  humidity_pct: number;
+  rainfall: number;         // 0 | 1 per OpenF1
+  wind_speed_ms: number;
 }
 
 export interface Retirement {
@@ -174,6 +201,8 @@ export interface RaceFinish {
   kind: "race_finish";
   race_t: number;
   driver_code: string;
+  /** Championship points scored, from /session_result. */
+  points?: number;
 }
 
 export type Event =
@@ -187,7 +216,9 @@ export type Event =
   | Flag
   | Penalty
   | Investigation
-  | DefensiveMove
+  | PositionChange
+  | GapUpdate
+  | Weather
   | Retirement
   | RaceFinish;
 

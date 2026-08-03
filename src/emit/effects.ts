@@ -18,17 +18,13 @@ import {
   type Attributes,
   type Span,
   type Tracer,
-  type Counter,
-  type UpDownCounter,
-  type Histogram,
-  type Gauge,
-  type Meter,
 } from "@opentelemetry/api";
 import type { Logger, LogRecord } from "@opentelemetry/api-logs";
 import { SeverityNumber } from "@opentelemetry/api-logs";
 
 import type { DriverBundle, SessionBundle } from "../providers.js";
 import { SCOPE_NAME, SCOPE_VERSION } from "./constants.js";
+import { MetricBank } from "./metrics.js";
 import { raceTimeToUnixNanos } from "../util.js";
 import type { SessionInfo } from "../models.js";
 
@@ -50,9 +46,7 @@ export type Effect =
   // session-scoped:
   | StartSessionSpan
   | EndSessionSpan
-  | StartFormationSpan
-  | EndFormationSpan
-  | AddFormationSpanEvent
+  | AddRootSpanEvent
   | AddSessionUpDownCounter;
 
 export interface StartSpan {
@@ -132,20 +126,13 @@ export interface AddSessionUpDownCounter {
   delta: number;
 }
 
-/** Open a "formation" span as a child of the session root. Covers the
- *  pre-race period (formation laps, grid procedures, aborted starts). */
-export interface StartFormationSpan {
-  kind: "start_formation_span";
-  raceT: number;
-}
-export interface EndFormationSpan {
-  kind: "end_formation_span";
-  raceT: number;
-}
-/** Attach a span event to the formation span (pre-race race-control,
- *  flags, stewards notes, etc.). */
-export interface AddFormationSpanEvent {
-  kind: "add_formation_span_event";
+/** Attach a span event directly to the session root. Used for pre-race
+ *  happenings (formation-lap race control, grid flags, stewards notes) —
+ *  the root opens at lights-out, so these events carry timestamps that
+ *  precede the span's own start. That's legal OTLP; some UIs render it
+ *  left of the span bar. */
+export interface AddRootSpanEvent {
+  kind: "add_root_span_event";
   raceT: number;
   name: string;
   attributes?: Attributes;
@@ -196,9 +183,7 @@ export class DriverInterpreter {
       case "emit_log": return this.emitLog(effect);
       case "start_session_span":
       case "end_session_span":
-      case "start_formation_span":
-      case "end_formation_span":
-      case "add_formation_span_event":
+      case "add_root_span_event":
       case "add_session_up_down_counter":
         return this.sessionInterp.apply(effect);
     }
@@ -293,14 +278,11 @@ export class DriverInterpreter {
 
 export class SessionInterpreter {
   private readonly tracer: Tracer;
-  private readonly meter: Meter;
   private root: Span | null = null;
-  private formation: Span | null = null;
 
-  private readonly gauges = new Map<string, Gauge>();
-  private readonly counters = new Map<string, Counter>();
-  private readonly udcs = new Map<string, UpDownCounter>();
-  private readonly histograms = new Map<string, Histogram>();
+  /** All metric state + OTLP assembly. Historically-timestamped datapoints;
+   *  the engine drives `bank.flush(raceT)` / `bank.export()`. */
+  readonly bank: MetricBank;
 
   constructor(
     bundle: SessionBundle,
@@ -309,68 +291,23 @@ export class SessionInterpreter {
   ) {
     void sessionInfo;
     this.tracer = bundle.tracerProvider.getTracer(SCOPE_NAME, SCOPE_VERSION);
-    this.meter = bundle.meterProvider.getMeter(SCOPE_NAME, SCOPE_VERSION);
-    this.declareInstruments();
+    this.bank = new MetricBank(bundle.resource, bundle.metricExporter, sessionStart);
   }
 
-  /** Every instrument in the app, declared once against the session's "race"
-   *  resource. Driver-scoped instruments split into per-driver series via the
-   *  f1.driver.code / f1.team datapoint attributes stamped by DriverInterpreter. */
-  private declareInstruments(): void {
-    const m = this.meter;
-    const gauge = (name: string, unit: string, description: string): void => {
-      this.gauges.set(name, m.createGauge(name, { unit, description }));
-    };
-    gauge("f1.car.speed", "km/h", "Car speed");
-    gauge("f1.car.rpm", "{rpm}", "Engine RPM");
-    gauge("f1.car.throttle", "%", "Throttle position");
-    gauge("f1.car.brake", "%", "Brake pressure");
-    gauge("f1.car.gear", "{gear}", "Selected gear");
-    gauge("f1.car.drs", "{bool}", "DRS open (1) or closed (0)");
-    gauge("f1.car.position_x", "m", "Track-local X position");
-    gauge("f1.car.position_y", "m", "Track-local Y position");
-    gauge("f1.car.position_z", "m", "Track-local Z position (elevation)");
-    gauge("f1.driver.standings_position", "{position}", "Current race position");
-
-    const counter = (name: string, unit: string, description: string): void => {
-      this.counters.set(name, m.createCounter(name, { unit, description }));
-    };
-    counter("f1.driver.laps_completed", "{lap}", "Laps completed");
-    counter("f1.driver.pit_stops", "{stop}", "Pit stops completed");
-    counter("f1.driver.blue_flags", "{flag}", "Blue flags shown to this driver");
-    counter("f1.driver.penalties", "{penalty}", "Penalties received");
-    counter("f1.driver.investigations", "{incident}", "Incidents opened against this driver");
-    counter("f1.driver.defensive_moves", "{move}", "Defensive moves under braking");
-
-    const udc = (name: string, unit: string, description: string): void => {
-      this.udcs.set(name, m.createUpDownCounter(name, { unit, description }));
-    };
-    udc("f1.driver.championship_points", "{point}", "Championship points");
-    udc("f1.session.cars_on_track", "{car}", "Number of cars still circulating");
-
-    const hist = (name: string, unit: string, description: string): void => {
-      this.histograms.set(name, m.createHistogram(name, { unit, description }));
-    };
-    hist("f1.driver.lap_time", "s", "Lap time");
-    hist("f1.driver.sector_time", "s", "Sector time");
-    hist("f1.driver.pit_duration", "s", "Pit lane duration");
-    hist("f1.driver.top_speed", "km/h", "Top speed per lap");
-    hist("f1.driver.gap_to_leader", "s", "Gap to race leader");
-  }
-
-  // --- shared metric recording (called by DriverInterpreter with driver attrs) ---
+  // --- shared metric recording (called by DriverInterpreter with driver attrs,
+  //     and by apply() for session-scoped effects with no driver attrs) ---
 
   setGauge(instrument: string, value: number, attrs: Attributes): void {
-    this.gauges.get(instrument)?.record(value, attrs);
+    this.bank.setGauge(instrument, value, attrs);
   }
   addCounter(instrument: string, delta: number, attrs: Attributes): void {
-    this.counters.get(instrument)?.add(delta, attrs);
+    this.bank.addSum(instrument, delta, attrs);
   }
   addUpDownCounter(instrument: string, delta: number, attrs: Attributes): void {
-    this.udcs.get(instrument)?.add(delta, attrs);
+    this.bank.addSum(instrument, delta, attrs);
   }
   recordHistogram(instrument: string, value: number, attrs: Attributes): void {
-    this.histograms.get(instrument)?.record(value, attrs);
+    this.bank.recordHistogram(instrument, value, attrs);
   }
 
   rootSpan(): Span | undefined {
@@ -387,26 +324,19 @@ export class SessionInterpreter {
       this.root.setStatus({ code: SpanStatusCode.OK });
       this.root.end(nanosTimeInput(endTime));
       this.root = null;
-    } else if (effect.kind === "start_formation_span") {
+    } else if (effect.kind === "add_root_span_event") {
       if (!this.root) return;
-      const startTime = raceTimeToUnixNanos(this.sessionStart, effect.raceT);
-      const ctx = trace.setSpan(context.active(), this.root);
-      this.formation = this.tracer.startSpan(
-        "formation",
-        { startTime: nanosTimeInput(startTime) },
-        ctx,
-      );
-    } else if (effect.kind === "end_formation_span") {
-      if (!this.formation) return;
-      const endTime = raceTimeToUnixNanos(this.sessionStart, effect.raceT);
-      this.formation.end(nanosTimeInput(endTime));
-      this.formation = null;
-    } else if (effect.kind === "add_formation_span_event") {
-      if (!this.formation) return;
       const t = raceTimeToUnixNanos(this.sessionStart, effect.raceT);
-      this.formation.addEvent(effect.name, effect.attributes, nanosTimeInput(t));
+      this.root.addEvent(effect.name, effect.attributes, nanosTimeInput(t));
     } else if (effect.kind === "add_session_up_down_counter") {
-      this.udcs.get(effect.instrument)?.add(effect.delta);
+      this.bank.addSum(effect.instrument, effect.delta, {});
+    } else if (effect.kind === "set_gauge") {
+      // Session-scoped gauge (e.g. weather) — no driver attributes.
+      this.bank.setGauge(effect.instrument, effect.value, effect.attributes ?? {});
+    } else if (effect.kind === "add_counter") {
+      this.bank.addSum(effect.instrument, effect.delta, effect.attributes ?? {});
+    } else if (effect.kind === "record_histogram") {
+      this.bank.recordHistogram(effect.instrument, effect.value, effect.attributes ?? {});
     }
   }
 }

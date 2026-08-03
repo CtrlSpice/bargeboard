@@ -18,6 +18,9 @@ import { SESSION_WIDE } from "./models.js";
 export interface FannedOut {
   /** Pre-race events to drive the formation phase (single list, no fan-out). */
   formation: Event[];
+  /** Session-scoped events (weather) drained by the session interpreter in
+   *  every phase — never duplicated per driver. */
+  session: Event[];
   /** Race-phase events split per driver, with session-wide events duplicated. */
   perDriver: Map<string, Event[]>;
 }
@@ -28,10 +31,17 @@ export function fanOut(
   raceStartT: number,
 ): FannedOut {
   const formation: Event[] = [];
+  const session: Event[] = [];
   const perDriver = new Map<string, Event[]>();
   for (const code of driverCodes) perDriver.set(code, []);
 
   for (const ev of events) {
+    // Session-scoped kinds bypass the phase split AND the per-driver fan-out:
+    // one weather sample must not become 22 gauge writes.
+    if (ev.kind === "weather") {
+      session.push(ev);
+      continue;
+    }
     if (ev.race_t < raceStartT) {
       // Pre-race. Only event kinds the formation handler actually consumes
       // get queued — pre-race telemetry / lap_starts (if any leak through)
@@ -52,8 +62,9 @@ export function fanOut(
   }
 
   formation.sort((a, b) => a.race_t - b.race_t);
+  session.sort((a, b) => a.race_t - b.race_t);
   for (const q of perDriver.values()) q.sort((a, b) => a.race_t - b.race_t);
-  return { formation, perDriver };
+  return { formation, session, perDriver };
 }
 
 /** Event kinds that make sense pre-race and have a handler in handleFormation.

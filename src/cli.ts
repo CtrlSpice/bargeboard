@@ -139,9 +139,12 @@ async function runOneRace(o: RaceRunOpts): Promise<void> {
   log.info(`Total events: ${events.length}`);
   reportEventCounts(events);
 
-  const { formation, perDriver } = fanOut(events, filtered.map((d) => d.code), raceStartT);
+  const { formation, session: sessionQueue, perDriver } = fanOut(events, filtered.map((d) => d.code), raceStartT);
   if (formation.length > 0) {
-    log.info(`Formation phase: ${formation.length} pre-race events on the formation span.`);
+    log.info(`Formation phase: ${formation.length} pre-race events as root span events.`);
+  }
+  if (sessionQueue.length > 0) {
+    log.info(`Session-scoped events (weather): ${sessionQueue.length}`);
   }
 
   const sessionBundle = makeSessionBundle(session, o.targets);
@@ -162,6 +165,7 @@ async function runOneRace(o: RaceRunOpts): Promise<void> {
       driverBundles,
       sessionBundle,
       formationQueue: formation,
+      sessionQueue,
       perDriverQueues: perDriver,
       grid,
       config,

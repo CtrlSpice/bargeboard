@@ -14,16 +14,12 @@ OpenF1 was chosen over FastF1 because OpenF1 has full 2026 telemetry the day aft
 
 ### Traces
 
-The whole race is **one trace**. The session is the root span (its own resource called `race`); a per-session `formation` span covers the pre-race period (formation laps, grid procedures); each driver's race span opens at lights-out as a child of the session root, with their laps / sectors / pit stops nesting under that.
+The whole race is **one trace**, and the trace starts at lights-out — the root span opens at the race start, not at session start, so t=0 in the timeline is the actual start of the race. Pre-race happenings (formation laps, grid procedures, stalled cars) attach to the root as span events whose timestamps precede the span's own start. Each driver's race span opens at lights-out as a child of the session root, with their laps / sectors / pit stops nesting under that.
 
 ```
-2026_canada_race                  # service: race
-├── formation                     # pre-race phase, child of session root
-│   ├── span_event: race_control "EXTRA FORMATION LAP"
-│   ├── span_event: flag.yellow (sector 15)
-│   ├── span_event: flag.double_yellow (sector 15)   # stalled car
-│   ├── span_event: race_control "EXTRA FORMATION LAP"
-│   └── span_event: flag.clear (sector 15)
+2026_canada_race                  # service: race — opens at lights-out
+│     span_event: race_control "EXTRA FORMATION LAP"   # pre-race events
+│     span_event: flag.double_yellow (sector 15)
 ├── ANT_race                      # service: Mercedes, instance: ANT (P1 on the grid)
 │   ├── ANT_L1                    # lap span
 │   │   ├── ANT_L1_S1             # sector
@@ -35,28 +31,35 @@ The whole race is **one trace**. The session is the root span (its own resource 
 └── ... (one subtree per driver, in grid order)
 ```
 
-**Race lifecycle.** Driver race spans open at the lights-out moment detected from OpenF1's `SESSION STARTED` race-control message, not at session start. They close at either:
+**Race lifecycle.** Driver races open at the lights-out moment detected from OpenF1's `SESSION STARTED` race-control message, not at session start, and close at either:
 - The chequered-flag crossing (`RaceFinish`, derived from each driver's final lap completion) → `OK` status.
-- The retirement moment (`Retirement`, from OpenF1's `/session_result` `dnf` flag) → `ERROR` status. Any still-open lap / sector / pit children at the moment of retirement also close with `ERROR`, so the failure cascade is visible end-to-end from the race subtree down to the specific sector.
+- The retirement moment (`Retirement`, from OpenF1's `/session_result` `dnf` flag) → `ERROR` status. Any still-open lap / sector / pit spans at the moment of retirement also close with `ERROR`, so the failure cascade is visible end-to-end from the race subtree down to the specific sector.
 
-**Grid ordering.** Driver race spans are staggered by 1 ms × (grid position − 1) so a trace UI sorting rows by start time displays the field in starting-grid order (pole at top, P22 at the bottom). Invisible in the timeline view; useful in the row layout.
+**Grid ordering.** Driver race spans are staggered by 1 ms × (grid position − 1), so a trace UI sorting rows by start time displays the field in starting-grid order (pole at top, P22 at the bottom). Invisible in the timeline view; useful in the row layout.
 
 **Session-wide events** (yellow flags, SC, VSC, race-control announcements, penalties, investigations) fan out so they land on each driver's currently-open sector span, with structured attributes (`f1.flag.color`, `f1.penalty.type`, etc.) plus the typed event name (`flag.yellow`, `penalty.5_second`, `investigation.under_investigation`).
 
 ### Metrics
 
+**Metrics are backdated to race time.** The OTel SDK stamps metric datapoints at collection time, which would squeeze a 2-hour race into the couple of minutes the replay takes — so bargeboard bypasses the SDK metric pipeline entirely. A hand-rolled `MetricBank` accumulates values during the replay and emits OTLP datapoints stamped with historical race timestamps (one datapoint per dirty series per 5s of race time), shipped straight through the OTLP exporter. Metrics, traces, and logs all land on the same real-world time axis.
+
 All metrics emit from the single session-level `race` resource — not the per-team driver resources — so every instrument is **one metric** with ≈ 22 series, split by the `f1.driver.code` and `f1.team` attributes auto-stamped on every datapoint. Cross-driver comparisons ("highest top speed in the field", "blue flags per driver") are single group-by queries; no merging across team services required. Traces and logs stay on the per-team resources.
 
 | Instrument | Type | Notes |
 |---|---|---|
-| `f1.car.speed`, `rpm`, `throttle`, `brake`, `gear`, `drs` | gauge | per-tick telemetry; coalesced to one flush per tick |
+| `f1.car.speed`, `rpm`, `throttle`, `brake`, `gear`, `drs` | gauge | telemetry from `/car_data` |
 | `f1.car.position_{x,y,z}` | gauge | track-local position from `/location` |
-| `f1.driver.standings_position` | gauge | declared, currently unfed |
-| `f1.driver.laps_completed`, `pit_stops`, `blue_flags`, `penalties`, `investigations`, `defensive_moves` | counter | monotonic |
-| `f1.driver.championship_points` | up-down counter | survives DSQ point revocations; currently unfed |
-| `f1.driver.lap_time`, `sector_time`, `pit_duration` | histogram | explicit buckets |
-| `f1.driver.top_speed`, `gap_to_leader` | exponential histogram | wide range, no fixed bucket layout makes sense |
-| `f1.session.cars_on_track` | up-down counter | session-scoped; +1 at lights-out per driver, −1 per retirement |
+| `f1.driver.standings_position` | gauge | running order from `/position` — the bump chart |
+| `f1.driver.gap_to_leader`, `interval` | gauge | timing gaps from `/intervals` (~4s cadence); pit stops read as sawteeth |
+| `f1.driver.trap_speed` | gauge | speed traps from `/laps`, split by `f1.trap` = `i1`/`i2`/`st` |
+| `f1.session.air_temp`, `track_temp`, `humidity`, `rainfall`, `wind_speed` | gauge | from `/weather`, session-scoped (no driver attributes) |
+| `f1.driver.laps_completed`, `pit_stops`, `blue_flags`, `penalties`, `investigations` | counter | monotonic, cumulative from lights-out |
+| `f1.driver.championship_points` | up-down counter | credited at the chequered flag; survives DSQ revocations |
+| `f1.session.cars_on_track` | up-down counter | +1 at lights-out per driver, −1 per retirement |
+| `f1.driver.lap_time`, `sector_time`, `pit_duration`, `top_speed` | histogram | custom F1-shaped buckets (below) |
+| `f1.driver.interval_distribution` | exponential histogram | "how close was the racing" — sub-tenth resolution in DRS range, coarse at minute-long gaps |
+
+**Histogram buckets are universal across circuits** — every dry race lap on the calendar fits 63–105s, so one layout serves all 24 rounds: `lap_time` in 2.5s steps 60→110 (+ tails to 240s for SC/wet), `sector_time` in 1.5s steps 15→45, `pit_duration` in 1s steps 15→35, `top_speed` in 5 km/h steps 280→360 (+ low tails for SC laps).
 
 Per-lap drill-down lives on lap spans (each lap *is* a span), not on metric attributes — keeps cardinality bounded.
 
@@ -130,7 +133,8 @@ Light-functional, no classes outside the OTel-SDK boundary. Each handler is pure
 - `openf1.ts` — typed REST client with date-window pagination, jittered exponential backoff, `Retry-After` support.
 - `extract.ts` — pure transforms from OpenF1 rows to bargeboard events. Detects lights-out for the formation/race phase split, pulls grid order from `/position`, surfaces DNFs from `/session_result`.
 - `fanout.ts` — splits the event stream into a formation queue (pre-race, session-scoped) plus per-driver queues (race-phase). Session-wide events (`driver_code === "*"`) duplicate onto every driver's queue.
-- `resource.ts` / `providers.ts` — OTel Resource + TracerProvider + MeterProvider + LoggerProvider construction. View promotes `top_speed` / `gap_to_leader` to exponential-bucket histograms.
+- `resource.ts` / `providers.ts` — OTel Resource + TracerProvider + LoggerProvider construction, plus the raw OTLP metric exporter (no MeterProvider — see `emit/metrics.ts`).
+- `emit/metrics.ts` — `MetricBank`: hand-rolled metric aggregation (gauge / cumulative sum / explicit-bucket histogram) emitting OTLP datapoints with historical race timestamps.
 - `emit/state.ts` — per-driver and session emitter state. Pure data; the interpreter never mutates it.
 - `emit/handlers.ts` — pure event handlers per kind. `flushTelemetryGauges` batches gauge effects once per tick rather than 9 per telemetry sample (the naive shape is 4.5M gauge calls per race).
 - `emit/effects.ts` — discriminated union of effects + `DriverInterpreter` / `SessionInterpreter`. Only place that touches the mutable OTel SDK.
