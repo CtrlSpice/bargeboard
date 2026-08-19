@@ -14,9 +14,18 @@
  *  - gauge      → last value in the flush window (dirty-only: series go
  *                 quiet when their source stops, e.g. a retired car)
  *  - sum / udc  → cumulative running total from lights-out
- *  - histogram  → cumulative explicit-bucket counts with custom, F1-shaped
+ *  - histogram  → delta explicit-bucket counts with custom, F1-shaped
  *                 boundaries (universal across circuits — every dry race lap
- *                 on the calendar fits 63–105s)
+ *                 on the calendar fits 63–105s). Delta is what gives the
+ *                 heatmap its per-window texture.
+ *
+ * Two histograms also emit a cumulative twin, marked `temporality` in the
+ * roster. Cumulative is OTLP's default and the temporality most services
+ * actually send, but no capture we had contained one, so the viewer's
+ * cumulative merge — which recovers activity as last-minus-first per bucket —
+ * had only synthetic fixtures behind it. The twins are the same observations
+ * accumulated rather than reset, one explicit-bucket and one exponential, so
+ * both merge paths get real race data.
  */
 
 import { ValueType, type Attributes } from "@opentelemetry/api";
@@ -51,6 +60,10 @@ interface InstrumentSpec {
   unit: string;
   description: string;
   boundaries?: number[];    // histograms only
+  /** Histograms only; delta when unset. */
+  temporality?: "delta" | "cumulative";
+  /** Record every observation of this instrument into that one as well. */
+  twin?: string;
 }
 
 /** Steps from `from` to `to` inclusive. */
@@ -100,14 +113,21 @@ const ROSTER: Record<string, InstrumentSpec> = {
   "f1.driver.championship_points": { kind: "up_down_counter", unit: "{point}", description: "Championship points" },
   "f1.session.cars_on_track":      { kind: "up_down_counter", unit: "{car}", description: "Number of cars still circulating" },
   // histograms
-  "f1.driver.lap_time":     { kind: "histogram", unit: "s", description: "Lap time", boundaries: LAP_TIME_BOUNDS },
+  "f1.driver.lap_time":     { kind: "histogram", unit: "s", description: "Lap time", boundaries: LAP_TIME_BOUNDS, twin: "f1.driver.lap_time_cumulative" },
+  // The cumulative pair. Same observations, accumulated from lights-out rather
+  // than zeroed each window, which is what a service on OTLP defaults sends.
+  // Two of them because the explicit-bucket and exponential merges are separate
+  // code paths; more instruments would multiply export weight without reaching
+  // any further code.
+  "f1.driver.lap_time_cumulative": { kind: "histogram", unit: "s", description: "Lap time (cumulative)", boundaries: LAP_TIME_BOUNDS, temporality: "cumulative" },
   "f1.driver.sector_time":  { kind: "histogram", unit: "s", description: "Sector time", boundaries: SECTOR_TIME_BOUNDS },
   "f1.driver.pit_duration": { kind: "histogram", unit: "s", description: "Pit lane duration", boundaries: PIT_DURATION_BOUNDS },
   "f1.driver.top_speed":    { kind: "histogram", unit: "km/h", description: "Top speed per lap", boundaries: TOP_SPEED_BOUNDS },
   // Exponential: intervals span 0.05s (DRS range) to minutes — a ratio scale
   // where fixed buckets can't give sub-tenth resolution at the tight end
   // without wasting hundreds of buckets at the loose end.
-  "f1.driver.interval_distribution": { kind: "exp_histogram", unit: "s", description: "Distribution of gaps to the car ahead" },
+  "f1.driver.interval_distribution": { kind: "exp_histogram", unit: "s", description: "Distribution of gaps to the car ahead", twin: "f1.driver.interval_distribution_cumulative" },
+  "f1.driver.interval_distribution_cumulative": { kind: "exp_histogram", unit: "s", description: "Distribution of gaps to the car ahead (cumulative)", temporality: "cumulative" },
 };
 
 // --- per-series accumulators ---------------------------------------------------
@@ -185,7 +205,11 @@ export class MetricBank {
   private readonly pendingExpHist = new Map<string, DataPoint<ExponentialHistogram>[]>();
 
   private startTime: HrTime = [0, 0];
-  private startRaceT = 0;
+  /** Where the currently-open delta window began. A series created mid-race
+   *  starts observing here, not at lights-out -- dating its first datapoint
+   *  back to the start would claim a window minutes wide for a few seconds of
+   *  observations, and anything dividing by that window reads far too low. */
+  private windowOpenT = 0;
   private exportsInFlight = 0;
 
   constructor(
@@ -198,7 +222,7 @@ export class MetricBank {
    *  delta window for histograms. Call once at lights-out (or startAt). */
   setStartTime(raceT: number): void {
     this.startTime = hrTime(this.sessionStart, raceT);
-    this.startRaceT = raceT;
+    this.windowOpenT = raceT;
   }
 
   // --- record APIs (called by the interpreters) ---
@@ -233,6 +257,10 @@ export class MetricBank {
 
   recordHistogram(instrument: string, value: number, attrs: Attributes): void {
     const spec = ROSTER[instrument];
+    // The twin sees exactly what its source sees, so the two differ only in
+    // how they are aggregated. Recorded here rather than in the handlers so
+    // no caller has to know a twin exists.
+    if (spec?.twin) this.recordHistogram(spec.twin, value, attrs);
     if (spec?.kind === "exp_histogram") return this.recordExpHistogram(instrument, value, attrs);
     if (spec?.kind !== "histogram") return;
     const boundaries = spec.boundaries!;
@@ -246,7 +274,7 @@ export class MetricBank {
         sum: 0, count: 0,
         min: Infinity, max: -Infinity,
         dirty: false,
-        windowStartT: this.startRaceT,
+        windowStartT: this.windowOpenT,
       };
       series.set(key, s);
     }
@@ -271,7 +299,7 @@ export class MetricBank {
         sum: 0, count: 0,
         min: Infinity, max: -Infinity,
         dirty: false,
-        windowStartT: this.startRaceT,
+        windowStartT: this.windowOpenT,
       };
       series.set(key, s);
     }
@@ -321,52 +349,61 @@ export class MetricBank {
         });
       }
     }
-    // Histograms are DELTA: emit the window's observations, then zero the
-    // accumulator so the next datapoint covers only what comes next.
+    // Delta histograms emit the window's observations and then zero, so the
+    // next datapoint covers only what follows. Cumulative ones keep counting
+    // and date every datapoint to the stream's start, which is what makes the
+    // running total meaningful.
     for (const [instrument, series] of this.histSeries) {
-      const boundaries = ROSTER[instrument]!.boundaries!;
+      const spec = ROSTER[instrument]!;
+      const cumulative = spec.temporality === "cumulative";
       for (const s of series.values()) {
         if (!s.dirty) continue;
         pendFor(this.pendingHist, instrument).push({
-          startTime: hrTime(this.sessionStart, s.windowStartT),
+          startTime: cumulative ? this.startTime : hrTime(this.sessionStart, s.windowStartT),
           endTime,
           attributes: s.attrs,
           value: {
-            buckets: { boundaries, counts: [...s.counts] },
+            buckets: { boundaries: spec.boundaries!, counts: [...s.counts] },
             sum: s.sum,
             count: s.count,
             min: s.min,
             max: s.max,
           },
         });
+        s.dirty = false;
+        if (cumulative) continue;
         s.counts.fill(0);
         s.sum = 0;
         s.count = 0;
         s.min = Infinity;
         s.max = -Infinity;
-        s.dirty = false;
         s.windowStartT = raceT;
       }
     }
     for (const [instrument, series] of this.expHistSeries) {
+      const cumulative = ROSTER[instrument]!.temporality === "cumulative";
       for (const s of series.values()) {
         if (!s.dirty) continue;
         pendFor(this.pendingExpHist, instrument).push({
-          startTime: hrTime(this.sessionStart, s.windowStartT),
+          startTime: cumulative ? this.startTime : hrTime(this.sessionStart, s.windowStartT),
           endTime,
           attributes: s.attrs,
           value: denseExpBuckets(s),
         });
+        s.dirty = false;
+        if (cumulative) continue;
         s.counts.fill(0);
         s.zeroCount = 0;
         s.sum = 0;
         s.count = 0;
         s.min = Infinity;
         s.max = -Infinity;
-        s.dirty = false;
         s.windowStartT = raceT;
       }
     }
+    // Every delta window that was open has now been emitted and closed, so the
+    // next one starts here -- including for series that do not exist yet.
+    this.windowOpenT = raceT;
   }
 
   /** True if any flushed datapoints are waiting to ship. */
@@ -424,7 +461,7 @@ export class MetricBank {
       budget -= take.length * HIST_WEIGHT;
       metrics.push({
         descriptor: descriptorFor(instrument, InstrumentType.HISTOGRAM),
-        aggregationTemporality: AggregationTemporality.DELTA,
+        aggregationTemporality: temporalityOf(instrument),
         dataPointType: DataPointType.HISTOGRAM,
         dataPoints: take,
       });
@@ -436,7 +473,7 @@ export class MetricBank {
       budget -= take.length * EXP_WEIGHT;
       metrics.push({
         descriptor: descriptorFor(instrument, InstrumentType.HISTOGRAM),
-        aggregationTemporality: AggregationTemporality.DELTA,
+        aggregationTemporality: temporalityOf(instrument),
         dataPointType: DataPointType.EXPONENTIAL_HISTOGRAM,
         dataPoints: take,
       });
@@ -475,6 +512,13 @@ export class MetricBank {
 }
 
 // --- helpers ----------------------------------------------------------------------
+
+/** A histogram's temporality: delta unless the roster says otherwise. */
+function temporalityOf(instrument: string): AggregationTemporality {
+  return ROSTER[instrument]?.temporality === "cumulative"
+    ? AggregationTemporality.CUMULATIVE
+    : AggregationTemporality.DELTA;
+}
 
 function mapFor<T>(outer: Map<string, Map<string, T>>, instrument: string): Map<string, T> {
   let m = outer.get(instrument);
