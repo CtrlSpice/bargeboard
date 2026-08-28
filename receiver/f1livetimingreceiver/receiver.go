@@ -2,7 +2,10 @@ package f1livetimingreceiver
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
@@ -12,6 +15,9 @@ import (
 type liveTimingReceiver struct {
 	config   *Config
 	settings receiver.Settings
+	client   *http.Client
+
+	credentials *connectionCredentials
 
 	consumersMu sync.Mutex
 	traces      consumer.Traces
@@ -20,7 +26,11 @@ type liveTimingReceiver struct {
 }
 
 func newLiveTimingReceiver(config *Config, settings receiver.Settings) *liveTimingReceiver {
-	return &liveTimingReceiver{config: config, settings: settings}
+	return &liveTimingReceiver{
+		config:   config,
+		settings: settings,
+		client:   &http.Client{Timeout: 30 * time.Second},
+	}
 }
 
 func (r *liveTimingReceiver) registerTraces(next consumer.Traces) {
@@ -41,11 +51,17 @@ func (r *liveTimingReceiver) registerLogs(next consumer.Logs) {
 	r.logs = next
 }
 
-func (*liveTimingReceiver) Start(context.Context, component.Host) error {
+func (r *liveTimingReceiver) Start(ctx context.Context, _ component.Host) error {
+	credentials, err := bootstrapConnection(ctx, r.client, r.config)
+	if err != nil {
+		return fmt.Errorf("bootstrap F1 live timing connection: %w", err)
+	}
+	r.credentials = &credentials
 	return nil
 }
 
-func (*liveTimingReceiver) Shutdown(context.Context) error {
+func (r *liveTimingReceiver) Shutdown(context.Context) error {
+	r.credentials = nil
 	return nil
 }
 
