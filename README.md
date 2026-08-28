@@ -2,9 +2,26 @@
 
 > *Ceci n'est pas un déflecteur latéral.*
 
-A CLI that replays Formula 1 race sessions as OpenTelemetry signals. Designed as a demo companion to [axolot(e)l](https://github.com/CtrlSpice/otel-desktop-viewer).
+A custom OpenTelemetry Collector distribution for Formula 1 telemetry. Designed as a demo companion to [axolot(e)l](https://github.com/CtrlSpice/otel-desktop-viewer).
 
-## What it does
+## Rewrite status
+
+The Go Collector rewrite is now the active implementation. Its baseline accepts OTLP traces, metrics, and logs, batches them, and writes them to the Collector's `debug` exporter. Formula 1 receivers and processors come next.
+
+The TypeScript historical replay CLI remains in `src/` as a working reference until the Go implementation reaches feature parity. The signal model and detailed documentation below describe that prototype.
+
+## Go quick start
+
+Requires Go 1.26 or newer.
+
+```bash
+make check
+make run
+```
+
+The default `config.yaml` listens for OTLP/gRPC on `localhost:4317` and OTLP/HTTP on `localhost:4318`. Run `make components` to inspect the components compiled into the distribution.
+
+## What the TypeScript prototype does
 
 Fetches a historical F1 race from [OpenF1](https://openf1.org/) and emits it as OTLP traces, metrics, and logs to a configurable endpoint (defaults to `localhost:4317`). Spans are stamped with the actual historical race timestamps so backends with a time selector navigate to the real race window.
 
@@ -113,7 +130,7 @@ On the first run bargeboard fetches telemetry from OpenF1 (≈14 s for a full fi
 
 The cache is never expired — race data doesn't change once the event is done. Use `--no-cache` to force a fresh fetch (e.g. if OpenF1 back-fills missing data after the fact). Driver-filtered runs (`--driver`) are not cached so a subsequent full-field run always fetches cleanly.
 
-## Quick start
+## TypeScript quick start
 
 ```bash
 npm install
@@ -127,7 +144,7 @@ npm run dev -- --session 2026-canada --dump --dry-run --driver ANT,RUS
 npx tsx scripts/smoke.ts
 ```
 
-## Architecture
+## TypeScript architecture
 
 Light-functional, no classes outside the OTel-SDK boundary. Each handler is pure `(state, event) → { state, effects }`; effects are a discriminated union; one interpreter applies them to the live OTel SDK.
 
