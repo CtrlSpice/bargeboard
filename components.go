@@ -1,6 +1,7 @@
 package main
 
 import (
+	f1livetimingreceiver "github.com/CtrlSpice/bargeboard/receiver/f1livetimingreceiver"
 	"go.opentelemetry.io/collector/connector"
 	debugexporter "go.opentelemetry.io/collector/exporter/debugexporter"
 	"go.opentelemetry.io/collector/otelcol"
@@ -16,6 +17,7 @@ func components() (otelcol.Factories, error) {
 
 	var err error
 	factories.Receivers, err = otelcol.MakeFactoryMap(
+		f1livetimingreceiver.NewFactory(),
 		otlpreceiver.NewFactory(),
 	)
 	if err != nil {

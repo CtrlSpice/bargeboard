@@ -13,6 +13,7 @@ func TestComponents(t *testing.T) {
 	}
 
 	assertRegistered(t, "receiver", factories.Receivers, "otlp")
+	assertRegistered(t, "receiver", factories.Receivers, "f1livetiming")
 	assertRegistered(t, "processor", factories.Processors, "batch")
 	assertRegistered(t, "exporter", factories.Exporters, "debug")
 
