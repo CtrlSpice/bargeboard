@@ -2,6 +2,7 @@ package f1livetimingreceiver
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 )
@@ -28,10 +29,35 @@ func (cfg *Config) Validate() error {
 	if err := validateEndpoint("negotiate_endpoint", cfg.NegotiateEndpoint, "http", "https"); err != nil {
 		return err
 	}
+	if err := validateEndpointPair(cfg.Endpoint, cfg.NegotiateEndpoint); err != nil {
+		return err
+	}
 	if strings.TrimSpace(cfg.Auth.TokenFile) == "" {
 		return fmt.Errorf("auth.token_file must not be empty")
 	}
 	return nil
+}
+
+func validateEndpointPair(streamRaw, negotiateRaw string) error {
+	stream, _ := url.Parse(streamRaw)
+	negotiate, _ := url.Parse(negotiateRaw)
+	if !strings.EqualFold(stream.Host, negotiate.Host) {
+		return fmt.Errorf("endpoint and negotiate_endpoint must use the same authority")
+	}
+
+	secure := stream.Scheme == "wss" && negotiate.Scheme == "https"
+	insecure := stream.Scheme == "ws" && negotiate.Scheme == "http"
+	if !secure && !insecure {
+		return fmt.Errorf("endpoint and negotiate_endpoint must use matching security")
+	}
+	if insecure && !isLoopbackHost(stream.Hostname()) {
+		return fmt.Errorf("insecure endpoints are only allowed on loopback hosts")
+	}
+	return nil
+}
+
+func isLoopbackHost(host string) bool {
+	return strings.EqualFold(host, "localhost") || net.ParseIP(host).IsLoopback()
 }
 
 func validateEndpoint(name, raw string, allowedSchemes ...string) error {

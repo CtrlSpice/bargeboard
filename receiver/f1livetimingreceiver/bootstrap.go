@@ -28,9 +28,26 @@ func (connectionCredentials) GoString() string {
 }
 
 func (c connectionCredentials) headers() http.Header {
+	return c.headersWithCookies([]*http.Cookie{c.affinityCookie})
+}
+
+func (c connectionCredentials) headersWithCookies(cookies []*http.Cookie) http.Header {
 	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+c.token)
-	headers.Set("Cookie", c.affinityCookie.Name+"="+c.affinityCookie.Value)
+
+	pairs := make([]string, 0, len(cookies))
+	for _, cookie := range cookies {
+		if cookie == nil || cookie.Name == "" || cookie.Value == "" {
+			continue
+		}
+		pair := (&http.Cookie{Name: cookie.Name, Value: cookie.Value}).String()
+		if pair != "" {
+			pairs = append(pairs, pair)
+		}
+	}
+	if len(pairs) > 0 {
+		headers.Set("Cookie", strings.Join(pairs, "; "))
+	}
 	return headers
 }
 

@@ -6,9 +6,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/coder/websocket"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/receiver/receivertest"
@@ -16,20 +19,96 @@ import (
 
 func TestFactorySharesReceiverAcrossSignals(t *testing.T) {
 	var preflights atomic.Int32
+	var negotiations atomic.Int32
+	var webSockets atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodOptions {
-			t.Errorf("request method = %s, want OPTIONS", request.Method)
+		switch request.Method {
+		case http.MethodOptions:
+			preflights.Add(1)
+			http.SetCookie(writer, &http.Cookie{Name: affinityCookieName, Value: "initial-affinity-token"})
+			writer.WriteHeader(http.StatusMethodNotAllowed)
+		case http.MethodPost:
+			negotiations.Add(1)
+			if got := request.URL.Query().Get("negotiateVersion"); got != "1" {
+				t.Errorf("negotiateVersion = %q, want 1", got)
+			}
+			if got := request.Header.Get("Authorization"); got != "Bearer subscription-token" {
+				t.Errorf("negotiation Authorization header = %q", got)
+			}
+			if got := request.Header.Get("Cookie"); got != affinityCookieName+"=initial-affinity-token" {
+				t.Errorf("negotiation Cookie header = %q", got)
+			}
+			http.SetCookie(writer, &http.Cookie{Name: affinityCookieName, Value: "refreshed-affinity-token"})
+			http.SetCookie(writer, &http.Cookie{Name: "AWSALB", Value: "load-balancer-token"})
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{
+				"connectionId":"public-id",
+				"connectionToken":"connection-token",
+				"negotiateVersion":1,
+				"availableTransports":[{"transport":"WebSockets","transferFormats":["Text"]}]
+			}`))
+		case http.MethodGet:
+			webSockets.Add(1)
+			if got := request.URL.Query().Get("id"); got != "connection-token" {
+				t.Errorf("WebSocket id = %q", got)
+			}
+			if got := request.URL.Query().Get("access_token"); got != "" {
+				t.Errorf("WebSocket access_token query = %q, want empty", got)
+			}
+			if got := request.Header.Get("Authorization"); got != "Bearer subscription-token" {
+				t.Errorf("WebSocket Authorization header = %q", got)
+			}
+			cookie := request.Header.Get("Cookie")
+			if !strings.Contains(cookie, affinityCookieName+"=refreshed-affinity-token") ||
+				!strings.Contains(cookie, "AWSALB=load-balancer-token") {
+				t.Errorf("WebSocket Cookie header = %q", cookie)
+			}
+			if strings.Contains(cookie, "initial-affinity-token") {
+				t.Errorf("WebSocket Cookie header retained stale affinity: %q", cookie)
+			}
+
+			connection, err := websocket.Accept(writer, request, nil)
+			if err != nil {
+				t.Errorf("Accept() error = %v", err)
+				return
+			}
+			defer connection.CloseNow()
+			messageType, contents, err := connection.Read(context.Background())
+			if err != nil {
+				t.Errorf("Read() handshake error = %v", err)
+				return
+			}
+			if messageType != websocket.MessageText || string(contents) != handshakeRequest {
+				t.Errorf("handshake request = %q", contents)
+				return
+			}
+			if err := connection.Write(context.Background(), websocket.MessageText, []byte("{")); err != nil {
+				t.Errorf("Write() handshake error = %v", err)
+				return
+			}
+			if err := connection.Write(
+				context.Background(),
+				websocket.MessageText,
+				[]byte("}\x1e{\"type\":6}\x1e"),
+			); err != nil {
+				t.Errorf("Write() handshake completion error = %v", err)
+				return
+			}
+			readCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, _, _ = connection.Read(readCtx)
+		default:
+			t.Errorf("unexpected request method %s", request.Method)
+			writer.WriteHeader(http.StatusMethodNotAllowed)
 		}
-		preflights.Add(1)
-		http.SetCookie(writer, &http.Cookie{Name: affinityCookieName, Value: "affinity-token"})
-		writer.WriteHeader(http.StatusNoContent)
 	}))
 	t.Cleanup(server.Close)
 
 	factory := NewFactory()
 	config := factory.CreateDefaultConfig().(*Config)
 	config.Auth.TokenFile = filepath.Join(t.TempDir(), "f1tv-token")
-	config.NegotiateEndpoint = server.URL
+	config.Endpoint = "ws" + strings.TrimPrefix(server.URL, "http") + "/signalrcore"
+	config.NegotiateEndpoint = server.URL + "/signalrcore/negotiate"
 	settings := receivertest.NewNopSettings(Type)
 	next := consumertest.NewNop()
 
@@ -65,11 +144,20 @@ func TestFactorySharesReceiverAcrossSignals(t *testing.T) {
 	if got := preflights.Load(); got != 1 {
 		t.Fatalf("preflight count = %d, want 1", got)
 	}
+	if got := negotiations.Load(); got != 1 {
+		t.Fatalf("negotiation count = %d, want 1", got)
+	}
+	if got := webSockets.Load(); got != 1 {
+		t.Fatalf("WebSocket count = %d, want 1", got)
+	}
+	if got := string(shared.receiver.connection.pending); got != "{\"type\":6}\x1e" {
+		t.Fatalf("pending SignalR data = %q", got)
+	}
 	if err := logs.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown() error = %v", err)
 	}
-	if shared.receiver.credentials != nil {
-		t.Fatal("credentials retained after shutdown")
+	if shared.receiver.connection != nil {
+		t.Fatal("connection retained after shutdown")
 	}
 
 	recreated, err := factory.CreateLogs(ctx, settings, config, next)
@@ -84,5 +172,14 @@ func TestFactorySharesReceiverAcrossSignals(t *testing.T) {
 	}
 	if got := preflights.Load(); got != 2 {
 		t.Fatalf("preflight count after recreated Start() = %d, want 2", got)
+	}
+	if got := negotiations.Load(); got != 2 {
+		t.Fatalf("negotiation count after recreated Start() = %d, want 2", got)
+	}
+	if got := webSockets.Load(); got != 2 {
+		t.Fatalf("WebSocket count after recreated Start() = %d, want 2", got)
+	}
+	if err := recreated.Shutdown(ctx); err != nil {
+		t.Fatalf("recreated Shutdown() error = %v", err)
 	}
 }

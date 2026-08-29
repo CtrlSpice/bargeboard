@@ -17,7 +17,7 @@ type liveTimingReceiver struct {
 	settings receiver.Settings
 	client   *http.Client
 
-	credentials *connectionCredentials
+	connection *signalRConnection
 
 	consumersMu sync.Mutex
 	traces      consumer.Traces
@@ -29,7 +29,12 @@ func newLiveTimingReceiver(config *Config, settings receiver.Settings) *liveTimi
 	return &liveTimingReceiver{
 		config:   config,
 		settings: settings,
-		client:   &http.Client{Timeout: 30 * time.Second},
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}
 }
 
@@ -52,17 +57,21 @@ func (r *liveTimingReceiver) registerLogs(next consumer.Logs) {
 }
 
 func (r *liveTimingReceiver) Start(ctx context.Context, _ component.Host) error {
-	credentials, err := bootstrapConnection(ctx, r.client, r.config)
+	connection, err := connectSignalR(ctx, r.client, r.config)
 	if err != nil {
-		return fmt.Errorf("bootstrap F1 live timing connection: %w", err)
+		return fmt.Errorf("connect to F1 live timing: %w", err)
 	}
-	r.credentials = &credentials
+	r.connection = connection
 	return nil
 }
 
-func (r *liveTimingReceiver) Shutdown(context.Context) error {
-	r.credentials = nil
-	return nil
+func (r *liveTimingReceiver) Shutdown(ctx context.Context) error {
+	if r.connection == nil {
+		return nil
+	}
+	connection := r.connection
+	r.connection = nil
+	return connection.close(ctx)
 }
 
 type sharedReceiver struct {

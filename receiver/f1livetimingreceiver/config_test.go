@@ -38,6 +38,39 @@ func TestConfigValidate(t *testing.T) {
 			},
 			wantErr: "absolute URL",
 		},
+		{
+			name: "mismatched authorities",
+			mutate: func(cfg *Config) {
+				cfg.NegotiateEndpoint = "https://example.test/signalrcore/negotiate"
+				cfg.Auth.TokenFile = "/run/secrets/f1tv-token"
+			},
+			wantErr: "same authority",
+		},
+		{
+			name: "mismatched security",
+			mutate: func(cfg *Config) {
+				cfg.Endpoint = "ws://livetiming.formula1.com/signalrcore"
+				cfg.Auth.TokenFile = "/run/secrets/f1tv-token"
+			},
+			wantErr: "matching security",
+		},
+		{
+			name: "insecure remote endpoint",
+			mutate: func(cfg *Config) {
+				cfg.Endpoint = "ws://example.test/signalrcore"
+				cfg.NegotiateEndpoint = "http://example.test/signalrcore/negotiate"
+				cfg.Auth.TokenFile = "/run/secrets/f1tv-token"
+			},
+			wantErr: "loopback",
+		},
+		{
+			name: "insecure loopback endpoint",
+			mutate: func(cfg *Config) {
+				cfg.Endpoint = "ws://127.0.0.1:8080/signalrcore"
+				cfg.NegotiateEndpoint = "http://127.0.0.1:8080/signalrcore/negotiate"
+				cfg.Auth.TokenFile = "/run/secrets/f1tv-token"
+			},
+		},
 	}
 
 	for _, test := range tests {
