@@ -1,6 +1,7 @@
 package f1livetimingreceiver
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,11 @@ func TestFactorySharesReceiverAcrossSignals(t *testing.T) {
 	var preflights atomic.Int32
 	var negotiations atomic.Int32
 	var webSockets atomic.Int32
+	subscribed := make(chan struct{}, 2)
+	wantSubscription, err := encodeSubscribeInvocation(subscriptionTopics())
+	if err != nil {
+		t.Fatalf("encodeSubscribeInvocation() error = %v", err)
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.Method {
 		case http.MethodOptions:
@@ -96,6 +102,16 @@ func TestFactorySharesReceiverAcrossSignals(t *testing.T) {
 			}
 			readCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
+			messageType, contents, err = connection.Read(readCtx)
+			if err != nil {
+				t.Errorf("Read() subscription error = %v", err)
+				return
+			}
+			if messageType != websocket.MessageText || !bytes.Equal(contents, wantSubscription) {
+				t.Errorf("subscription request = %q", contents)
+				return
+			}
+			subscribed <- struct{}{}
 			_, _, _ = connection.Read(readCtx)
 		default:
 			t.Errorf("unexpected request method %s", request.Method)
@@ -138,6 +154,11 @@ func TestFactorySharesReceiverAcrossSignals(t *testing.T) {
 	if err := traces.Start(ctx, host); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
+	select {
+	case <-subscribed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for subscription")
+	}
 	if err := metrics.Start(ctx, host); err != nil {
 		t.Fatalf("second Start() error = %v", err)
 	}
@@ -150,14 +171,8 @@ func TestFactorySharesReceiverAcrossSignals(t *testing.T) {
 	if got := webSockets.Load(); got != 1 {
 		t.Fatalf("WebSocket count = %d, want 1", got)
 	}
-	if got := string(shared.receiver.connection.pending); got != "{\"type\":6}\x1e" {
-		t.Fatalf("pending SignalR data = %q", got)
-	}
 	if err := logs.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown() error = %v", err)
-	}
-	if shared.receiver.connection != nil {
-		t.Fatal("connection retained after shutdown")
 	}
 
 	recreated, err := factory.CreateLogs(ctx, settings, config, next)
@@ -169,6 +184,11 @@ func TestFactorySharesReceiverAcrossSignals(t *testing.T) {
 	}
 	if err := recreated.Start(ctx, host); err != nil {
 		t.Fatalf("recreated Start() error = %v", err)
+	}
+	select {
+	case <-subscribed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for recreated subscription")
 	}
 	if got := preflights.Load(); got != 2 {
 		t.Fatalf("preflight count after recreated Start() = %d, want 2", got)

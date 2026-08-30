@@ -2,6 +2,7 @@ package f1livetimingreceiver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -17,7 +18,10 @@ type liveTimingReceiver struct {
 	settings receiver.Settings
 	client   *http.Client
 
-	connection *signalRConnection
+	cancel     context.CancelFunc
+	done       chan struct{}
+	consume    func(context.Context, []liveTimingUpdate) error
+	retryDelay func(int) time.Duration
 
 	consumersMu sync.Mutex
 	traces      consumer.Traces
@@ -35,6 +39,10 @@ func newLiveTimingReceiver(config *Config, settings receiver.Settings) *liveTimi
 				return http.ErrUseLastResponse
 			},
 		},
+		consume: func(context.Context, []liveTimingUpdate) error {
+			return nil
+		},
+		retryDelay: reconnectDelay,
 	}
 }
 
@@ -57,21 +65,107 @@ func (r *liveTimingReceiver) registerLogs(next consumer.Logs) {
 }
 
 func (r *liveTimingReceiver) Start(ctx context.Context, _ component.Host) error {
-	connection, err := connectSignalR(ctx, r.client, r.config)
+	connection, err := r.connect(ctx)
 	if err != nil {
 		return fmt.Errorf("connect to F1 live timing: %w", err)
 	}
-	r.connection = connection
+
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	done := make(chan struct{})
+	r.cancel = cancel
+	r.done = done
+	go r.run(runCtx, connection, done)
 	return nil
 }
 
+func (r *liveTimingReceiver) connect(ctx context.Context) (*signalRConnection, error) {
+	connection, err := connectSignalR(ctx, r.client, r.config)
+	if err != nil {
+		return nil, err
+	}
+	if err := connection.subscribe(ctx); err != nil {
+		_ = connection.close(context.Background())
+		return nil, err
+	}
+	return connection, nil
+}
+
+func (r *liveTimingReceiver) run(ctx context.Context, connection *signalRConnection, done chan<- struct{}) {
+	defer close(done)
+	attempt := 0
+
+	for {
+		receivedUpdates := false
+		err := connection.read(ctx, func(ctx context.Context, updates []liveTimingUpdate) error {
+			receivedUpdates = true
+			return r.consume(ctx, updates)
+		})
+		_ = connection.close(context.Background())
+		if ctx.Err() != nil {
+			return
+		}
+		if receivedUpdates {
+			attempt = 0
+		}
+		if errors.Is(err, errSignalRClosed) {
+			r.settings.Logger.Warn("F1 live timing server closed the connection without reconnect")
+			return
+		}
+		r.settings.Logger.Warn("F1 live timing connection lost; reconnecting")
+
+		for {
+			if !waitForReconnect(ctx, r.retryDelay(attempt)) {
+				return
+			}
+			attempt++
+			next, err := r.connect(ctx)
+			if err == nil {
+				connection = next
+				break
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			r.settings.Logger.Warn("F1 live timing reconnect failed: " + err.Error())
+		}
+	}
+}
+
+func reconnectDelay(attempt int) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+	delay := time.Second << min(attempt, 5)
+	return min(delay, 30*time.Second)
+}
+
+func waitForReconnect(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func (r *liveTimingReceiver) Shutdown(ctx context.Context) error {
-	if r.connection == nil {
+	if r.cancel == nil {
 		return nil
 	}
-	connection := r.connection
-	r.connection = nil
-	return connection.close(ctx)
+	cancel := r.cancel
+	done := r.done
+	r.cancel = nil
+	r.done = nil
+	cancel()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 type sharedReceiver struct {

@@ -105,6 +105,7 @@ func connectSignalR(ctx context.Context, client *http.Client, cfg *Config) (*sig
 		}
 		return nil, fmt.Errorf("SignalR WebSocket upgrade failed")
 	}
+	connection.SetReadLimit(maxWebSocketMessage)
 
 	handshakeCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
@@ -114,6 +115,53 @@ func connectSignalR(ctx context.Context, client *http.Client, cfg *Config) (*sig
 		return nil, err
 	}
 	return &signalRConnection{conn: connection, pending: pending}, nil
+}
+
+func (c *signalRConnection) subscribe(ctx context.Context) error {
+	message, err := encodeSubscribeInvocation(subscriptionTopics())
+	if err != nil {
+		return err
+	}
+	if err := c.conn.Write(ctx, websocket.MessageText, message); err != nil {
+		return fmt.Errorf("write F1 topic subscription: %w", err)
+	}
+	return nil
+}
+
+func (c *signalRConnection) read(
+	ctx context.Context,
+	consume func(context.Context, []liveTimingUpdate) error,
+) error {
+	buffered := c.pending
+	c.pending = nil
+
+	for {
+		records, remaining, err := splitHubRecords(buffered)
+		if err != nil {
+			return err
+		}
+		buffered = remaining
+		for _, record := range records {
+			updates, err := decodeHubRecord(record)
+			if err != nil {
+				return err
+			}
+			if len(updates) > 0 {
+				if err := consume(ctx, updates); err != nil {
+					return fmt.Errorf("consume F1 live timing updates: %w", err)
+				}
+			}
+		}
+
+		messageType, contents, err := c.conn.Read(ctx)
+		if err != nil {
+			return fmt.Errorf("read F1 live timing message: %w", err)
+		}
+		if messageType != websocket.MessageText {
+			return fmt.Errorf("F1 live timing used a non-text WebSocket message")
+		}
+		buffered = append(buffered, contents...)
+	}
 }
 
 func negotiate(
