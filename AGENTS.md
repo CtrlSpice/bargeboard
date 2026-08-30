@@ -6,6 +6,8 @@ These instructions supplement `/Users/moya/Workspace/AGENTS.md` for work in this
 
 - The Go Collector distribution is the active implementation.
 - Keep the TypeScript replay CLI as a reference until the Go implementation reaches feature parity. Do not remove it without explicit approval.
+- Prefer a functional core and imperative shell: keep deterministic transformations free of I/O and shared state where practical, and test pure functions directly.
+- Keep the result idiomatic Go; do not introduce abstractions solely to imitate functional programming.
 
 ## Development Workflow
 
