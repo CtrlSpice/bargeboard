@@ -20,7 +20,7 @@ type liveTimingReceiver struct {
 
 	cancel     context.CancelFunc
 	done       chan struct{}
-	consume    func(context.Context, []liveTimingUpdate) error
+	consume    func(context.Context, []normalizedLiveTimingUpdate) error
 	retryDelay func(int) time.Duration
 
 	consumersMu sync.Mutex
@@ -39,7 +39,7 @@ func newLiveTimingReceiver(config *Config, settings receiver.Settings) *liveTimi
 				return http.ErrUseLastResponse
 			},
 		},
-		consume: func(context.Context, []liveTimingUpdate) error {
+		consume: func(context.Context, []normalizedLiveTimingUpdate) error {
 			return nil
 		},
 		retryDelay: reconnectDelay,
@@ -97,11 +97,22 @@ func (r *liveTimingReceiver) run(ctx context.Context, connection *signalRConnect
 	for {
 		receivedUpdates := false
 		err := connection.read(ctx, func(ctx context.Context, updates []liveTimingUpdate) error {
+			normalized, err := normalizeLiveTimingUpdates(updates)
+			if err != nil {
+				return err
+			}
+			if err := r.consume(ctx, normalized); err != nil {
+				return err
+			}
 			receivedUpdates = true
-			return r.consume(ctx, updates)
+			return nil
 		})
 		_ = connection.close(context.Background())
 		if ctx.Err() != nil {
+			return
+		}
+		if errors.Is(err, errInvalidLiveTimingUpdate) {
+			r.settings.Logger.Error("F1 live timing normalization failed; receiver stopped: " + err.Error())
 			return
 		}
 		if receivedUpdates {

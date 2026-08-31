@@ -75,6 +75,7 @@ func TestDecodeHubRecord(t *testing.T) {
 				topic:     "SessionStatus",
 				payload:   json.RawMessage(`{"Status":"Started"}`),
 				timestamp: "2026-08-21T10:30:00.034Z",
+				source:    liveTimingUpdateSourceFeed,
 			}},
 		},
 		{
@@ -84,14 +85,15 @@ func TestDecodeHubRecord(t *testing.T) {
 				topic:     "CarData.z",
 				payload:   json.RawMessage(`"compressed-data"`),
 				timestamp: "2026-08-21T10:30:00.034Z",
+				source:    liveTimingUpdateSourceFeed,
 			}},
 		},
 		{
 			name:   "subscription snapshot",
 			record: `{"type":3,"invocationId":"0","result":{"TimingData":{"Lines":{}},"Heartbeat":{"Utc":"now"}}}`,
 			wantUpdates: []liveTimingUpdate{
-				{topic: "Heartbeat", payload: json.RawMessage(`{"Utc":"now"}`)},
-				{topic: "TimingData", payload: json.RawMessage(`{"Lines":{}}`)},
+				{topic: "Heartbeat", payload: json.RawMessage(`{"Utc":"now"}`), source: liveTimingUpdateSourceSnapshot},
+				{topic: "TimingData", payload: json.RawMessage(`{"Lines":{}}`), source: liveTimingUpdateSourceSnapshot},
 			},
 		},
 		{name: "ping", record: `{"type":6}`},

@@ -28,7 +28,15 @@ type liveTimingUpdate struct {
 	topic     string
 	payload   json.RawMessage
 	timestamp string
+	source    liveTimingUpdateSource
 }
+
+type liveTimingUpdateSource uint8
+
+const (
+	liveTimingUpdateSourceFeed liveTimingUpdateSource = iota + 1
+	liveTimingUpdateSourceSnapshot
+)
 
 type hubMessage struct {
 	Type           *int              `json:"type"`
@@ -150,6 +158,7 @@ func decodeFeedInvocation(message hubMessage) ([]liveTimingUpdate, error) {
 		topic:     topic,
 		payload:   bytes.Clone(message.Arguments[1]),
 		timestamp: timestamp,
+		source:    liveTimingUpdateSourceFeed,
 	}}, nil
 }
 
@@ -179,6 +188,7 @@ func decodeSubscriptionCompletion(message hubMessage) ([]liveTimingUpdate, error
 		updates = append(updates, liveTimingUpdate{
 			topic:   topic,
 			payload: bytes.Clone(snapshot[topic]),
+			source:  liveTimingUpdateSourceSnapshot,
 		})
 	}
 	return updates, nil
