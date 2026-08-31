@@ -22,13 +22,22 @@ const (
 var (
 	errSignalRClosed           = errors.New("SignalR connection closed")
 	errSignalRReconnectAllowed = errors.New("SignalR connection closed with reconnect allowed")
+	errInvalidLiveTimingData   = errors.New("invalid F1 live timing data")
 )
 
 type liveTimingUpdate struct {
 	topic     string
 	payload   json.RawMessage
 	timestamp string
+	source    liveTimingUpdateSource
 }
+
+type liveTimingUpdateSource uint8
+
+const (
+	liveTimingUpdateSourceFeed liveTimingUpdateSource = iota + 1
+	liveTimingUpdateSourceSnapshot
+)
 
 type hubMessage struct {
 	Type           *int              `json:"type"`
@@ -92,12 +101,12 @@ func splitHubRecords(contents []byte) (records [][]byte, remaining []byte, err e
 		separator := bytes.IndexByte(contents, recordSeparator)
 		if separator == -1 {
 			if len(contents) > maxHubRecordSize {
-				return nil, nil, fmt.Errorf("SignalR record exceeds %d bytes", maxHubRecordSize)
+				return nil, nil, invalidLiveTimingData(fmt.Sprintf("SignalR record exceeds %d bytes", maxHubRecordSize))
 			}
 			return records, contents, nil
 		}
 		if separator > maxHubRecordSize {
-			return nil, nil, fmt.Errorf("SignalR record exceeds %d bytes", maxHubRecordSize)
+			return nil, nil, invalidLiveTimingData(fmt.Sprintf("SignalR record exceeds %d bytes", maxHubRecordSize))
 		}
 		records = append(records, contents[:separator])
 		contents = contents[separator+1:]
@@ -107,10 +116,10 @@ func splitHubRecords(contents []byte) (records [][]byte, remaining []byte, err e
 func decodeHubRecord(record []byte) ([]liveTimingUpdate, error) {
 	var message hubMessage
 	if err := json.Unmarshal(record, &message); err != nil {
-		return nil, fmt.Errorf("decode SignalR hub message: %w", err)
+		return nil, invalidLiveTimingData("decode SignalR hub message")
 	}
 	if message.Type == nil {
-		return nil, fmt.Errorf("SignalR hub message is missing type")
+		return nil, invalidLiveTimingData("SignalR hub message is missing type")
 	}
 
 	switch *message.Type {
@@ -135,21 +144,22 @@ func decodeFeedInvocation(message hubMessage) ([]liveTimingUpdate, error) {
 		return nil, nil
 	}
 	if len(message.Arguments) != 3 {
-		return nil, fmt.Errorf("F1 feed invocation has %d arguments, want 3", len(message.Arguments))
+		return nil, invalidLiveTimingData(fmt.Sprintf("F1 feed invocation has %d arguments, want 3", len(message.Arguments)))
 	}
 
 	var topic string
 	if err := json.Unmarshal(message.Arguments[0], &topic); err != nil || topic == "" {
-		return nil, fmt.Errorf("decode F1 feed topic")
+		return nil, invalidLiveTimingData("decode F1 feed topic")
 	}
 	var timestamp string
 	if err := json.Unmarshal(message.Arguments[2], &timestamp); err != nil {
-		return nil, fmt.Errorf("decode F1 feed timestamp")
+		return nil, invalidLiveTimingData("decode F1 feed timestamp")
 	}
 	return []liveTimingUpdate{{
 		topic:     topic,
 		payload:   bytes.Clone(message.Arguments[1]),
 		timestamp: timestamp,
+		source:    liveTimingUpdateSourceFeed,
 	}}, nil
 }
 
@@ -158,7 +168,7 @@ func decodeSubscriptionCompletion(message hubMessage) ([]liveTimingUpdate, error
 		return nil, nil
 	}
 	if message.Error != "" {
-		return nil, fmt.Errorf("F1 topic subscription was rejected")
+		return nil, invalidLiveTimingData("F1 topic subscription was rejected")
 	}
 	if len(message.Result) == 0 || bytes.Equal(message.Result, []byte("null")) {
 		return nil, nil
@@ -166,7 +176,7 @@ func decodeSubscriptionCompletion(message hubMessage) ([]liveTimingUpdate, error
 
 	var snapshot map[string]json.RawMessage
 	if err := json.Unmarshal(message.Result, &snapshot); err != nil {
-		return nil, fmt.Errorf("decode F1 subscription snapshot: %w", err)
+		return nil, invalidLiveTimingData("decode F1 subscription snapshot")
 	}
 	topics := make([]string, 0, len(snapshot))
 	for topic := range snapshot {
@@ -179,7 +189,12 @@ func decodeSubscriptionCompletion(message hubMessage) ([]liveTimingUpdate, error
 		updates = append(updates, liveTimingUpdate{
 			topic:   topic,
 			payload: bytes.Clone(snapshot[topic]),
+			source:  liveTimingUpdateSourceSnapshot,
 		})
 	}
 	return updates, nil
+}
+
+func invalidLiveTimingData(reason string) error {
+	return fmt.Errorf("%w: %s", errInvalidLiveTimingData, reason)
 }

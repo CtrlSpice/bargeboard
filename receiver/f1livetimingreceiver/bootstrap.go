@@ -69,7 +69,7 @@ func bootstrapConnection(ctx context.Context, client *http.Client, cfg *Config) 
 	defer response.Body.Close()
 	_, _ = io.Copy(io.Discard, response.Body)
 
-	return credentialsFromPreflight(token, response.StatusCode, response.Status, response.Cookies())
+	return credentialsFromPreflight(token, response.StatusCode, response.Cookies())
 }
 
 func readTokenFile(path string) (string, error) {
@@ -101,7 +101,6 @@ func parseToken(contents []byte) (string, error) {
 func credentialsFromPreflight(
 	token string,
 	statusCode int,
-	status string,
 	cookies []*http.Cookie,
 ) (connectionCredentials, error) {
 	for _, cookie := range cookies {
@@ -111,7 +110,11 @@ func credentialsFromPreflight(
 		}
 	}
 	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
-		return connectionCredentials{}, fmt.Errorf("negotiation preflight returned %s without %s cookie", status, affinityCookieName)
+		return connectionCredentials{}, invalidLiveTimingData(
+			fmt.Sprintf("negotiation preflight returned HTTP %d without %s cookie", statusCode, affinityCookieName),
+		)
 	}
-	return connectionCredentials{}, fmt.Errorf("negotiation preflight did not return %s cookie", affinityCookieName)
+	return connectionCredentials{}, invalidLiveTimingData(
+		fmt.Sprintf("negotiation preflight did not return %s cookie", affinityCookieName),
+	)
 }

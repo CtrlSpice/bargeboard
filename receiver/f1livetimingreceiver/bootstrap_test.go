@@ -2,6 +2,7 @@ package f1livetimingreceiver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -53,7 +54,7 @@ func TestBootstrapConnectionRejectsInvalidPreflight(t *testing.T) {
 			handler: func(writer http.ResponseWriter, _ *http.Request) {
 				writer.WriteHeader(http.StatusUnauthorized)
 			},
-			wantErr: "401 Unauthorized",
+			wantErr: "HTTP 401",
 		},
 		{
 			name: "missing affinity cookie",
@@ -76,6 +77,9 @@ func TestBootstrapConnectionRejectsInvalidPreflight(t *testing.T) {
 			_, err := bootstrapConnection(context.Background(), server.Client(), cfg)
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 				t.Fatalf("bootstrapConnection() error = %v, want containing %q", err, test.wantErr)
+			}
+			if !errors.Is(err, errInvalidLiveTimingData) {
+				t.Errorf("bootstrapConnection() error does not wrap errInvalidLiveTimingData")
 			}
 		})
 	}
@@ -117,39 +121,33 @@ func TestCredentialsFromPreflight(t *testing.T) {
 	tests := []struct {
 		name       string
 		statusCode int
-		status     string
 		cookies    []*http.Cookie
 		wantErr    string
 	}{
 		{
 			name:       "successful response with affinity cookie",
 			statusCode: http.StatusNoContent,
-			status:     "204 No Content",
 			cookies:    []*http.Cookie{{Name: affinityCookieName, Value: "affinity-token"}},
 		},
 		{
 			name:       "failed response with affinity cookie",
 			statusCode: http.StatusMethodNotAllowed,
-			status:     "405 Method Not Allowed",
 			cookies:    []*http.Cookie{{Name: affinityCookieName, Value: "affinity-token"}},
 		},
 		{
 			name:       "successful response without affinity cookie",
 			statusCode: http.StatusNoContent,
-			status:     "204 No Content",
 			cookies:    []*http.Cookie{{Name: "other", Value: "cookie"}},
 			wantErr:    affinityCookieName,
 		},
 		{
 			name:       "failed response without affinity cookie",
 			statusCode: http.StatusMethodNotAllowed,
-			status:     "405 Method Not Allowed",
-			wantErr:    "405 Method Not Allowed",
+			wantErr:    "HTTP 405",
 		},
 		{
 			name:       "empty affinity cookie",
 			statusCode: http.StatusNoContent,
-			status:     "204 No Content",
 			cookies:    []*http.Cookie{{Name: affinityCookieName}},
 			wantErr:    affinityCookieName,
 		},
@@ -160,12 +158,14 @@ func TestCredentialsFromPreflight(t *testing.T) {
 			credentials, err := credentialsFromPreflight(
 				"subscription-token",
 				test.statusCode,
-				test.status,
 				test.cookies,
 			)
 			if test.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 					t.Fatalf("credentialsFromPreflight() error = %v, want containing %q", err, test.wantErr)
+				}
+				if !errors.Is(err, errInvalidLiveTimingData) {
+					t.Errorf("credentialsFromPreflight() error does not wrap errInvalidLiveTimingData")
 				}
 				return
 			}
@@ -210,7 +210,6 @@ func TestCredentialsFromPreflightCopiesAffinityCookie(t *testing.T) {
 	credentials, err := credentialsFromPreflight(
 		"subscription-token",
 		http.StatusNoContent,
-		"204 No Content",
 		[]*http.Cookie{cookie},
 	)
 	if err != nil {

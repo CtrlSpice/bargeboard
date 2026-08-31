@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"go.opentelemetry.io/collector/component/componentstatus"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/receiver/receivertest"
@@ -201,5 +202,73 @@ func TestFactorySharesReceiverAcrossSignals(t *testing.T) {
 	}
 	if err := recreated.Shutdown(ctx); err != nil {
 		t.Fatalf("recreated Shutdown() error = %v", err)
+	}
+}
+
+func TestSharedReceiverReportsPermanentStatusToEverySignalHost(t *testing.T) {
+	server := newConnectionTestServer(t, func(connection *websocket.Conn) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		_, _, _ = connection.Read(ctx)
+		_ = connection.Write(ctx, websocket.MessageText, []byte("{}\x1e"))
+		_, _, _ = connection.Read(ctx)
+		_ = connection.Write(ctx, websocket.MessageText, []byte(
+			`{"type":3,"invocationId":"0","result":"invalid-snapshot"}`+"\x1e",
+		))
+	})
+
+	factory := NewFactory()
+	config := connectionTestConfig(t, server.URL)
+	settings := receivertest.NewNopSettings(Type)
+	next := consumertest.NewNop()
+	traces, err := factory.CreateTraces(context.Background(), settings, config, next)
+	if err != nil {
+		t.Fatalf("CreateTraces() error = %v", err)
+	}
+	metrics, err := factory.CreateMetrics(context.Background(), settings, config, next)
+	if err != nil {
+		t.Fatalf("CreateMetrics() error = %v", err)
+	}
+	logs, err := factory.CreateLogs(context.Background(), settings, config, next)
+	if err != nil {
+		t.Fatalf("CreateLogs() error = %v", err)
+	}
+
+	hosts := []*statusHost{
+		{events: make(chan *componentstatus.Event, 1)},
+		{events: make(chan *componentstatus.Event, 1)},
+		{events: make(chan *componentstatus.Event, 1)},
+	}
+	if err := traces.Start(context.Background(), hosts[0]); err != nil {
+		t.Fatalf("traces Start() error = %v", err)
+	}
+	shared := traces.(*sharedReceiver)
+	select {
+	case <-shared.receiver.done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for shared receiver to stop")
+	}
+	if err := metrics.Start(context.Background(), hosts[1]); err != nil {
+		t.Fatalf("metrics Start() error = %v", err)
+	}
+	if err := logs.Start(context.Background(), hosts[2]); err != nil {
+		t.Fatalf("logs Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = logs.Shutdown(ctx)
+	})
+
+	for index, host := range hosts {
+		select {
+		case event := <-host.events:
+			if event.Status() != componentstatus.StatusPermanentError {
+				t.Errorf("host %d status = %s, want permanent error", index, event.Status())
+			}
+		case <-time.After(time.Second):
+			t.Errorf("host %d did not receive permanent status", index)
+		}
 	}
 }

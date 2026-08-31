@@ -9,9 +9,12 @@ import (
 	"time"
 
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/component/componentstatus"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/receiver"
 )
+
+var errPermanentLiveTimingFailure = errors.New("F1 live timing receiver stopped after receiving invalid server data")
 
 type liveTimingReceiver struct {
 	config   *Config
@@ -20,7 +23,7 @@ type liveTimingReceiver struct {
 
 	cancel     context.CancelFunc
 	done       chan struct{}
-	consume    func(context.Context, []liveTimingUpdate) error
+	consume    func(context.Context, []normalizedLiveTimingUpdate) error
 	retryDelay func(int) time.Duration
 
 	consumersMu sync.Mutex
@@ -39,7 +42,7 @@ func newLiveTimingReceiver(config *Config, settings receiver.Settings) *liveTimi
 				return http.ErrUseLastResponse
 			},
 		},
-		consume: func(context.Context, []liveTimingUpdate) error {
+		consume: func(context.Context, []normalizedLiveTimingUpdate) error {
 			return nil
 		},
 		retryDelay: reconnectDelay,
@@ -64,7 +67,7 @@ func (r *liveTimingReceiver) registerLogs(next consumer.Logs) {
 	r.logs = next
 }
 
-func (r *liveTimingReceiver) Start(ctx context.Context, _ component.Host) error {
+func (r *liveTimingReceiver) Start(ctx context.Context, host component.Host) error {
 	connection, err := r.connect(ctx)
 	if err != nil {
 		return fmt.Errorf("connect to F1 live timing: %w", err)
@@ -74,7 +77,7 @@ func (r *liveTimingReceiver) Start(ctx context.Context, _ component.Host) error 
 	done := make(chan struct{})
 	r.cancel = cancel
 	r.done = done
-	go r.run(runCtx, connection, done)
+	go r.run(runCtx, connection, host, done)
 	return nil
 }
 
@@ -90,18 +93,34 @@ func (r *liveTimingReceiver) connect(ctx context.Context) (*signalRConnection, e
 	return connection, nil
 }
 
-func (r *liveTimingReceiver) run(ctx context.Context, connection *signalRConnection, done chan<- struct{}) {
+func (r *liveTimingReceiver) run(
+	ctx context.Context,
+	connection *signalRConnection,
+	host component.Host,
+	done chan<- struct{},
+) {
 	defer close(done)
 	attempt := 0
 
 	for {
 		receivedUpdates := false
 		err := connection.read(ctx, func(ctx context.Context, updates []liveTimingUpdate) error {
+			normalized, err := normalizeLiveTimingUpdates(updates)
+			if err != nil {
+				return err
+			}
+			if err := r.consume(ctx, normalized); err != nil {
+				return err
+			}
 			receivedUpdates = true
-			return r.consume(ctx, updates)
+			return nil
 		})
 		_ = connection.close(context.Background())
 		if ctx.Err() != nil {
+			return
+		}
+		if errors.Is(err, errInvalidLiveTimingData) {
+			r.reportPermanentFailure(host)
 			return
 		}
 		if receivedUpdates {
@@ -126,9 +145,18 @@ func (r *liveTimingReceiver) run(ctx context.Context, connection *signalRConnect
 			if ctx.Err() != nil {
 				return
 			}
+			if errors.Is(err, errInvalidLiveTimingData) {
+				r.reportPermanentFailure(host)
+				return
+			}
 			r.settings.Logger.Warn("F1 live timing reconnect failed: " + err.Error())
 		}
 	}
+}
+
+func (r *liveTimingReceiver) reportPermanentFailure(host component.Host) {
+	r.settings.Logger.Error(errPermanentLiveTimingFailure.Error())
+	componentstatus.ReportStatus(host, componentstatus.NewPermanentErrorEvent(errPermanentLiveTimingFailure))
 }
 
 func reconnectDelay(attempt int) time.Duration {
@@ -171,6 +199,7 @@ func (r *liveTimingReceiver) Shutdown(ctx context.Context) error {
 type sharedReceiver struct {
 	receiver *liveTimingReceiver
 	remove   func()
+	status   statusBroadcaster
 
 	startOnce sync.Once
 	startErr  error
@@ -179,10 +208,53 @@ type sharedReceiver struct {
 }
 
 func (r *sharedReceiver) Start(ctx context.Context, host component.Host) error {
+	r.status.register(host)
 	r.startOnce.Do(func() {
-		r.startErr = r.receiver.Start(ctx, host)
+		r.startErr = r.receiver.Start(ctx, &r.status)
 	})
 	return r.startErr
+}
+
+type statusBroadcaster struct {
+	mu      sync.Mutex
+	hosts   []component.Host
+	current *componentstatus.Event
+}
+
+func (b *statusBroadcaster) register(host component.Host) {
+	b.mu.Lock()
+	b.hosts = append(b.hosts, host)
+	current := b.current
+	b.mu.Unlock()
+
+	if current != nil {
+		componentstatus.ReportStatus(host, current)
+	}
+}
+
+func (b *statusBroadcaster) Report(event *componentstatus.Event) {
+	b.mu.Lock()
+	b.current = event
+	hosts := append([]component.Host(nil), b.hosts...)
+	b.mu.Unlock()
+
+	for _, host := range hosts {
+		componentstatus.ReportStatus(host, event)
+	}
+}
+
+func (b *statusBroadcaster) GetExtensions() map[component.ID]component.Component {
+	b.mu.Lock()
+	var host component.Host
+	if len(b.hosts) > 0 {
+		host = b.hosts[0]
+	}
+	b.mu.Unlock()
+
+	if host == nil {
+		return nil
+	}
+	return host.GetExtensions()
 }
 
 func (r *sharedReceiver) Shutdown(ctx context.Context) error {

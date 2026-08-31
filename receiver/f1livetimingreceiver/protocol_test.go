@@ -57,6 +57,9 @@ func TestSplitHubRecordsRejectsOversizedRecord(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("splitHubRecords() error = %v, want size error", err)
 	}
+	if !errors.Is(err, errInvalidLiveTimingData) {
+		t.Errorf("splitHubRecords() error does not wrap errInvalidLiveTimingData")
+	}
 }
 
 func TestDecodeHubRecord(t *testing.T) {
@@ -75,6 +78,7 @@ func TestDecodeHubRecord(t *testing.T) {
 				topic:     "SessionStatus",
 				payload:   json.RawMessage(`{"Status":"Started"}`),
 				timestamp: "2026-08-21T10:30:00.034Z",
+				source:    liveTimingUpdateSourceFeed,
 			}},
 		},
 		{
@@ -84,14 +88,15 @@ func TestDecodeHubRecord(t *testing.T) {
 				topic:     "CarData.z",
 				payload:   json.RawMessage(`"compressed-data"`),
 				timestamp: "2026-08-21T10:30:00.034Z",
+				source:    liveTimingUpdateSourceFeed,
 			}},
 		},
 		{
 			name:   "subscription snapshot",
 			record: `{"type":3,"invocationId":"0","result":{"TimingData":{"Lines":{}},"Heartbeat":{"Utc":"now"}}}`,
 			wantUpdates: []liveTimingUpdate{
-				{topic: "Heartbeat", payload: json.RawMessage(`{"Utc":"now"}`)},
-				{topic: "TimingData", payload: json.RawMessage(`{"Lines":{}}`)},
+				{topic: "Heartbeat", payload: json.RawMessage(`{"Utc":"now"}`), source: liveTimingUpdateSourceSnapshot},
+				{topic: "TimingData", payload: json.RawMessage(`{"Lines":{}}`), source: liveTimingUpdateSourceSnapshot},
 			},
 		},
 		{name: "ping", record: `{"type":6}`},
@@ -123,6 +128,9 @@ func TestDecodeHubRecord(t *testing.T) {
 			if test.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 					t.Fatalf("decodeHubRecord() error = %v, want containing %q", err, test.wantErr)
+				}
+				if !errors.Is(err, errInvalidLiveTimingData) {
+					t.Errorf("decodeHubRecord() error does not wrap errInvalidLiveTimingData")
 				}
 				return
 			}
