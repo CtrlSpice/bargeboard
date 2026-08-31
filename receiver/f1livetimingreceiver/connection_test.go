@@ -116,6 +116,9 @@ func TestParseNegotiateResponse(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 					t.Fatalf("parseNegotiateResponse() error = %v, want containing %q", err, test.wantErr)
 				}
+				if !errors.Is(err, errInvalidLiveTimingData) {
+					t.Errorf("parseNegotiateResponse() error does not wrap errInvalidLiveTimingData")
+				}
 				return
 			}
 			if err != nil {
@@ -273,7 +276,35 @@ func TestParseHandshakeResponse(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 				t.Fatalf("parseHandshakeResponse() error = %v, want containing %q", err, test.wantErr)
 			}
+			if !errors.Is(err, errInvalidLiveTimingData) {
+				t.Errorf("parseHandshakeResponse() error does not wrap errInvalidLiveTimingData")
+			}
 		})
+	}
+}
+
+func TestInvalidWebSocketRead(t *testing.T) {
+	if !invalidWebSocketRead(fmt.Errorf("read limit: %w", websocket.ErrMessageTooBig)) {
+		t.Error("invalidWebSocketRead() did not recognize wrapped ErrMessageTooBig")
+	}
+
+	tests := []struct {
+		status websocket.StatusCode
+		want   bool
+	}{
+		{status: websocket.StatusProtocolError, want: true},
+		{status: websocket.StatusUnsupportedData, want: true},
+		{status: websocket.StatusInvalidFramePayloadData, want: true},
+		{status: websocket.StatusMessageTooBig, want: true},
+		{status: websocket.StatusGoingAway, want: false},
+		{status: websocket.StatusServiceRestart, want: false},
+	}
+
+	for _, test := range tests {
+		err := websocket.CloseError{Code: test.status, Reason: "sensitive-reason"}
+		if got := invalidWebSocketRead(err); got != test.want {
+			t.Errorf("invalidWebSocketRead(%s) = %t, want %t", test.status, got, test.want)
+		}
 	}
 }
 
@@ -308,6 +339,32 @@ func TestConnectSignalRHonorsHandshakeContext(t *testing.T) {
 	}
 }
 
+func TestSignalRConnectionRejectsMessageOverReadLimit(t *testing.T) {
+	server := newConnectionTestServer(t, func(connection *websocket.Conn) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		_, _, _ = connection.Read(ctx)
+		_ = connection.Write(ctx, websocket.MessageText, []byte("{}\x1e"))
+		_, _, _ = connection.Read(ctx)
+		_ = connection.Write(ctx, websocket.MessageText, []byte(strings.Repeat("x", 17)))
+	})
+	connection, err := connectSignalR(context.Background(), server.Client(), connectionTestConfig(t, server.URL))
+	if err != nil {
+		t.Fatalf("connectSignalR() error = %v", err)
+	}
+	defer connection.close(context.Background())
+	connection.conn.SetReadLimit(16)
+	if err := connection.subscribe(context.Background()); err != nil {
+		t.Fatalf("subscribe() error = %v", err)
+	}
+
+	err = connection.read(context.Background(), func(context.Context, []liveTimingUpdate) error { return nil })
+	if !errors.Is(err, errInvalidLiveTimingData) {
+		t.Fatalf("read() error = %v, want invalid live timing data", err)
+	}
+}
+
 func TestConnectSignalRRejectsInapplicableAffinityCookie(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodOptions {
@@ -328,6 +385,9 @@ func TestConnectSignalRRejectsInapplicableAffinityCookie(t *testing.T) {
 	_, err := connectSignalR(context.Background(), server.Client(), connectionTestConfig(t, server.URL))
 	if err == nil || !strings.Contains(err.Error(), "does not apply") {
 		t.Fatalf("connectSignalR() error = %v, want inapplicable cookie error", err)
+	}
+	if !errors.Is(err, errInvalidLiveTimingData) {
+		t.Errorf("connectSignalR() error does not wrap errInvalidLiveTimingData")
 	}
 }
 

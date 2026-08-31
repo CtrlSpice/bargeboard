@@ -160,8 +160,8 @@ func TestNormalizeLiveTimingUpdatesPreservesOrderAndIsAllOrNothing(t *testing.T)
 	if got != nil || err == nil || !strings.Contains(err.Error(), "update 1") {
 		t.Fatalf("normalizeLiveTimingUpdates() = %#v, %v, want no partial batch and indexed error", got, err)
 	}
-	if !errors.Is(err, errInvalidLiveTimingUpdate) {
-		t.Errorf("normalizeLiveTimingUpdates() error does not wrap errInvalidLiveTimingUpdate")
+	if !errors.Is(err, errInvalidLiveTimingData) {
+		t.Errorf("normalizeLiveTimingUpdates() error does not wrap errInvalidLiveTimingData")
 	}
 }
 
@@ -197,8 +197,8 @@ func TestNormalizeLiveTimingUpdateRejectsInvalidInput(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 				t.Fatalf("normalizeLiveTimingUpdate() error = %v, want containing %q", err, test.wantErr)
 			}
-			if !errors.Is(err, errInvalidLiveTimingUpdate) {
-				t.Errorf("error does not wrap errInvalidLiveTimingUpdate")
+			if !errors.Is(err, errInvalidLiveTimingData) {
+				t.Errorf("error does not wrap errInvalidLiveTimingData")
 			}
 		})
 	}

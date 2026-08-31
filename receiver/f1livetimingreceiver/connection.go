@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -67,8 +68,8 @@ func connectSignalR(ctx context.Context, client *http.Client, cfg *Config) (*sig
 	if err != nil {
 		return nil, err
 	}
-	if len(negotiateCookies) == 0 {
-		return nil, fmt.Errorf("SignalR affinity cookie does not apply to the negotiation endpoint")
+	if !hasAffinityCookie(negotiateCookies) {
+		return nil, invalidLiveTimingData("SignalR affinity cookie does not apply to the negotiation endpoint")
 	}
 
 	negotiation, responseCookies, err := negotiate(
@@ -94,6 +95,9 @@ func connectSignalR(ctx context.Context, client *http.Client, cfg *Config) (*sig
 	if err != nil {
 		return nil, err
 	}
+	if !hasAffinityCookie(upgradeCookies) {
+		return nil, invalidLiveTimingData("SignalR affinity cookie does not apply to the WebSocket endpoint")
+	}
 
 	connection, response, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{
 		HTTPClient: client,
@@ -101,7 +105,10 @@ func connectSignalR(ctx context.Context, client *http.Client, cfg *Config) (*sig
 	})
 	if err != nil {
 		if response != nil {
-			return nil, fmt.Errorf("SignalR WebSocket upgrade returned %s", response.Status)
+			if response.StatusCode == http.StatusSwitchingProtocols {
+				return nil, invalidLiveTimingData("SignalR WebSocket upgrade response is invalid")
+			}
+			return nil, fmt.Errorf("SignalR WebSocket upgrade returned HTTP %d", response.StatusCode)
 		}
 		return nil, fmt.Errorf("SignalR WebSocket upgrade failed")
 	}
@@ -115,6 +122,15 @@ func connectSignalR(ctx context.Context, client *http.Client, cfg *Config) (*sig
 		return nil, err
 	}
 	return &signalRConnection{conn: connection, pending: pending}, nil
+}
+
+func hasAffinityCookie(cookies []*http.Cookie) bool {
+	for _, cookie := range cookies {
+		if cookie != nil && cookie.Name == affinityCookieName && cookie.Value != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *signalRConnection) subscribe(ctx context.Context) error {
@@ -155,10 +171,13 @@ func (c *signalRConnection) read(
 
 		messageType, contents, err := c.conn.Read(ctx)
 		if err != nil {
+			if invalidWebSocketRead(err) {
+				return invalidLiveTimingData("F1 live timing WebSocket data is invalid")
+			}
 			return fmt.Errorf("read F1 live timing message: %w", err)
 		}
 		if messageType != websocket.MessageText {
-			return fmt.Errorf("F1 live timing used a non-text WebSocket message")
+			return invalidLiveTimingData("F1 live timing used a non-text WebSocket message")
 		}
 		buffered = append(buffered, contents...)
 	}
@@ -193,7 +212,9 @@ func negotiate(
 		return negotiation{}, nil, fmt.Errorf("read SignalR negotiation response: %w", err)
 	}
 	if len(contents) > maxNegotiateResponseSize {
-		return negotiation{}, nil, fmt.Errorf("SignalR negotiation response exceeds %d bytes", maxNegotiateResponseSize)
+		return negotiation{}, nil, invalidLiveTimingData(
+			fmt.Sprintf("SignalR negotiation response exceeds %d bytes", maxNegotiateResponseSize),
+		)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return negotiation{}, nil, fmt.Errorf("SignalR negotiation returned %s", response.Status)
@@ -220,27 +241,29 @@ func negotiateEndpoint(raw string) (string, error) {
 func parseNegotiateResponse(contents []byte) (negotiation, error) {
 	var response negotiateResponse
 	if err := json.Unmarshal(contents, &response); err != nil {
-		return negotiation{}, fmt.Errorf("decode SignalR negotiation response: %w", err)
+		return negotiation{}, invalidLiveTimingData("decode SignalR negotiation response")
 	}
 	if response.Error != "" {
-		return negotiation{}, fmt.Errorf("SignalR negotiation rejected the connection")
+		return negotiation{}, invalidLiveTimingData("SignalR negotiation rejected the connection")
 	}
 	if response.URL != "" || response.AccessToken != "" {
-		return negotiation{}, fmt.Errorf("SignalR negotiation redirects are not supported")
+		return negotiation{}, invalidLiveTimingData("SignalR negotiation redirects are not supported")
 	}
 
 	if response.NegotiateVersion < 0 || response.NegotiateVersion > 1 {
-		return negotiation{}, fmt.Errorf("SignalR negotiation returned unsupported version %d", response.NegotiateVersion)
+		return negotiation{}, invalidLiveTimingData(
+			fmt.Sprintf("SignalR negotiation returned unsupported version %d", response.NegotiateVersion),
+		)
 	}
 	connectionToken := response.ConnectionID
 	if response.NegotiateVersion >= 1 {
 		if response.ConnectionID == "" {
-			return negotiation{}, fmt.Errorf("SignalR negotiation did not return a connection ID")
+			return negotiation{}, invalidLiveTimingData("SignalR negotiation did not return a connection ID")
 		}
 		connectionToken = response.ConnectionToken
 	}
 	if connectionToken == "" {
-		return negotiation{}, fmt.Errorf("SignalR negotiation did not return a connection token")
+		return negotiation{}, invalidLiveTimingData("SignalR negotiation did not return a connection token")
 	}
 
 	for _, transport := range response.AvailableTransports {
@@ -253,7 +276,7 @@ func parseNegotiateResponse(contents []byte) (negotiation, error) {
 			}
 		}
 	}
-	return negotiation{}, fmt.Errorf("SignalR negotiation does not support WebSockets with text frames")
+	return negotiation{}, invalidLiveTimingData("SignalR negotiation does not support WebSockets with text frames")
 }
 
 func cookiesForEndpoint(
@@ -333,22 +356,29 @@ func exchangeHandshake(ctx context.Context, connection *websocket.Conn) ([]byte,
 	for {
 		messageType, contents, err := connection.Read(ctx)
 		if err != nil {
+			if invalidWebSocketRead(err) {
+				return nil, invalidLiveTimingData("SignalR handshake WebSocket data is invalid")
+			}
 			return nil, fmt.Errorf("read SignalR handshake: %w", err)
 		}
 		if messageType != websocket.MessageText {
-			return nil, fmt.Errorf("SignalR handshake used a non-text WebSocket message")
+			return nil, invalidLiveTimingData("SignalR handshake used a non-text WebSocket message")
 		}
 		buffered = append(buffered, contents...)
 
 		record, remaining, complete := splitFirstRecord(buffered)
 		if !complete {
 			if len(buffered) > maxHandshakeResponseSize {
-				return nil, fmt.Errorf("SignalR handshake response exceeds %d bytes", maxHandshakeResponseSize)
+				return nil, invalidLiveTimingData(
+					fmt.Sprintf("SignalR handshake response exceeds %d bytes", maxHandshakeResponseSize),
+				)
 			}
 			continue
 		}
 		if len(record) > maxHandshakeResponseSize {
-			return nil, fmt.Errorf("SignalR handshake response exceeds %d bytes", maxHandshakeResponseSize)
+			return nil, invalidLiveTimingData(
+				fmt.Sprintf("SignalR handshake response exceeds %d bytes", maxHandshakeResponseSize),
+			)
 		}
 		if err := parseHandshakeResponse(record); err != nil {
 			return nil, err
@@ -372,10 +402,10 @@ func splitFirstRecord(contents []byte) (record, remaining []byte, complete bool)
 func parseHandshakeResponse(record []byte) error {
 	var response map[string]json.RawMessage
 	if err := json.Unmarshal(record, &response); err != nil || response == nil {
-		return fmt.Errorf("decode SignalR handshake response")
+		return invalidLiveTimingData("decode SignalR handshake response")
 	}
 	if _, ok := response["type"]; ok {
-		return fmt.Errorf("expected a SignalR handshake response")
+		return invalidLiveTimingData("expected a SignalR handshake response")
 	}
 	encodedError, ok := response["error"]
 	if !ok {
@@ -383,9 +413,24 @@ func parseHandshakeResponse(record []byte) error {
 	}
 	var message string
 	if err := json.Unmarshal(encodedError, &message); err != nil || message == "" {
-		return fmt.Errorf("decode SignalR handshake error")
+		return invalidLiveTimingData("decode SignalR handshake error")
 	}
-	return fmt.Errorf("SignalR handshake rejected the connection")
+	return invalidLiveTimingData("SignalR handshake rejected the connection")
+}
+
+func invalidWebSocketRead(err error) bool {
+	if errors.Is(err, websocket.ErrMessageTooBig) {
+		return true
+	}
+	switch websocket.CloseStatus(err) {
+	case websocket.StatusProtocolError,
+		websocket.StatusUnsupportedData,
+		websocket.StatusInvalidFramePayloadData,
+		websocket.StatusMessageTooBig:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *signalRConnection) close(ctx context.Context) error {

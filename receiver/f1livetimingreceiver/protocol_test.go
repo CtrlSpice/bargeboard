@@ -57,6 +57,9 @@ func TestSplitHubRecordsRejectsOversizedRecord(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("splitHubRecords() error = %v, want size error", err)
 	}
+	if !errors.Is(err, errInvalidLiveTimingData) {
+		t.Errorf("splitHubRecords() error does not wrap errInvalidLiveTimingData")
+	}
 }
 
 func TestDecodeHubRecord(t *testing.T) {
@@ -125,6 +128,9 @@ func TestDecodeHubRecord(t *testing.T) {
 			if test.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 					t.Fatalf("decodeHubRecord() error = %v, want containing %q", err, test.wantErr)
+				}
+				if !errors.Is(err, errInvalidLiveTimingData) {
+					t.Errorf("decodeHubRecord() error does not wrap errInvalidLiveTimingData")
 				}
 				return
 			}

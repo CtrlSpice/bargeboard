@@ -5,7 +5,6 @@ import (
 	"compress/flate"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -18,8 +17,6 @@ const (
 	maxEncodedPayloadSize      = 64 * 1024
 	maxDecompressedPayloadSize = 1024 * 1024
 )
-
-var errInvalidLiveTimingUpdate = errors.New("invalid F1 live timing update")
 
 var rfc3339Timestamp = regexp.MustCompile(
 	`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$`,
@@ -153,6 +150,6 @@ func decompressLiveTimingPayload(payload json.RawMessage) (json.RawMessage, erro
 	return json.RawMessage(decompressed), nil
 }
 
-func invalidLiveTimingUpdate(topic, reason string) error {
-	return fmt.Errorf("%w: topic %q: %s", errInvalidLiveTimingUpdate, topic, reason)
+func invalidLiveTimingUpdate(_ string, reason string) error {
+	return invalidLiveTimingData(reason)
 }
