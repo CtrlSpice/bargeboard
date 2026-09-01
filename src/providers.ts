@@ -82,10 +82,11 @@ function makeLogExporter(t: ExportTargets): LogRecordExporter | null {
 export function makeSessionBundle(session: SessionInfo, t: ExportTargets): SessionBundle {
   const resource = makeSessionResource(session);
 
-  const tp = new NodeTracerProvider({ resource });
   const trExp = makeTraceExporter(t);
-  if (trExp) tp.addSpanProcessor(new BatchSpanProcessor(trExp));
-  if (t.consoleEcho) tp.addSpanProcessor(new SimpleSpanProcessor(new ConsoleSpanExporter()));
+  const spanProcessors = [];
+  if (trExp) spanProcessors.push(new BatchSpanProcessor(trExp));
+  if (t.consoleEcho) spanProcessors.push(new SimpleSpanProcessor(new ConsoleSpanExporter()));
+  const tp = new NodeTracerProvider({ resource, spanProcessors });
 
   const metricExporter = makeMetricExporter(t);
 
@@ -104,15 +105,19 @@ export function makeSessionBundle(session: SessionInfo, t: ExportTargets): Sessi
 export function makeDriverBundle(driver: DriverInfo, t: ExportTargets): DriverBundle {
   const resource = makeDriverResource(driver);
 
-  const tp = new NodeTracerProvider({ resource });
   const trExp = makeTraceExporter(t);
-  if (trExp) tp.addSpanProcessor(new BatchSpanProcessor(trExp));
-  if (t.consoleEcho) tp.addSpanProcessor(new SimpleSpanProcessor(new ConsoleSpanExporter()));
+  const spanProcessors = [];
+  if (trExp) spanProcessors.push(new BatchSpanProcessor(trExp));
+  if (t.consoleEcho) spanProcessors.push(new SimpleSpanProcessor(new ConsoleSpanExporter()));
+  const tp = new NodeTracerProvider({ resource, spanProcessors });
 
-  const lp = new LoggerProvider({ resource });
   const lExp = makeLogExporter(t);
-  if (lExp) lp.addLogRecordProcessor(new BatchLogRecordProcessor(lExp));
-  if (t.consoleEcho) lp.addLogRecordProcessor(new SimpleLogRecordProcessor(new ConsoleLogRecordExporter()));
+  const processors = [];
+  if (lExp) processors.push(new BatchLogRecordProcessor({ exporter: lExp }));
+  if (t.consoleEcho) {
+    processors.push(new SimpleLogRecordProcessor({ exporter: new ConsoleLogRecordExporter() }));
+  }
+  const lp = new LoggerProvider({ resource, processors });
 
   return {
     driver,

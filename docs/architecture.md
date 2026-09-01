@@ -69,8 +69,9 @@ The Go distribution currently compiles:
 - The batch processor.
 - The debug exporter.
 
-The default `config.yaml` intentionally runs only the standard OTLP receiver.
-It is a credential-free validation and smoke-test configuration.
+The shipped `config.yaml` runs both the F1 Live Timing and standard OTLP
+receivers. It contains no credentials: the F1 receiver resolves each user's
+token file through `${env:HOME}/.config/bargeboard/f1tv-token`.
 
 The F1 Live Timing receiver currently authenticates, negotiates SignalR,
 subscribes, reconnects, decodes records, distinguishes feed updates from
@@ -664,7 +665,7 @@ Current implementation seams:
 | Area | Path |
 |---|---|
 | Collector component registration | `components.go` |
-| Default credential-free pipeline | `config.yaml` |
+| Collector pipeline and F1 token-file reference | `config.yaml` |
 | Live Timing factory | `receiver/f1livetimingreceiver/factory.go` |
 | Auth and endpoint configuration | `receiver/f1livetimingreceiver/config.go` |
 | Connection and SignalR transport | `receiver/f1livetimingreceiver/connection.go` |

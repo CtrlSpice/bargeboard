@@ -21,7 +21,26 @@ make check
 make run
 ```
 
-The default `config.yaml` listens for OTLP/gRPC on `localhost:4317` and OTLP/HTTP on `localhost:4318`. Run `make components` to inspect the components compiled into the distribution.
+The shipped `config.yaml` enables F1 Live Timing and listens for OTLP/gRPC on
+`localhost:4317` and OTLP/HTTP on `localhost:4318`. Run `make components` to
+inspect the components compiled into the distribution.
+
+### F1 Live Timing
+
+The Collector reads each user's own F1 TV `subscriptionToken` from
+`$HOME/.config/bargeboard/f1tv-token`. The repository configuration contains
+only that file reference, never a token. Create the file with owner-only
+permissions before running the Collector. After storing the token:
+
+```bash
+chmod 600 "$HOME/.config/bargeboard/f1tv-token"
+make run
+```
+
+The token file should be readable only by its owner. Never put a token directly
+in YAML, shell history, logs, issues, or commits. The current receiver connects,
+subscribes, validates, and normalizes the feed; F1 state reduction and OTLP
+emission remain under development.
 
 ## Historical TypeScript prototype
 

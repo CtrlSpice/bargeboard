@@ -32,7 +32,6 @@ import { ValueType, type Attributes } from "@opentelemetry/api";
 import {
   AggregationTemporality,
   DataPointType,
-  InstrumentType,
   type DataPoint,
   type ExponentialHistogram,
   type Histogram,
@@ -433,7 +432,7 @@ export class MetricBank {
       const take = dataPoints.splice(0, budget);
       budget -= take.length;
       metrics.push({
-        descriptor: descriptorFor(instrument, InstrumentType.GAUGE),
+        descriptor: descriptorFor(instrument),
         aggregationTemporality: AggregationTemporality.CUMULATIVE,
         dataPointType: DataPointType.GAUGE,
         dataPoints: take,
@@ -445,10 +444,7 @@ export class MetricBank {
       budget -= take.length;
       const monotonic = ROSTER[instrument]!.kind === "counter";
       metrics.push({
-        descriptor: descriptorFor(
-          instrument,
-          monotonic ? InstrumentType.COUNTER : InstrumentType.UP_DOWN_COUNTER,
-        ),
+        descriptor: descriptorFor(instrument),
         aggregationTemporality: AggregationTemporality.CUMULATIVE,
         dataPointType: DataPointType.SUM,
         isMonotonic: monotonic,
@@ -460,7 +456,7 @@ export class MetricBank {
       const take = dataPoints.splice(0, Math.max(1, Math.floor(budget / HIST_WEIGHT)));
       budget -= take.length * HIST_WEIGHT;
       metrics.push({
-        descriptor: descriptorFor(instrument, InstrumentType.HISTOGRAM),
+        descriptor: descriptorFor(instrument),
         aggregationTemporality: temporalityOf(instrument),
         dataPointType: DataPointType.HISTOGRAM,
         dataPoints: take,
@@ -472,7 +468,7 @@ export class MetricBank {
       const take = dataPoints.splice(0, Math.max(1, Math.floor(budget / EXP_WEIGHT)));
       budget -= take.length * EXP_WEIGHT;
       metrics.push({
-        descriptor: descriptorFor(instrument, InstrumentType.HISTOGRAM),
+        descriptor: descriptorFor(instrument),
         aggregationTemporality: temporalityOf(instrument),
         dataPointType: DataPointType.EXPONENTIAL_HISTOGRAM,
         dataPoints: take,
@@ -538,15 +534,13 @@ function pendFor<T>(outer: Map<string, T[]>, instrument: string): T[] {
   return a;
 }
 
-function descriptorFor(instrument: string, type: InstrumentType) {
+function descriptorFor(instrument: string) {
   const spec = ROSTER[instrument]!;
   return {
     name: instrument,
     description: spec.description,
     unit: spec.unit,
-    type,
     valueType: ValueType.DOUBLE,
-    advice: {},
   };
 }
 
