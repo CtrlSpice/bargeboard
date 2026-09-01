@@ -13,6 +13,8 @@ These instructions supplement `/Users/moya/Workspace/AGENTS.md` for work in this
 
 - Develop features on branches rather than directly on `main`.
 - Keep branch commits small, coherent, and easy to review. Include tests with the behavior they cover.
+- If the user explicitly authorizes push-on-commit for the active branch, treat
+  that as standing authorization until the branch is merged or they revoke it.
 - Use one-sentence commit messages that describe the completed change.
 - Squash-merge pull requests so `main` receives one clean commit per feature.
 - Do not rewrite published branch history or force-push unless explicitly approved.
