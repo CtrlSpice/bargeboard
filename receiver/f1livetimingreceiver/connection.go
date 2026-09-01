@@ -110,7 +110,7 @@ func connectSignalR(ctx context.Context, client *http.Client, cfg *Config) (*sig
 			}
 			return nil, fmt.Errorf("SignalR WebSocket upgrade returned HTTP %d", response.StatusCode)
 		}
-		return nil, fmt.Errorf("SignalR WebSocket upgrade failed")
+		return nil, sanitizedTransportError(ctx, "SignalR WebSocket upgrade", err)
 	}
 	connection.SetReadLimit(maxWebSocketMessage)
 
@@ -203,13 +203,13 @@ func negotiate(
 
 	response, err := client.Do(request)
 	if err != nil {
-		return negotiation{}, nil, fmt.Errorf("perform SignalR negotiation: %w", err)
+		return negotiation{}, nil, sanitizedTransportError(ctx, "perform SignalR negotiation", err)
 	}
 	defer response.Body.Close()
 
 	contents, err := io.ReadAll(io.LimitReader(response.Body, maxNegotiateResponseSize+1))
 	if err != nil {
-		return negotiation{}, nil, fmt.Errorf("read SignalR negotiation response: %w", err)
+		return negotiation{}, nil, sanitizedTransportError(ctx, "read SignalR negotiation response", err)
 	}
 	if len(contents) > maxNegotiateResponseSize {
 		return negotiation{}, nil, invalidLiveTimingData(
@@ -217,7 +217,7 @@ func negotiate(
 		)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return negotiation{}, nil, fmt.Errorf("SignalR negotiation returned %s", response.Status)
+		return negotiation{}, nil, fmt.Errorf("SignalR negotiation returned HTTP %d", response.StatusCode)
 	}
 
 	result, err := parseNegotiateResponse(contents)
@@ -225,6 +225,19 @@ func negotiate(
 		return negotiation{}, nil, err
 	}
 	return result, response.Cookies(), nil
+}
+
+func sanitizedTransportError(ctx context.Context, operation string, transportErr error) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%s: %w", operation, err)
+	}
+	if errors.Is(transportErr, context.Canceled) {
+		return fmt.Errorf("%s: %w", operation, context.Canceled)
+	}
+	if errors.Is(transportErr, context.DeadlineExceeded) {
+		return fmt.Errorf("%s: %w", operation, context.DeadlineExceeded)
+	}
+	return fmt.Errorf("%s failed", operation)
 }
 
 func negotiateEndpoint(raw string) (string, error) {

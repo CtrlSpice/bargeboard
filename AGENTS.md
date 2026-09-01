@@ -17,7 +17,16 @@ These instructions supplement `/Users/moya/Workspace/AGENTS.md` for work in this
 - Squash-merge pull requests so `main` receives one clean commit per feature.
 - Do not rewrite published branch history or force-push unless explicitly approved.
 
+## Architecture Documentation
+
+- `docs/architecture.md` is the canonical architecture for the active Go distribution. The TypeScript signal model in `README.md` is historical and non-authoritative.
+- Any commit that changes source semantics, source ownership, state reduction, OTLP representation, timestamps, cardinality, or signal failure policy must update `docs/architecture.md` in the same commit.
+- Clearly mark unresolved candidates as non-binding. Do not implement a pending signal mapping as if it were accepted.
+- Keep architecture changes useful to both human and agent contributors: record rationale, rejected alternatives, source limitations, implementation seams, and required verification.
+
 ## Verification
 
 - Run `make check` for Go changes.
+- Run `go test -race -count=1 ./receiver/f1livetimingreceiver` for F1 Live Timing receiver changes.
 - Run `npm run typecheck` while the TypeScript implementation remains in the repository.
+- Run `git diff --check` before committing or opening a pull request.
