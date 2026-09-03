@@ -174,6 +174,11 @@ Timestamp precedence is:
 Metric datapoints, exemplars, spans, span events, and logs MUST follow this
 precedence.
 
+A domain contract MAY reconstruct the measurement boundary of a completed
+interval from accepted source durations and publication times. That boundary is
+an estimated inner measurement time under item 1, not an arbitrary replacement
+for a source timestamp, and MUST satisfy the domain's chronology checks.
+
 Durations MUST be calculated as integer nanoseconds internally. Decimal source
 seconds MUST be parsed without an intermediate binary floating-point
 conversion. Metric duration values MAY be exported as `float64` seconds after
@@ -290,6 +295,8 @@ The accepted event names are:
 - `f1.pit.stop`
 - `f1.pit.exit`
 - `f1.position.changed`
+- `f1.lap_time.deleted`
+- `f1.lap_time.reinstated`
 
 `f1.gap.lap_deficit.changed`, `f1.position.exchange`, fastest-lap,
 personal-best, track-status, team-radio, typed penalty and investigation, and
@@ -347,6 +354,10 @@ All accepted Delta metrics use deterministic event-time intervals:
   when the session begins inside an aligned window.
 - A session-ending partial interval MUST use the observed session end as its
   `Timestamp` rather than extending racing data beyond the session.
+- Receiver shutdown first finalizes candidate-specific buffers, then flushes a
+  non-empty partial interval at that logical metric stream's greatest accepted
+  source watermark. Collector shutdown time MUST NOT extend the interval. A
+  partial interval whose end is not after its start is suppressed.
 - Empty intervals MUST NOT emit datapoints unless a candidate explicitly
   requires a coverage-proven zero.
 - Lap-derived observations use the completed-lap timestamp for window
@@ -835,6 +846,258 @@ non-resurrection; same and changed lap-boundary referents; and numeric/lap
 display-domain alternation. The fixture suite MUST include a stable lapped
 driver that temporarily receives numeric seconds.
 
+### Driver Lap And Sector Timing
+
+**Status: GREEN**
+
+`TimingData.NumberOfLaps` is the driver's current lap index and live lap
+boundary marker, not a completed-lap counter. A validated forward increment
+closes the prior lap and opens the next. The completed lap remains buffered for
+five seconds of source time because `LastLapTime`, sector 3, and speed values
+normally arrive late. A hard lifecycle boundary MAY finalize it sooner.
+
+The per-session lap-finalization watermark is the greatest accepted timestamp,
+after normal timestamp precedence, of any `TimingData` feed patch processed in
+wire order. It never moves backward. A pending lap with observed boundary `T`
+finalizes when that watermark is greater than or equal to `T + 5s`, or at a
+hard phase/session boundary or receiver shutdown. Patches from other topics do
+not advance this watermark. Reducer tests inject timestamps; the functional
+core never reads a clock. A late patch can enrich only a still-pending lap and
+cannot reopen an exported one.
+
+When one driver patch advances the current index from `N` to `N+1`,
+`LastLapTime` and prior-lap timing fields changed by that same atomic patch are
+first assigned to lap `N`; the boundary is then applied and lap `N+1` opens.
+During the buffer, a changed `LastLapTime` belongs to the most recently pending
+completed lap. A late sector 3 value belongs there only when its slot is empty
+and its accepted duration can end no later than the observed lap boundary while
+preserving chronology. Otherwise sector changes belong to the open lap. A
+second boundary finalizes any older pending lap before ownership moves forward.
+
+Snapshot state MUST NOT create historical laps. A backward count, unexplained
+jump, pre-pit pseudo out-lap, or phase reset that cannot be reconciled with
+session state is quarantined instead of rewriting exported spans. The current
+index projects as:
+
+```text
+Name:       f1.driver.current_lap
+Type:       Int64 Gauge
+Unit:       {lap}
+Series:     one per driver per session, plus phase in qualifying-like sessions
+Cadence:    on valid source change
+```
+
+The Gauge uses source publication time, hydrates once from a coherent snapshot,
+and leaves `StartTimestamp` unset. Bargeboard MUST NOT subtract one and label
+the result laps completed.
+
+A cold snapshot count `N` establishes only the current-state baseline and emits
+the Gauge; it creates no lap span. An unchanged first feed value creates no
+transition. The first validated feed increment to `N+1` provides a real
+boundary and opens lap `N+1`, but MUST NOT synthesize or close lap `N`. A direct
+feed count received without a snapshot baseline MAY open that current lap at
+its publication boundary. On reconnect, a coherent snapshot with the same
+count preserves an already observed open lap. A different count closes only an
+already observed child at its last known boundary as incomplete due to a
+coverage gap, establishes the replacement baseline, and synthesizes no missed
+laps. Subsequent processing follows the cold-baseline rule.
+
+Prior-lap timing changed in that first `N+1` feed patch MAY produce the
+last-value Gauges and exactly one histogram observation for lap `N`: the feed
+has observed its completion even though its start was outside coverage. This is
+a metric-only completed record with no synthetic lap/sector spans, trace
+events, or deterministic lap identity. Timing present only in the preceding
+snapshot remains hydration-only and MUST NOT enter histograms.
+
+Each accepted completed duration projects into both current state and a pace
+population:
+
+```text
+Name:       f1.driver.last_lap_time
+Type:       Double Gauge
+Unit:       s
+Series:     one per driver per session, plus phase in qualifying-like sessions
+Cadence:    one accepted completed-lap duration
+
+Name:       f1.driver.lap_time
+Type:       Delta ExplicitHistogram
+Unit:       s
+Series:     one per driver per session, qualifying phase when applicable, and
+            normalized tyre compound
+Window:     10 seconds
+Population: accepted completed-lap durations
+```
+
+The finalized completed-lap boundary is the Gauge `Timestamp` and assigns the
+histogram observation to its aligned Delta window; histogram datapoints retain
+the window start and end required by the Delta interval contract. Gauge
+`StartTimestamp` is unset. Snapshot hydration MAY emit only the latest-lap
+Gauge at Collector observation time; it MUST NOT replay histogram history. The
+Gauge does not heartbeat because the last completed duration remains valid
+until replaced, explicitly cleared, or removed by an authoritative snapshot. A
+lap without an accepted duration emits neither value but still has a span.
+
+Lap-time histogram upper bounds are:
+
+```text
+45, 50, 55, 60,
+61 through 120 in 1-second steps,
+125, 130, 135, 140, 150, 165, 180, 210, 240, 300
+```
+
+Underflow and overflow remain valid observations. Zero and negative durations
+are invalid. Exact sum, count, minimum, and maximum preserve source values. The
+histogram describes accepted physical durations, whether source-reported or
+strictly reconstructed, not only finally classified valid laps; a later
+sporting deletion cannot retract a finalized Delta observation.
+
+#### Lap Compound Dimension
+
+**Status: GREEN**
+
+Only the lap-time histogram adds `f1.tyre.compound`. It is the settled
+`TimingAppData.Stints[n].Compound` for the source stint that owns the lap under
+the lap-aligned in-lap/out-lap rule, selected when the lap finalizes. The
+dimension is mandatory and uses exactly one of:
+
+```text
+soft, medium, hard, intermediate, wet, test, unknown, other
+```
+
+Normalization trims ASCII surrounding whitespace and compares ASCII
+case-insensitively. `SOFT`, `MEDIUM`, `HARD`, `INTERMEDIATE`, and `WET` map to
+their lower-case values. A non-empty source value containing the standalone
+ASCII token `TEST` maps to `test`. Missing or explicitly empty compound maps to
+`unknown`; any other non-empty source value maps to `other`. Display spelling,
+source stint index, tyre-set identity, and inferred slick/intermediate/wet
+class MUST NOT become metric attributes.
+
+Compound assignment is mutable only while the completed lap is pending. A
+later correction MUST NOT revise an exported histogram observation. A cold
+metric-only completed record uses the coherent source stint assignment from the
+replacement snapshot and otherwise uses `unknown`; it MUST NOT infer compound
+from another driver or adjacent stint. Compound has no effect on the
+last-lap-time Gauge or lap span identity.
+
+Completed sectors follow the same dual representation:
+
+```text
+Name:       f1.driver.last_sector_time
+Type:       Double Gauge
+Unit:       s
+Series:     one per driver, session, phase when applicable, and sector 1..3
+
+Name:       f1.driver.sector_time
+Type:       Delta ExplicitHistogram
+Unit:       s
+Series:     one per driver, session, phase when applicable, and sector 1..3
+Window:     10 seconds
+Population: accepted completed-sector durations
+```
+
+Sector-time histogram upper bounds are:
+
+```text
+10, 12.5, 15,
+15.5 through 50 in 0.5-second steps,
+55, 60, 75, 90, 120
+```
+
+`f1.sector.number` is Int64 and exactly 1, 2, or 3. Snapshot hydration MAY emit
+latest-sector Gauges but no historical histogram observations. A completed
+sector's finalized boundary is the Gauge `Timestamp` and assigns its histogram
+observation to an aligned Delta window. Sector Gauge `StartTimestamp` is unset
+and the Gauges do not heartbeat.
+
+### Timing Repair And Boundaries
+
+**Status: GREEN with fixture gates**
+
+Timing duration strings use this exact ASCII grammar:
+
+```ebnf
+duration     = [ minutes, ":" ], seconds, ".", milliseconds ;
+minutes      = digit, { digit } ;
+seconds      = digit, { digit } ;
+milliseconds = digit, digit, digit ;
+digit        = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+```
+
+When minutes are present, seconds MUST be in `0..59`; otherwise seconds are an
+unbounded decimal component subject to integer-nanosecond overflow checks.
+Whitespace, signs, exponents, commas, alternate fractional precision, and
+trailing characters are invalid. The duration MUST be positive and fit in an
+Int64 nanosecond count. A missing field is no update, an explicit empty `Value`
+is no reported duration, and `PreviousValue` is reference state only. Parsed
+values MUST use integer arithmetic without an intermediate binary float.
+
+Every new lap starts with empty sector slots. Prior values are references, not
+new observations. At lap finalization, exactly one missing sector MAY be
+reconstructed only when the other two sectors and official `LastLapTime` are
+present and their positive integer-nanosecond remainder exactly equals the
+prior accepted value for that same sector. Blind carry-forward is forbidden.
+
+`f1.timing.value_quality` is a bounded trace attribute with values `reported`,
+`reconstructed`, or `conflict`; it MUST NOT be a metric attribute. A strictly
+reconstructed duration is accepted for its Gauge, histogram, and span exactly
+once and carries `reconstructed` on the owning span. A direct accepted value
+carries `reported`. Thus the metric populations include both accepted forms
+without splitting their series.
+
+Lap-duration precedence is:
+
+1. A valid explicit `LastLapTime.Value` is the preferred candidate.
+2. Explicit empty `Value` plus three accepted sectors MAY reconstruct the lap
+   by exact integer-nanosecond sum.
+3. An omitted `LastLapTime` plus three sectors MAY reconstruct only when their
+   sum exactly equals the prior accepted lap duration, proving a suppressed
+   repeat.
+4. If an explicit lap duration and three sectors disagree exactly, the lap-time
+   conflict rule overrides item 1: neither lap-duration Gauge nor histogram is
+   emitted. The lap span carries `f1.timing.value_quality=conflict` and MAY keep
+   the reported duration as a Double `f1.lap.reported_duration` in seconds for
+   diagnosis. Individually valid reported sector Gauges, histograms, and spans
+   survive; the conflict does not prove those measurements false.
+
+Wire timestamps are publication times, not transponder crossings. During the
+five-second buffer, the reducer forms candidate lap ends from the validated
+`NumberOfLaps` publication, sector 3 publication, sector 2 publication plus
+sector 3 duration, and sector 1 publication plus sectors 2 and 3. It selects the
+earliest candidate that preserves chronology and reconstructs contiguous
+sector boundaries from accepted durations. Reconstructed boundaries use
+`f1.time.quality=estimated`. Without sufficient durations, publication
+boundaries remain `publication_time`. A boundary MUST NOT move before lap start,
+overlap siblings, or revise an exported span.
+
+Live lap deletion and reinstatement are later sporting decisions. They emit
+correlated race-control logs and `f1.lap_time.deleted` or
+`f1.lap_time.reinstated` driver events when parsing is confident, but MUST NOT
+rewrite an exported lap or its histogram observation. Historical final
+projection MAY mark a lap deleted after resolving reinstatements.
+
+The indexed race-control record is the sole live event source and deduplication
+identity; timing rollback MUST NOT emit a duplicate event. The event timestamp
+is the record's payload event time, falling back through normal precedence. If
+the referenced lap is still buffered, the event belongs to that lap. Otherwise
+it belongs to the driver's active lap at the decision timestamp, then the open
+driver-session root. If no owning span remains open, only the correlated log is
+emitted. Reinstatement carries the deleted event's bounded source identity when
+the source provides one; otherwise canonical session, driver, phase-or-`none`,
+and lap number form the correlation. If the qualifying phase cannot be resolved
+uniquely, only the race-control log is emitted.
+
+Implementation requires compact public fixtures for pseudo out-laps, normal
+count increments, backward and jumped counts, phase resets, five-second late
+facts, exact repeated sectors and laps, explicit clears, timing conflicts,
+estimated boundaries, deletion and reinstatement ownership, and reconnect
+deduplication. Fixtures MUST distinguish cold and reconnect snapshots followed
+by unchanged, incremented, jumped, and phase-reset counts; missing, empty, and
+`PreviousValue` fields; every accepted lexical form; malformed, zero, negative,
+and overflowing durations; inclusive watermark finalization; late ownership;
+metric-only cold completion; shutdown partial-window flushing; reported versus
+reconstructed metric populations; compound normalization and ownership; and
+phase-safe deletion/reinstatement correlation.
+
 ## Pending Metric Candidates
 
 **Status: YELLOW**
@@ -842,8 +1105,8 @@ driver that temporarily receives numeric seconds.
 The following domains require the same candidate-by-candidate review before
 implementation:
 
-- Lap, sector, speed-trap, and personal-best timing.
-- Tyre compound, age, and stint state.
+- Speed-trap and personal-best timing.
+- Tyre age and change state.
 - Pit entry, exit, lane duration, stop duration, and visit counts.
 - Physical X/Y/Z position.
 - Session clock, lap count, and track state.
