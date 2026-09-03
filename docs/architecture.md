@@ -196,6 +196,10 @@ MUST NOT replay historical histogram observations, Sum deltas, span events,
 logs, laps, or state transitions. Indexed event collections MUST seed their
 seen identities so later replayed keys do not become new events.
 
+A candidate MAY explicitly hydrate an absolute Cumulative Sum from coherent
+snapshot state. That is a current cumulative value, not replay of historical
+Sum deltas; Delta Sum candidates remain snapshot-suppressed.
+
 Derived span, event, and log boundaries MUST use `f1.time.quality` with one of
 these bounded values:
 
@@ -294,6 +298,7 @@ The accepted event names are:
 - `f1.pit.entry`
 - `f1.pit.stop`
 - `f1.pit.exit`
+- `f1.pit.visit.incomplete`
 - `f1.position.changed`
 - `f1.lap_time.deleted`
 - `f1.lap_time.reinstated`
@@ -305,12 +310,14 @@ The accepted event names are:
 typed penalty and investigation, and final retirement events remain **YELLOW**
 until their domain contract is recorded below.
 
-Pit entry, stop, and exit MUST be represented by the accepted lap event names
-above. Pit activity belongs on the lap containing the observed timestamp.
-Events from one visit MUST share a bounded pit-visit identifier in event
-attributes. A stationary stop MAY additionally become a child span when
-reliable start and end times exist. A reported duration without reliable
-placement MUST remain an event attribute and metric observation.
+When a legal trace owner remains available, pit entry, stop, exit, and
+incomplete visit use the accepted event names above. Pit activity belongs on the
+lap containing the observed timestamp when that lap remains available. Events
+from one visit MUST share Int64 `f1.pit.visit.number`. A stationary stop MAY
+additionally become a child span only when an accepted future source supplies
+reliable start and end times. A reported duration without those boundaries MUST
+NOT create a span; its domain contract decides whether it is an event attribute
+or metric observation.
 
 ### Links
 
@@ -1435,6 +1442,151 @@ attribute. Event-candidate fixtures must additionally include short and
 multi-minute assignment corrections, source runs before and after pit exit, and
 the proposed next-key settlement invariant.
 
+### Pit Visits
+
+**Status: GREEN**
+
+Only feed-observed `TimingData.InPit` edges own broad pit-lane visits. The first
+valid Boolean establishes a baseline. Thereafter `false → true` opens a visit
+and emits `f1.pit.entry`; the matching `true → false` closes it and emits
+`f1.pit.exit`. Repeated values emit nothing. A drive-through is a complete visit
+even without stationary-stop detail or changed tyres.
+
+`PitOut`, source-run changes, coordinates, and line or sector `Stopped` values
+MAY corroborate diagnostics but MUST NOT open, close, or classify a pit visit.
+In particular, `Stopped=true` can describe an on-track stop or retirement and
+MUST NOT create a pit-stop event, duration, or span.
+
+An event-capable visit has a canonical positive one-based ordinal equal to the
+valid `NumberOfPitStops` explicitly present in the same atomic driver patch as
+its `false → true` edge. Sparse retained count is insufficient. The value MUST
+be greater than the prior accepted visit-count high-water mark; a larger jump is
+valid and represents missed coverage. After an observed out-of-pit baseline, an
+absent high-water mark compares as zero, so an explicit count of one can own the
+first covered visit. If count is omitted or malformed, the
+edge may still separate trace stints but opens an unnumbered visit that emits no
+pit events and cannot later be renumbered. A valid equal or regressed count is a
+replayed or stale edge: it establishes current `InPit` baseline state without
+opening any visit. A later correction MUST NOT change an assigned ordinal or
+exported correlation.
+
+When an atomic driver patch contains a lap boundary and an `InPit` edge, apply a
+`false → true` entry and its count before the lap boundary, but apply a
+`true → false` exit after the lap boundary. Thus entry remains on the closing
+in-lap and exit on the opened out-lap when both facts share one publication
+timestamp. Other fields retain normal sparse patch semantics.
+
+Every event in one visit carries Int64 `f1.pit.visit.number` and
+`f1.time.quality=publication_time`. Entry and exit use their respective
+`TimingData` feed publication timestamps. Event identity is canonical session,
+driver, visit ordinal, and event name; repeated sparse state and reconnect
+replay cannot emit duplicates. Owner precedence is the unexported lap
+containing the timestamp, then the nearest still-open ancestor whose interval
+contains that timestamp, then the open driver-session root. A post-entry stint
+cannot own an event backdated before its start. If no legal span remains open,
+the event is suppressed with a bounded diagnostic; state reduction still
+succeeds.
+
+The first valid `InPit` observation records a chronology watermark as well as a
+Boolean baseline. Every later edge, numbered or unnumbered, MUST have a
+publication timestamp strictly later than the greatest accepted `InPit`
+observation timestamp. Repeated state at a later timestamp advances that
+watermark without an event. An equal or earlier edge still updates
+arrival-ordered source state, but opens or closes no visit, separates no trace
+stint, discards any open visit with a bounded diagnostic, and marks continuity
+unsynchronized. The next valid observation later than the watermark establishes
+a new baseline without an edge. This prevents late wire patches from creating a
+chronologically reversed visit.
+
+A snapshot cannot create either edge. `NumberOfPitStops=C` seeds the projection
+high-water mark, and `InPit=true` means count `C` already includes the
+snapshot-visible unobserved visit. A snapshot-baseline `true` followed by a feed
+`false` establishes the out-of-pit baseline but emits no unmatched exit.
+
+Before closing or exporting any possible owner, an observed open numbered visit
+becomes incomplete on connection loss, authoritative driver removal, actual
+driver-root/session closure, or receiver shutdown. Simultaneous causes choose
+`session_end`, then `driver_removed`, then `shutdown`, then `disconnect`. The
+event emits exactly once at the original entry publication timestamp, with the
+same visit number and String `f1.pit.visit.incomplete_reason` using exactly
+those four values. It invents neither exit timestamp nor duration. `Finalised`
+waiting alone is not closure. Shutdown is not also disconnect. Event emission
+precedes child and root export so owner selection remains legal.
+
+An invalid `InPit` field is quarantined under normal reducer rules and emits no
+racing signal. It invalidates visit continuity; the next valid value establishes
+a new baseline and any abandoned open visit is discarded with a bounded
+operational diagnostic, not an incomplete racing event. A reconnect snapshot
+cannot resume an incomplete or invalidated visit. Unnumbered visits likewise
+close or discard without pit events.
+
+### Pit-Lane Visit Count
+
+**Status: GREEN**
+
+`TimingData.NumberOfPitStops` owns the source's absolute broad-visit count:
+
+```text
+Name:           f1.driver.pit_lane_visits
+Type:           Int64 Sum
+Unit:           {visit}
+Temporality:    Cumulative
+Monotonic:      true
+Series:         one per driver per session
+Source value:   TimingData.NumberOfPitStops
+```
+
+The accepted JSON token is exactly `0` or a non-zero ASCII digit followed by
+zero or more digits, with no sign, decimal point, exponent, or leading zero. It
+must fit Int64. The value counts broad pit-lane visits, not tyre changes or
+stationary service.
+
+`StartTimestamp` is the feed-observed canonical session start and remains stable
+across reconnect. Until that start exists, count state is retained but no Sum
+datapoint is legal; neither a scheduled start nor snapshot observation time may
+replace it. A retained pre-start value MAY emit at the observed start timestamp.
+
+Feed datapoints use publication time. On cold projection, a coherent snapshot
+MUST hydrate the absolute value, including zero, at Collector observation time
+only when the observed session start is known. The accepted source high-water
+mark, last exported value, last datapoint timestamp, and deferred value are
+distinct projection state and survive reconnect topic replacement.
+
+A reconnect snapshot lower than the source high-water mark is retained as
+current source state but suppressed. An equal or higher value emits at Collector
+observation time only when it is greater than the last exported value, restores
+availability, or is the deferred unexported value, and only when that observation
+time is later than the prior datapoint. Otherwise it is silent or remains
+deferred. Snapshot hydration is current cumulative state, not replayed deltas.
+
+A forward jump emits the new absolute value but MUST NOT synthesize intermediate
+pit events. A decrease violates monotonicity and is suppressed; later values do
+not emit until they exceed the prior accepted high-water mark. Topic deletion,
+authoritative snapshot absence, and invalid current state make the source value
+unavailable without clearing the metric high-water mark or emitting a
+tombstone. Restoration at the same high-water value emits only when availability
+changed and its timestamp is later than the prior datapoint.
+
+Per series, one atomic normalized batch coalesces updates with the same source
+timestamp and later wire order wins. A higher arrival-ordered count whose
+publication timestamp is not later than the prior datapoint updates source and
+high-water state but is deferred rather than emitted out of chronological order.
+The next valid same-or-higher value at a later timestamp emits the current
+absolute count, even when its numeric value repeats. Ordinary repeated values
+emit nothing.
+
+The metric has only common racing and driver identity. Phase, lap, trace stint,
+source run, and visit number MUST NOT become attributes.
+
+Implementation requires compact public fixtures for initial false and true
+baselines; normal visits; drive-throughs; repeated edges; count zero, normal
+increments, jumps, regressions, deletion, and recovery; missing count on an
+edge; snapshot hydration; disconnect during each half of a visit; driver
+removal; invalid topic state; lifecycle and shutdown closure; `Stopped=true`
+outside the pit; deterministic ordinal assignment; event ownership and dedupe;
+and exact OTLP Sum temporality, start timestamps, attributes, and independent
+trace/metric failure.
+
 ## Pending Metric Candidates
 
 **Status: YELLOW**
@@ -1443,7 +1595,7 @@ The following domains require the same candidate-by-candidate review before
 implementation:
 
 - Tyre-change event settlement.
-- Pit entry, exit, lane duration, stop duration, and visit counts.
+- Pit lane duration and detailed stationary-stop reports.
 - Physical X/Y/Z position.
 - Session clock, lap count, and track state.
 - Weather.
