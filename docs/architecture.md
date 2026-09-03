@@ -305,10 +305,12 @@ The accepted event names are:
 - `f1.personal_best`
 - `f1.personal_best.revised`
 - `f1.fastest_lap`
+- `f1.session.status.changed`
+- `f1.track_status.changed`
 
-`f1.gap.lap_deficit.changed`, `f1.position.exchange`, track-status, team-radio,
-typed penalty and investigation, and final retirement events remain **YELLOW**
-until their domain contract is recorded below.
+`f1.gap.lap_deficit.changed`, `f1.position.exchange`, team-radio, typed penalty
+and investigation, and final retirement events remain **YELLOW** until their
+domain contract is recorded below.
 
 When a legal trace owner remains available, pit entry, stop, exit, and
 incomplete visit use the accepted event names above. Pit activity belongs on the
@@ -1951,6 +1953,153 @@ increments, `0/0` reset/restore, current and total regressions, incoherent
 pairs, jumps, snapshots, reconnects, equal timestamps, exact ten-second
 heartbeats, lifecycle suspension, and every forbidden synthetic lap.
 
+### Session And Track Transitions
+
+**Status: GREEN**
+
+`SessionData.StatusSeries` owns session-status and track-status transitions.
+Each indexed record has strict RFC3339 `Utc` and may carry `SessionStatus`,
+`TrackStatus`, or both. Direct `SessionStatus` and `TrackStatus` topics are
+current-state mirrors for snapshot reconciliation and timer activation; their
+feed patches MUST NOT independently duplicate logs or span events.
+
+`StatusSeries` keys are canonical non-negative decimal indexes. A snapshot array
+or numeric-key map completely replaces indexed state and seeds each record's two
+independent consumed bits. A feed array completely replaces state without
+replaying existing records; a feed numeric-key map patches named indexes.
+Records reduce recursively. New or newly completed feed records process in
+ascending index order, with wire order deciding later patches to one index. If
+one record completes both kinds, TrackStatus processes first and SessionStatus
+second so a terminal lifecycle action cannot remove the track event's legal lap
+owner.
+
+A transition candidate requires an explicit accepted status field and coherent
+record `Utc`; a later patch that supplies the missing half MUST complete it.
+Session and track fields in one record are independent candidates. The index
+and kind are transport-consumed at most once, while emitted transition identity
+is semantic: canonical session, status kind, Unix-nanosecond `Utc`, prior
+canonical state-or-`none`, and current canonical state. Snapshots reduce their
+indexed history in order to seed both transport and directed-edge identities,
+but never emit it.
+
+Each status kind also keeps the greatest accepted series `Utc`. A candidate
+older than that watermark is a stale replay: it seeds identity but changes no
+canonical current state, continuity, lifecycle, log, or event. Equal timestamps
+remain legal and process in index/wire order, which preserves same-time
+`Finalised` then `Ends`. Each distinct directed state edge can emit at most once
+at one exact UTC. A previously seen edge under a fresh index is semantic replay:
+it updates canonical current state and continuity in source order but performs
+no lifecycle action, log, or event. This permits a first `A → B → A` burst while
+suppressing the same cycle when re-appended. A repeated current state advances
+the watermark without becoming an edge. Combined with the older-UTC rule, this
+suppresses old transition sequences re-appended under fresh indexes.
+
+A later correction to an already consumed index/kind updates retained
+diagnostic state only. The originally consumed UTC and state remain canonical
+for current transition state, previous-state attributes, lifecycle, and emitted
+telemetry; correction cannot retract or replace them. An unconsumed sibling kind
+in the same record can still complete independently from current record state.
+
+The complete subscription snapshot is staged at one Collector observation
+time. Direct current mirrors replace atomically and SHOULD agree with the latest
+corresponding valid series values. A mismatch suppresses snapshot-derived timer
+activation and produces a bounded diagnostic; it does not replay or retract
+series history. Feed-series transitions remain authoritative even when mirror
+updates arrive before or after them. Direct-topic fallback when the indexed
+series is unavailable remains **YELLOW**.
+
+#### Session Status
+
+Accepted `SessionStatus` values are exact and case-sensitive:
+
+```text
+Inactive, Started, Aborted, Finished, Finalised, Ends
+```
+
+The direct topic's supplemental string field named `Started` is retained only
+for diagnosis and MUST NOT own lifecycle. For each accepted state change, the
+projector emits one session-level log with body
+`f1.session.status.changed`. It also emits an event of that name on every legal
+unexported driver-session root whose interval contains the transition. The log
+and event carry String `f1.session.status`, optional String
+`f1.session.previous_status`, and `f1.time.quality=observed`. The log
+`Timestamp` and event timestamp use record `Utc`; the log
+`ObservedTimestamp` uses Collector observation time. Session logs have no
+arbitrary driver trace correlation. Root-event dedupe extends the semantic
+transition identity with driver and root identity.
+
+A repeated canonical state in a new record updates current state but is not a
+transition. The first feed record after an empty baseline MUST emit with no
+previous-status attribute because its indexed UTC is direct transition
+evidence. Unknown values break transition continuity and emit only a bounded
+diagnostic; the next known value establishes a baseline without a racing
+transition.
+
+Lifecycle ordering is:
+
+- First `Started` opens eligible driver roots at record `Utc`, then attaches the
+  status event. A later `Started` resumes the same session and phase.
+- `Inactive` is an intermission marker and creates neither root nor phase.
+- `Aborted` records interruption but closes no driver root and does not infer an
+  outcome or qualifying phase.
+- `Finished` records competitive stop while retaining roots for trailing facts.
+- `Finalised` attaches its events before practice/qualifying closure or
+  race-like final-result waiting begins.
+- `Ends` attaches its events before the terminal feed closure and export.
+
+These refine, but do not replace, the existing trace-lifecycle rules.
+`TimingData.SessionPart` remains the only qualifying-phase owner. There is no
+session-status Gauge, numeric enum metric, or one-hot status metric.
+
+#### Track Status
+
+Accepted series values and their direct mirror pairs are:
+
+| Code | Direct `Message` / series `TrackStatus` | Canonical state |
+|---:|---|---|
+| `1` | `AllClear` | `all_clear` |
+| `2` | `Yellow` | `yellow` |
+| `4` | `SCDeployed` | `safety_car` |
+| `5` | `Red` | `red` |
+| `6` | `VSCDeployed` | `virtual_safety_car` |
+| `7` | `VSCEnding` | `virtual_safety_car_ending` |
+
+Direct `Status` is the exact canonical decimal code string. An unknown series
+value is not guessed: it advances the series UTC watermark, breaks authoritative
+track-transition continuity, and produces a bounded diagnostic. The next known
+series value establishes a baseline without log or event; a later change emits
+normally. An unknown or mismatched direct code/message pair invalidates only
+snapshot mirror coherence and cannot alter authoritative feed-series continuity.
+Historical or future code `3` remains unclassified until fixture-backed.
+
+Each accepted state change emits one session-level log with body
+`f1.track_status.changed`. It carries Int64 `f1.track_status.code`, String
+`f1.track_status.state`, optional Int64 `f1.track_status.previous_code`, optional
+String `f1.track_status.previous_state`, and
+`f1.time.quality=observed`. Timestamps follow the session-status log contract.
+A repeated canonical state is not a transition. The first known feed value
+after an empty baseline emits with no previous attributes; after continuity was
+broken by an unknown value, the first known value is baseline-only.
+
+The same transition emits `f1.track_status.changed` on each driver's active,
+unexported lap only when that lap contains record `Utc`. The event carries the
+same current, optional previous, and time-quality attributes as the log. Event
+identity extends the semantic transition identity with driver and owning lap
+identity. There is no root, phase, or stint fallback and no delayed queue; when
+no active lap owns the timestamp, only the global log remains. A global state
+MUST NOT create cross-car links. Race-control flag records may emit their own
+curated logs but cannot duplicate this transition event. There is no
+track-status Gauge.
+
+Implementation requires compact public fixtures for snapshot array/map and feed
+array/map forms; partial records; same-index completion/correction; same-time
+ordered indexes; all six session states; qualifying and abort/resume cycles;
+same-time `Finalised`/`Ends`; direct supplemental `Started`; all six accepted
+track pairs; unknown, mismatched, and code-3 values; snapshot current/history
+reconciliation; reconnect dedupe; first-known and repeated state; lifecycle
+ordering; root and active-lap ownership; no-owner logs; and independent
+trace/log delivery failure.
+
 ## Pending Metric Candidates
 
 **Status: YELLOW**
@@ -1961,7 +2110,7 @@ implementation:
 - Tyre-change event settlement.
 - Dedicated pit-topic fallbacks and physical stationary spans.
 - Physical X/Y/Z position.
-- Session status, track status, and cars-running state.
+- Cars-running state.
 - Weather.
 - Race-control, penalty, radio, result, grid, and championship facts.
 - Explainable pace, consistency, degradation, and pit-loss analysis.
