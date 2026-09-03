@@ -1798,6 +1798,159 @@ population, historical OpenF1 reconciliation, physical stationary placement,
 and stationary-stop spans remain **YELLOW**. They MUST NOT be implemented from
 the GREEN contracts above.
 
+### Session Clock
+
+**Status: GREEN**
+
+`ExtrapolatedClock` owns the displayed session countdown:
+
+```text
+Name:       f1.session.clock.remaining
+Type:       Int64 Gauge
+Unit:       s
+Series:     one per session
+Cadence:    each accepted anchor and each newly reached extrapolated second
+```
+
+A complete source anchor has explicit `Utc` and `Remaining` in the same feed
+patch plus coherent reduced `Extrapolating` state. `Utc` uses strict RFC3339 and
+normalizes to UTC. `Remaining` uses this exact ASCII grammar:
+
+```ebnf
+remaining = digit, digit, ":", minute, ":", second ;
+minute    = digit, digit ;
+second    = digit, digit ;
+digit     = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+```
+
+Minutes and seconds MUST each be in `0..59`; the two-digit hour component is
+in `0..99`. Conversion to non-negative Int64 seconds uses integer arithmetic.
+`Extrapolating` is a JSON Boolean. Missing feed fields retain reduced state,
+but a sparse patch without explicit `Utc` and `Remaining` does not create a new
+projection anchor. An authoritative snapshot requires all three fields.
+
+For accepted anchor time `A`, remaining seconds `R`, and integer `n >= 0`:
+
+```text
+timestamp = A + n seconds
+value     = R             when Extrapolating is false
+value     = max(0, R - n) when Extrapolating is true
+```
+
+The anchor itself emits once at `A`. While extrapolating, the imperative shell
+feeds timer observations into the single-owner reducer, which emits at most the
+latest newly reached source second. Delayed scheduling, reconnect, or process
+suspension MUST NOT backfill skipped seconds. Zero emits once and then stops
+until another complete anchor. A paused anchor emits its source value once and
+has no periodic heartbeat.
+
+Extrapolation runs while connected, topic-synchronized, and
+`Extrapolating=true`. Session status MUST NOT override that source bit:
+`Inactive`, `Aborted`, `Finished`, and `Finalised` do not themselves pause or
+resume the clock. Disconnect, receiver shutdown, and `Ends` suspend the schedule
+without emitting zero. A coherent reconnect snapshot can resume immediately
+from its current complete anchor; skipped disconnect seconds are represented
+only by the one computed snapshot value.
+
+A coherent snapshot computes exactly one current value at Collector observation
+time: if extrapolating, subtract the whole non-negative seconds elapsed since
+`Utc`, clamp at zero, and replay no intermediate points. If `Utc` is in the
+future, retain state and delay projection until that instant rather than
+inventing a clock-skew tolerance. The first post-snapshot timer timestamp MUST
+be later than the snapshot datapoint.
+
+Gauge `StartTimestamp` is unset. Full anchors sharing one timestamp coalesce in
+wire order only within one normalized callback batch and flush at that batch's
+end. If a later callback carries the same anchor timestamp, its first point
+cannot revise the emitted datapoint; it updates schedule state and affects the
+next derived second. An anchor whose derived datapoint timestamp is earlier than
+the prior emitted point likewise may replace source/schedule state, but cannot
+emit backward. Projection resumes only at a derived second later than the prior
+timestamp. The `A+n` tick is an accepted reconstructed inner measurement
+boundary under the Time Model, not Collector observation time. Snapshot
+hydration remains the explicit exception at observation time. There is no
+arbitrary freshness expiry because sparse anchors are normal source behavior.
+Scheduled session time and `Heartbeat` MUST NOT fill a missing clock anchor.
+
+Sparse `Utc`/`Remaining` re-anchoring, an isolated `Extrapolating` transition,
+and an arbitrary source-versus-Collector skew tolerance remain **YELLOW**. They
+MUST NOT create datapoints until fixture-backed.
+
+### Session Lap State
+
+**Status: GREEN**
+
+`LapCount` owns race-like session lap state. Projection is allowed only for
+canonical `race` and `sprint`; endpoint presence cannot enable it in practice or
+qualifying-like sessions.
+
+```text
+Name:       f1.session.current_lap
+Type:       Int64 Gauge
+Unit:       {lap}
+Series:     one per session
+Cadence:    source change plus 10-second current-state heartbeat
+
+Name:       f1.session.intended_total_laps
+Type:       Int64 Gauge
+Unit:       {lap}
+Series:     one per session
+Cadence:    source change only
+```
+
+`CurrentLap` and `TotalLaps` are JSON integer tokens using `0` or a non-zero
+ASCII digit followed by digits, with no sign, leading zero, fraction, exponent,
+string coercion, or Int64 overflow. Feed objects reduce sparsely; a snapshot
+independently replaces or removes each field. Both Gauges are
+correction-tolerant and MAY decrease. Neither is a counter.
+
+A reduced `0/0` pair, whether reached in one or several patches, is the source's
+unavailable marker and clears both projected values without zero datapoints.
+With only one known field, a positive value can project independently;
+`CurrentLap=0` alone and `TotalLaps=0` alone are unavailable. When both are
+known, `CurrentLap=0, TotalLaps>0` is valid, while `CurrentLap>0,
+TotalLaps=0` or `CurrentLap>TotalLaps` suppresses both until corrected. A
+forward jump emits only new current state and MUST NOT create intermediate laps,
+lap spans, or completed-lap observations.
+
+Feed changes use the `LapCount` publication timestamp. A coherent cold or
+reconnect snapshot hydrates each currently available field at Collector
+observation time. Gauge `StartTimestamp` is unset. Equal-timestamp changes
+coalesce only within one normalized callback batch and flush at batch end. A
+feed, snapshot, or heartbeat timestamp not later than that series' prior emitted
+timestamp updates current state but is deferred. The next later source
+publication, snapshot observation, or current-lap heartbeat emits the latest
+deferred value; intended total waits because it has no heartbeat. Collector UTC
+moving backward never changes the monotonic timer schedule and cannot produce a
+backward Gauge timestamp.
+
+The current-lap heartbeat starts from either a feed-observed first `Started` or
+a coherent `SessionStatus` snapshot of `Started` or `Aborted`. It continues
+through later `Aborted` and `Inactive` interruptions and stops on
+disconnect, topic unsynchronization, `Finished`, `Finalised`, `Ends`, or session
+replacement. A cold `Inactive` snapshot does not prove prior start and cannot
+enable the schedule. Reconnect preserves prior started state and resumes the
+schedule from coherent current snapshot state without replay.
+
+The heartbeat emits one current value every ten seconds of Collector monotonic
+time, uses Collector wall time as the datapoint timestamp, and never backfills
+missed ticks. A source change resets the next deadline. Intended total has no
+heartbeat.
+
+Both metrics have only common session identity. Driver, leader, phase, status,
+heartbeat, and source delivery mode MUST NOT become attributes. Snapshot
+absence or authorized deletion clears current state without a tombstone. This
+topic MUST NOT be derived from driver `TimingData.NumberOfLaps` or
+`SessionData.Series`.
+
+Implementation requires compact public fixtures for complete and sparse clock
+anchors; pause, resume, zero, future/backward/equal `Utc`, scheduler delay,
+disconnect, snapshot extrapolation, and malformed or overflowing remaining
+time; plus race and sprint lap state, the stale qualifying endpoint, normal
+increments, `0/0` reset/restore, current and total regressions, incoherent
+pairs, jumps, snapshots, reconnects, equal timestamps, exact ten-second
+heartbeats, lifecycle suspension, and every forbidden synthetic lap.
+
 ## Pending Metric Candidates
 
 **Status: YELLOW**
@@ -1808,7 +1961,7 @@ implementation:
 - Tyre-change event settlement.
 - Dedicated pit-topic fallbacks and physical stationary spans.
 - Physical X/Y/Z position.
-- Session clock, lap count, and track state.
+- Session status, track status, and cars-running state.
 - Weather.
 - Race-control, penalty, radio, result, grid, and championship facts.
 - Explainable pace, consistency, degradation, and pit-loss analysis.
