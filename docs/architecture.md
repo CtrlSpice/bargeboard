@@ -284,21 +284,17 @@ correlated log and result metrics; an exported root MUST NOT be resent.
 ### Events
 
 Instantaneous or insufficiently bounded racing facts SHOULD be span events.
-The pit event names are accepted; the remaining names are candidates pending
-their domain review:
+The accepted event names are:
 
 - `f1.pit.entry`
 - `f1.pit.stop`
 - `f1.pit.exit`
 - `f1.position.changed`
-- `f1.position.exchange`
-- `f1.fastest_lap`
-- `f1.personal_best`
-- `f1.track_status.changed`
-- `f1.penalty.noted`
-- `f1.penalty.applied`
-- `f1.team_radio`
-- `f1.retirement`
+
+`f1.gap.lap_deficit.changed`, `f1.position.exchange`, fastest-lap,
+personal-best, track-status, team-radio, typed penalty and investigation, and
+final retirement events remain **YELLOW** until their domain contract is
+recorded below.
 
 Pit entry, stop, and exit MUST be represented by the accepted lap event names
 above. Pit activity belongs on the lap containing the observed timestamp.
@@ -699,6 +695,146 @@ honest cause information. A state change is not necessarily an on-track
 overtake. A field position histogram is **RED** because a healthy classification
 is already approximately one car in every position.
 
+### Driver Timing Gap And Interval
+
+**Status: GREEN for elapsed Gauges and lap boundary attributes; YELLOW for
+lap-deficit projection**
+
+Timing strings use a versioned, exact grammar. Existing spellings MUST NOT
+change meaning when later evidence expands the grammar. Parsers MUST NOT trim,
+case-fold, substring-match, manufacture seconds for lap deficits, or use numeric
+sentinels.
+
+```ebnf
+value               = elapsed | live_lap_deficit | leader_lap |
+                      terminal_lap_token | clear ;
+elapsed             = "+", digit, { digit }, ".", digit, digit, digit ;
+live_lap_deficit     = positive_integer, " L" ;
+leader_lap           = "LAP ", nonnegative_integer ;
+terminal_lap_token   = positive_integer, "L" ;
+clear                = "" ;
+nonnegative_integer  = "0" | positive_integer ;
+positive_integer     = nonzero_digit, { digit } ;
+digit                = "0" | nonzero_digit ;
+nonzero_digit        = "1" | "2" | "3" | "4" | "5" |
+                       "6" | "7" | "8" | "9" ;
+```
+
+The parser returns one of `ElapsedMilliseconds`, `LiveLapDeficit`, `LeaderLap`,
+`TerminalLapToken`, `Cleared`, or `Unknown`. `+44.163`, `1 L`, `LAP 22`, `1L`,
+and the empty string are distinct. `TerminalLapToken` remains quarantined from
+canonical projection until its business semantics are proven. A missing field
+is feed-patch absence, not a grammar value; snapshot absence follows the
+authoritative replacement contract. `Catching` remains internal because its
+business meaning is undocumented.
+
+Values that exceed `time.Duration` after exact conversion or signed Int64 lap
+range classify as `Unknown` with a bounded overflow diagnostic. Elapsed source
+milliseconds MUST convert exactly to integer nanoseconds before entering
+reducer state; binary floating point is used only at OTLP projection.
+
+```text
+Name:       f1.driver.gap_to_leader
+Type:       Double Gauge
+Unit:       s
+Series:     one per driver per race or sprint session
+
+Name:       f1.driver.interval_to_ahead
+Type:       Double Gauge
+Unit:       s
+Series:     one per driver per race or sprint session
+
+Name:       f1.driver.laps_behind_leader
+Type:       Int64 Gauge
+Unit:       {lap}
+Status:     YELLOW
+
+Name:       f1.driver.lap_interval_to_ahead
+Type:       Int64 Gauge
+Unit:       {lap}
+Status:     YELLOW
+```
+
+Practice and qualifying-like `TimeDiffToFastest` fields are a different domain
+and are not projected by this contract. Elapsed values are non-negative.
+Leader state is confirmed only when one driver has `Position == 1`, its parsed
+gap is `LeaderLap(N)` with positive `N`, and `LapCount.CurrentLap == N`.
+Confirmed leader state emits zero gap and clears retained interval state even
+when its sparse patch omits the interval, because the leader has no car ahead.
+The zero uses the confirming feed publication timestamp, or Collector
+observation time for a coherent snapshot, and follows the same 15-second
+freshness and ten-second observation rules as elapsed values. Unknown, stale,
+cleared, and unsupported values remain absent.
+
+Archive evidence proves numeric seconds and `N L` are display domains rather
+than stable completed-lap deficit. They can alternate while leader and driver
+lap counts remain unchanged. Numeric seconds MUST NOT independently emit zero
+laps behind, and one `N L` MUST NOT independently emit a lap-deficit Gauge or
+event. Future promotion requires agreement between the parsed token,
+`LapCount.CurrentLap`, a stable position-one driver, and comparable driver
+`NumberOfLaps` boundaries. Change events require consecutive confirmed
+boundaries. Lap interval additionally requires stable ahead-car identity. These
+rules remain non-binding until fixtures and review make them GREEN.
+
+Each elapsed field has independent freshness. A valid feed publication emits at
+the source publication timestamp. Freshness expires 15 seconds after the
+receiver observed that publication, using a monotonic Collector clock rather
+than source timestamp arithmetic. While fresh, a ten-second current-state
+observation MUST emit at Collector observation time. An explicit empty string
+invalidates the field immediately; patch omission retains it only until expiry.
+Snapshot hydration emits one valid current-state observation and starts
+freshness at Collector observation time. Clear and expiry stop future
+datapoints; they emit neither zero nor a synthetic tombstone. Gauge
+`StartTimestamp` is always unset.
+
+Every elapsed value is bound to a referent at publication. Gap requires one
+uniquely identified current leader. Interval requires one uniquely identified
+car immediately ahead in the current classification. A leader change
+invalidates every retained gap until each driver receives a fresh value. A
+classification change invalidates each interval whose ahead-car identity
+changed. Cleared leader interval state MUST NOT reappear when that driver later
+loses the lead; a fresh source interval is required. Invalidated referent state
+emits no heartbeat.
+
+Lap spans record fresh elapsed boundary state when available:
+
+```text
+f1.lap.gap_to_leader.start_seconds
+f1.lap.gap_to_leader.end_seconds
+f1.lap.gap_to_leader.change_seconds
+f1.lap.interval_to_ahead.start_seconds
+f1.lap.interval_to_ahead.end_seconds
+f1.lap.interval_to_ahead.change_seconds
+```
+
+Boundary selection occurs once at lap finalization. For each finalized lap
+start or end timestamp, select the latest valid source publication at or before
+that timestamp from bounded timing history; equal timestamps use later wire
+order. Publications after the boundary do not revise it. The selected value
+must have been fresh at that boundary and have a known leader or ahead-car
+referent. A change is present only when both boundaries use elapsed seconds and
+the referent identity is unchanged. Sparse official timing MUST NOT become a
+time-weighted mean. A seconds/laps transition is retained internally, not
+coerced into one numeric delta.
+
+The YELLOW `f1.gap.lap_deficit.changed` candidate would carry Int64
+`f1.gap.previous_laps_behind`, `f1.gap.current_laps_behind`, and signed
+`f1.gap.lap_delta`, plus `f1.time.quality=publication_time`. Stale previous
+state, numeric/token domain switches, leader changes, first confirmation, and
+snapshot hydration MUST NOT create the event.
+
+`LAP N` supports leader timing semantics and consistency checks but MUST NOT
+project a lap-count metric. The dedicated `LapCount` topic owns session lap
+state.
+
+Implementation is blocked until compact public fixtures cover snapshots and
+feed patches; every grammar variant; clear, missing, and overflow cases; leader
+confirmation agreement and mismatch; leader suppression; independent field
+freshness; leader and ahead-car identity invalidation; interval
+non-resurrection; same and changed lap-boundary referents; and numeric/lap
+display-domain alternation. The fixture suite MUST include a stable lapped
+driver that temporarily receives numeric seconds.
+
 ## Pending Metric Candidates
 
 **Status: YELLOW**
@@ -706,7 +842,6 @@ is already approximately one car in every position.
 The following domains require the same candidate-by-candidate review before
 implementation:
 
-- Timing gap and interval, including lapped-driver values.
 - Lap, sector, speed-trap, and personal-best timing.
 - Tyre compound, age, and stint state.
 - Pit entry, exit, lane duration, stop duration, and visit counts.
