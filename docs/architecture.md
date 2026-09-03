@@ -191,14 +191,17 @@ MUST NOT replay historical histogram observations, Sum deltas, span events,
 logs, laps, or state transitions. Indexed event collections MUST seed their
 seen identities so later replayed keys do not become new events.
 
-Derived boundaries MUST use `f1.time.quality` with one of these bounded values:
+Derived span, event, and log boundaries MUST use `f1.time.quality` with one of
+these bounded values:
 
 - `observed` for a direct source event or measurement boundary.
 - `publication_time` when only publication placement is known.
 - `estimated` for a bounded derivation from source facts.
 
 The delivery mode `feed` or `snapshot` is not time quality and MUST NOT become a
-metric dimension.
+metric dimension. Metric datapoint attributes all participate in series
+identity, so metrics MUST NOT add `f1.time.quality`; each metric candidate
+instead fixes its accepted timestamp and derivation contract.
 
 ## Trace Model
 
@@ -319,8 +322,8 @@ the field.
 
 Completed child spans MAY be exported before their still-open parent stint or
 session span. Parent and trace identifiers MUST remain stable for the session.
-The exact deterministic identity algorithm is **YELLOW** and MUST be decided
-before trace projection is implemented.
+The deterministic identity algorithm is defined under OTLP Projection and MUST
+be shared by every projector.
 
 A completed lap MUST remain mutable for five seconds of source time so normally
 late lap, sector, and speed-trap facts can attach before its single export. Hard
@@ -334,7 +337,7 @@ span.
 
 **Status: GREEN**
 
-All accepted Delta histograms use deterministic event-time intervals:
+All accepted Delta metrics use deterministic event-time intervals:
 
 - Ten-second windows are aligned to Unix-epoch boundaries in UTC.
 - The first interval starts at the observed session start and ends at the first
@@ -348,14 +351,19 @@ All accepted Delta histograms use deterministic event-time intervals:
   when the session begins inside an aligned window.
 - A session-ending partial interval MUST use the observed session end as its
   `Timestamp` rather than extending racing data beyond the session.
-- Empty intervals MUST NOT emit datapoints.
+- Empty intervals MUST NOT emit datapoints unless a candidate explicitly
+  requires a coverage-proven zero.
 - Lap-derived observations use the completed-lap timestamp for window
   assignment.
 
 Inner samples in one source batch MUST be stably ordered by source timestamp
 before windowing. Equal timestamps preserve original wire order, and later wire
 order wins when one resampling tick has multiple candidates. The greatest
-accepted source timestamp is the stream watermark. A window is final when the
+accepted source timestamp is the watermark for one logical metric stream,
+identified by session, authoritative source, and instrument. It is shared
+across that instrument's series so an inactive driver cannot prevent
+finalization. Candidate-specific buffering, such as the five-second lap timing
+delay, MUST occur before advancing this watermark. A window is final when the
 watermark passes its end. An observation for an
 already-final window MUST NOT revise or overlap that Delta datapoint; it is a
 late observation and MUST be excluded with a bounded operational diagnostic.
@@ -403,11 +411,38 @@ merge resolution and tests.
 
 ### Series Cardinality
 
-Metric series MAY use bounded identity needed for selection:
+Racing metric datapoints MUST have exactly these common identity attributes:
 
-- Session key.
-- Driver number and acronym for explicitly per-driver metrics.
-- Data source.
+| Attribute | Type | Contract |
+|---|---|---|
+| `f1.session.key` | Int64 | Positive Live Timing `SessionInfo.Key` or matching OpenF1 `session_key`. |
+| `f1.season.year` | Int64 | Four-digit session season. |
+| `f1.session.type` | String | Canonical broad type from Session Coverage. |
+| `f1.session.name` | String | Canonical specific name from Session Coverage. |
+| `f1.data.source` | String | `livetiming` or `openf1`. |
+
+An OpenF1 handoff MUST verify that its `session_key` equals the Live Timing key
+before sharing trace identity. A missing or conflicting key blocks cross-source
+correlation.
+
+Instruments add only their declared conditional attributes:
+
+| Instrument population | Additional attributes and types |
+|---|---|
+| Per-driver | `f1.driver.number` Int64, `f1.driver.acronym` String |
+| Qualifying timing | `f1.session.phase` String |
+| Sector timing | `f1.sector.number` Int64 |
+| Speed-trap timing | `f1.speed_trap.location` String |
+| Lap-time histogram | `f1.tyre.compound` String |
+| Constructor standings | `f1.constructor.name` String |
+
+Driver acronym and constructor name MUST be normalized and frozen before their
+first metric datapoint for the session. A driver acronym is the validated
+uppercase ASCII source acronym; a constructor name is the first non-empty
+validated source display name. Session key, season, canonical type, canonical
+name, and selected source authority also freeze at first racing signal. A later
+conflict updates unexported trace or log state where safe and emits a bounded
+diagnostic, but MUST NOT split an existing metric series.
 
 Metric series MUST NOT use:
 
@@ -419,9 +454,30 @@ Metric series MUST NOT use:
 Lap, stint, and correlation identity belongs in spans and exemplar filtered
 attributes.
 
-Exact resource and instrumentation-scope attributes remain **YELLOW**. A driver
-or team MUST NOT become `service.instance.id`, because that would fragment
-metric resource identity. The emitting service identity MUST remain stable.
+Meeting and circuit display metadata MUST NOT be copied into every metric series.
+Uncertain identity MUST delay projection rather than emitting a label correction
+that creates another series. State received before identity resolution MAY be
+retained, but observations MUST NOT be queued without bound or replayed after
+identity appears. A complete staged snapshot resolves identity before projecting
+its current state; unresolved feed observations are excluded with a bounded
+diagnostic. Collector-internal receiver metrics do not use racing identity and
+are outside this table.
+
+All F1-produced signals use one stable Bargeboard emitter resource:
+
+```text
+service.namespace = github.com/CtrlSpice
+service.name      = bargeboard
+service.version   = distribution build version, when available
+```
+
+The receiver MUST preserve a deployment-provided `service.instance.id` but MUST
+NOT synthesize one from a session, driver, constructor, or another racing fact.
+It MUST NOT overwrite resource attributes supplied by a later deployment
+resource processor. Other receiver-created resource attributes are forbidden;
+racing identity belongs on signal attributes. A key MUST NOT be duplicated at
+resource and signal scope. Resource and scope schema URLs are empty until an
+explicit semantic-convention migration defines them.
 
 ## Accepted Metric Candidates
 
@@ -709,11 +765,58 @@ Reducer requirements:
 - Unknown topics MUST remain capturable and MUST NOT crash known-topic state.
 - Semantic validation errors MUST use bounded diagnostics without payload data.
 
+Feed patches MUST apply strictly in wire order. Source timestamps own OTLP
+chronology, while arrival order owns current state. Equal source timestamps use
+later wire order. Mixed topic patches MUST NOT be globally event-time sorted.
+Only observations inside one batched high-rate payload are stably sorted by
+their inner measurement timestamp before resampling.
+
+Sparse object patching is presence-aware and recursive:
+
+- A missing field retains its current value.
+- A present scalar replaces its field; `false` and `0` are real updates.
+- A present empty timing string clears that timing state.
+- `_deleted` removes the named nested state where the source uses it.
+- `_deleted` applies before ordinary fields in the same object, so an explicit
+  ordinary field can recreate deleted state.
+- JSON `null` clears only a field whose topic schema explicitly defines null as
+  clear; otherwise it is a semantic validation failure and prior state remains.
+- An empty object is a no-op feed patch and empty snapshot state at that object.
+- Snapshot arrays replace applicable state. Feed arrays are normalized as
+  indexed updates only where a fixture-backed topic contract permits it; an
+  unsupported feed-array form is quarantined without mutation.
+- Numeric-key maps are sparse indexed patches in feed updates.
+- Snapshot absence removes state, while feed-patch absence retains state.
+
+The functional core MUST return reduced state, signal effects, and bounded
+diagnostics without calling a clock, logger, network, or Collector consumer.
+The imperative shell supplies Collector observation time only where the time
+model permits it.
+
 The imperative shell MUST copy registered consumer pointers under the consumer
 mutex, release the mutex, and only then call downstream consumers.
 
-Downstream consumer failure policy remains **YELLOW** and requires an explicit
-decision before fan-out is implemented.
+Traces, metrics, and logs MUST project and deliver independently. The shell MUST
+attempt every configured downstream consumer even when one fails. A projector
+or consumer failure in one signal MUST NOT suppress successful sibling signals,
+trigger a Live Timing reconnect, or create an unbounded receiver retry queue.
+Collector exporters own queue and retry policy. Delivery failures require
+Collector-internal telemetry when available and rate-limited component logs;
+they MUST NOT recursively emit racing telemetry through the failing pipelines.
+
+Semantic validation uses the narrowest independently valid boundary. A wrong
+field type quarantines that indexed entry when the enclosing container and
+entry identity remain valid. A malformed topic container quarantines the whole
+topic update. Valid sibling entries continue in wire order. Unknown enum or
+lexical variants remain safely representable and do not stop the stream.
+
+An invalid authoritative snapshot MUST retain prior topic state only as
+non-projectable recovery state, mark that topic unsynchronized, and suppress all
+signals derived from it until a later valid authoritative snapshot replaces it.
+Sparse feed patches MAY still update the retained recovery state but MUST NOT
+declare it synchronized or project it. Invalid SignalR framing, decompression,
+size limits, UTF-8, JSON, or feed-envelope timestamp remain permanent
+source-protocol failures.
 
 ## OTLP Projection
 
@@ -731,8 +834,97 @@ Projectors MUST:
 - Attach sparse, useful exemplars rather than one exemplar per high-rate sample.
 - Keep racing outcome errors separate from software processing errors.
 
-Exact resource attributes, scope name/version, deterministic trace/span IDs,
-and the final data-quality attribute vocabulary remain **YELLOW**.
+All F1 signals use this source-neutral instrumentation scope:
+
+```text
+Name:    github.com/CtrlSpice/bargeboard/f1
+Version: 1.0.0
+```
+
+The scope version represents the signal contract and changes only for
+incompatible telemetry semantics. Executable releases MUST NOT create new scope
+versions merely because `service.version` changed. Scope attributes are empty.
+
+Every span repeats the minimum independently searchable identity:
+`f1.session.key`, `f1.session.type`, `f1.session.name`, `f1.season.year`,
+`f1.driver.number`, `f1.driver.acronym`, and `f1.data.source`. Driver-session
+roots additionally carry meeting, circuit, driver name, and constructor
+metadata when known. Child spans add their local phase, stint, lap, and sector
+identity. Logs carry the minimum session and driver identity needed for
+independent search and correlation. No signal relies on attribute inheritance,
+which OTLP does not provide.
+
+### Deterministic IDs
+
+Trace and span identity uses SHA-256 over unambiguous length-prefixed parts:
+
+```text
+LP(value) = uint32 big-endian UTF-8 byte length || UTF-8 bytes
+H(parts)  = SHA-256(LP(part_1) || LP(part_2) || ...)
+```
+
+Every part, including namespace and marker strings, uses `LP`. Integers use
+unsigned base-10 without leading zeros. A positive session key and driver number
+are required. The first 16 bytes form the TraceID and the first 8 bytes form the
+SpanID.
+
+```text
+trace = H("bargeboard.otlp.id/v1", "trace",
+          "session", S, "driver", D)[:16]
+
+root = H("bargeboard.otlp.id/v1", "span",
+         "session", S, "driver", D, "driver.session")[:8]
+
+phase = H("bargeboard.otlp.id/v1", "span",
+          "session", S, "driver", D,
+          "qualifying.phase", P)[:8]
+
+stint = H("bargeboard.otlp.id/v1", "span",
+          "session", S, "driver", D,
+          "phase", P_OR_NONE, "stint", N)[:8]
+
+lap = H("bargeboard.otlp.id/v1", "span",
+        "session", S, "driver", D,
+        "phase", P_OR_NONE, "lap", L)[:8]
+
+sector = H("bargeboard.otlp.id/v1", "span",
+           "session", S, "driver", D,
+           "phase", P_OR_NONE, "lap", L,
+           "sector", N)[:8]
+```
+
+`P_OR_NONE` is the canonical phase value or the literal `none`. `N` for a stint
+is its one-based canonical pit-separated ordinal. The exact phase mapping is:
+
+| Session type | `SessionPart` | `P` |
+|---|---:|---|
+| `qualifying` | 1, 2, 3 | `q1`, `q2`, `q3` |
+| `sprint_qualifying` | 1, 2, 3 | `sq1`, `sq2`, `sq3` |
+
+`SessionPart` zero or an unknown part is unresolved and blocks phase-scoped
+export. Non-qualifying spans encode `P_OR_NONE` as `none`. Sector `N` is exactly
+1, 2, or 3.
+
+The reducer freezes a stint ordinal when the stint is created and never
+renumbers an exported hierarchy. A cold mid-session snapshot MUST initialize
+the current ordinal from a coherent normalized zero-based source stint key plus
+one, while creating no historical stint spans. Without a coherent source key,
+the current stint remains unexportable until an observed boundary establishes
+its ordinal. A late boundary that would insert or renumber a frozen stint is
+quarantined and diagnosed rather than rewriting identity. Lap numbers are
+positive and unique within `P_OR_NONE`; a source reset requires a resolved phase
+before export.
+
+Source, names, constructor, timestamps, and mutable result state MUST NOT enter
+identity. An unresolved session, driver, phase, or lap identity blocks export of
+the affected span. IDs MUST remain stable across reconnect, early child export,
+and the handoff from Live Timing to final OpenF1 facts.
+
+An all-zero output MUST be rehashed by appending the length-prefixed parts
+`"retry"`, `"1"`, then increasing the canonical decimal counter until non-zero.
+A detected collision between distinct canonical entities within receiver state
+MUST suppress the later entity and its dependent subtree and emit a bounded
+operational diagnostic; processing order MUST NOT be used as a collision salt.
 
 ## Track Map
 
@@ -831,5 +1023,5 @@ Before committing a behavior slice:
 | Raw high-frequency telemetry Gauges | RED | They are noisy and duplicate better distributions and span summaries. |
 | Whole-field race trace | RED | Driver progression would become a crowded cross-field waterfall. |
 | Canonical cross-source reconciler | RED | Source domains remain independently owned. |
-| Resource and deterministic ID scheme | YELLOW | Must be resolved before projection implementation. |
+| Stable emitter resource and deterministic IDs | GREEN | Racing identity stays on signals and survives reconnects. |
 | Remaining metric candidates | YELLOW | Must complete candidate review before implementation. |
