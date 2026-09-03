@@ -1587,6 +1587,217 @@ outside the pit; deterministic ordinal assignment; event ownership and dedupe;
 and exact OTLP Sum temporality, start timestamps, attributes, and independent
 trace/metric failure.
 
+### Dedicated Pit Topics
+
+**Status: GREEN**
+
+When pit-duration projection is implemented, the Live Timing subscription MUST
+also request these exact topics:
+
+```text
+PitLaneTimeCollection
+PitStop
+PitStopSeries
+```
+
+An omitted topic in a successful subscription response means unavailable data,
+not a transport failure. `PitLaneTimeCollection` is the live lane-duration
+source. `PitStop` is the sole direct stationary-stop report source.
+`PitStopSeries` is persistent history for snapshot seeding, deduplication, and
+corroboration; it MUST NOT independently emit an event or histogram observation.
+This authority split prevents the direct record and its mirrored or duplicated
+series entry from counting twice.
+
+The subscription decoder MUST preserve the requested-versus-present topic
+manifest for each completed snapshot. Successful omission marks that dedicated
+topic unavailable, clears its current and pending report state, preserves
+session-scoped consumed signatures, and emits nothing. Unavailable is not
+unsynchronized. A later snapshot containing the topic performs normal atomic
+replacement. The current decoder must gain this manifest before dedicated-topic
+projection is enabled; synthesizing an empty payload is forbidden.
+
+`PitLaneTimeCollection.PitTimes` is a sparse map keyed by canonical driver
+number. The map key owns driver identity; a present `RacingNumber` MUST agree.
+An explicit valid `Duration` forms a lane report. Missing fields retain feed
+state but create no observation. `_deleted` removes transient display state and
+emits nothing. An authoritative snapshot replaces the map and seeds report
+signatures without replaying durations.
+
+`PitStop` is one recursively merged sparse current record, but a signal candidate
+is deliberately stricter: `RacingNumber` and valid `PitStopTime` MUST both be
+explicit in the same feed patch. `Lap` and `PitLaneTime` enrich that candidate
+only when valid and explicit in that patch; omission does not inherit them from
+the prior report. An invalid optional field is diagnosed and omitted without
+invalidating an otherwise valid stop candidate. A coherent snapshot seeds its
+current semantic signature without an event or histogram observation. Split
+required fields remain state only and produce no candidate.
+
+`PitStopSeries.PitTimes` is an outer map keyed by canonical driver number. Each
+driver value is an indexed collection whose record has `Timestamp` and nested
+`PitStop` fields. In a snapshot, either an array or numeric-key map is a complete
+replacement for that driver. In a feed patch, an array also replaces that
+driver's complete indexed state, while a numeric-key map patches only its named
+indexes. Nested `PitStop` objects reduce recursively. The outer key owns driver
+identity and any nested `RacingNumber` MUST agree. Applicable outer, indexed,
+or nested `_deleted` instructions remove state and emit nothing.
+
+Series indexes and record `Timestamp` values are retained only for reduction and
+diagnosis because duplicates can use new indexes and timestamps. One invalid
+indexed record quarantines only that record. A feed series record may
+corroborate a direct report but cannot pre-empt it, emit it, or mark its direct
+signature consumed.
+
+Accepted lexical forms are:
+
+| Source field | Grammar |
+|---|---|
+| `PitLaneTimeCollection.Duration` | Positive decimal seconds with exactly one fractional digit. |
+| `PitStop.PitLaneTime` | Positive decimal seconds with exactly three fractional digits. |
+| `PitStop.PitStopTime` | Positive decimal seconds with exactly one fractional digit. |
+| `RacingNumber` | Positive canonical ASCII decimal integer string. |
+| `Lap` | Positive canonical ASCII decimal integer string, or empty when unknown. |
+| `PitStopSeries.Timestamp` | Strict RFC3339 normalized to UTC, retained as publication metadata only. |
+
+Canonical integers have no sign, whitespace, exponent, decimal point, or
+leading zero. Empty duration means no reported duration. Missing and empty are
+distinct; unsupported `null` is invalid. Durations parse directly to positive
+Int64 nanoseconds without an intermediate binary float. There is no semantic
+upper cutoff because explicit histogram overflow represents valid outliers.
+
+### Pit Duration Histograms
+
+**Status: GREEN**
+
+Dedicated reports project two session-level populations:
+
+```text
+Name:       f1.pit.lane_duration
+Type:       Delta ExplicitHistogram
+Unit:       s
+Series:     one per session
+Population: one accepted PitLaneTimeCollection duration per traversal report
+
+Name:       f1.pit.stop_duration
+Type:       Delta ExplicitHistogram
+Unit:       s
+Series:     one per session
+Population: one accepted direct PitStop stationary duration per report
+```
+
+Lane-duration upper bounds are:
+
+```text
+10, 12, 14, 16, 18,
+18.5 through 40 in 0.5-second steps,
+45, 50, 60, 90, 120
+```
+
+Stationary-stop upper bounds are:
+
+```text
+0.5, 1.0,
+1.25 through 4 in 0.25-second steps,
+4.5, 5, 6, 7, 8, 10, 12, 15, 20, 30, 60, 120
+```
+
+Both histograms use only the common session attributes. Driver, lap, visit,
+source index, and report identity MUST NOT split the series. A selectively
+attached exemplar MAY carry driver and visit correlation when both are known.
+Source report publication time assigns the observation to the aligned
+ten-second Delta window; the datapoint retains the window timestamps. Snapshot
+records never replay observations. Exact count, sum, minimum, and maximum are
+required, and positive underflow or overflow remains valid.
+
+The reducer keeps each driver's completed visits in source completion order,
+including unnumbered visits under a coverage-local identity that is never
+exported. Lane and stationary correlation slots are independent. A lane report
+pairs to the earliest visit whose lane slot is empty and whose canonical
+out-lap agrees when the report supplies one. A direct stop report similarly
+pairs to the earliest empty stop slot with compatible out-lap and lane duration
+when supplied. Nearest timestamp is never identity.
+
+For this correlation, the canonical in-lap is accepted `NumberOfLaps` state
+when `false → true` entry is applied. If it is `N`, the canonical out-lap is
+`N+1` only when the first validated post-entry boundary opens `N+1` and that
+value remains current at exit. If the in-lap is unknown, the first valid
+post-entry value `M` establishes out-lap `M` only when it remains current at
+exit; this synthesizes neither in-lap zero nor a prior boundary. Otherwise the
+out-lap is unknown. A non-empty dedicated report `Lap=L` denotes this out-lap,
+not the in-lap, and is compatible only with equal known `L`. Missing or empty
+`Lap` adds no constraint and a report never creates or revises lap identity.
+
+Cross-topic lane durations are compatible only when truncating the
+three-decimal `PitStop` or `PitStopSeries` nanosecond value toward zero to a
+100-millisecond boundary exactly equals the one-decimal
+`PitLaneTimeCollection` value. There is no rounding tolerance. A missing value
+does not conflict; an explicitly different value makes that visit ineligible.
+
+Pairing first checks occupied same-kind slots for the same normalized source
+identity: driver, report kind, and out-lap-or-`none`. A match is a duplicate or
+correction and MUST NOT move to another visit. Only then is correlation attempted
+once against empty slots. If no visit qualifies, the report remains
+uncorrelated permanently. If several qualify, completion order selects the
+first. A later-arriving visit cannot re-key or re-emit an uncorrelated fact.
+Numbered and unnumbered visits can consume their independent metric-correlation
+slots, but only a numbered visit can own a pit event. The conservative `none`
+identity can collapse distinct missing-lap reports from one driver; undercount
+is preferred to double counting an indistinguishable correction.
+
+One visit contributes at most one lane duration and one direct stationary
+duration. The first accepted report wins. A later differing report correlated
+to the same visit is a correction diagnostic and MUST NOT replace an event or
+Delta observation, even while its window remains open. `PitStop.PitLaneTime`
+MAY enrich its stop event but MUST NOT enter the lane histogram, whose sole
+owner is `PitLaneTimeCollection`.
+
+Report identities survive reconnect and reset with the canonical session. A
+correlated identity is session, driver, visit ordinal-or-coverage-local visit,
+and report kind. An uncorrelated identity is session, driver, report kind, and
+lap-or-`none`; its first accepted duration is payload, not identity. This
+deliberately collapses indistinguishable missing-lap reports rather than risk
+overcounting. Snapshots from `PitLaneTimeCollection` seed lane identities.
+Coherent `PitStop` and `PitStopSeries` snapshot records seed direct-stop
+identities and, when lane time is present, the compatible lane identity after
+100-millisecond truncation. Series-only feed records never consume either
+identity until a matching direct report arrives.
+
+### Stationary-Stop Event
+
+**Status: GREEN**
+
+A valid direct `PitStop` feed report correlated to a numbered observed visit
+emits `f1.pit.stop` once at the report's feed-envelope publication timestamp.
+`PitStopSeries.Timestamp` is not a physical edge and MUST NOT override that
+timestamp. The event has `f1.time.quality=publication_time`, Int64
+`f1.pit.visit.number`, Double `f1.pit.stop_duration` in seconds, optional Double
+`f1.pit.lane_duration` in seconds, and optional Int64 `f1.lap.number`.
+
+Owner selection follows the pit-event rule: the unexported lap containing the
+publication timestamp, then a containing open ancestor, then the open root. If
+no legal owner or numbered visit exists, the event is suppressed but an
+otherwise accepted independent histogram observation MUST still emit. A
+reported stationary duration never proves
+stationary start/end boundaries, MUST NOT be subtracted from a timestamp, and
+MUST NOT create or resize a span. `Stopped`, `PitOut`, coordinates, telemetry
+speed, and tyre state cannot fill a missing direct report.
+
+Implementation requires compact public fixtures for normal and drive-through
+visits; transient lane add/delete/key reuse; strict direct stop patches; nested
+driver/index series arrays and maps; empty and missing lap; exact duration
+grammars and 100-millisecond compatibility; malformed optional and required
+fields; reports before and after correlation; numbered and unnumbered visit
+queues; same-visit corrections before and after window close; exact and
+semantic series duplicates; cold and reconnect identity seeding; unavailable
+subscription topics; late finalized-window reports; event ownership; histogram
+bounds, window timestamps, exemplars, and cardinality; and independent
+trace/metric failure. Authenticated live availability of `PitStop` and
+`PitStopSeries` MUST be fixture-verified before enabling their projector path.
+
+`PitStopSeries` fallback emission, `PitStop.PitLaneTime` fallback into the lane
+population, historical OpenF1 reconciliation, physical stationary placement,
+and stationary-stop spans remain **YELLOW**. They MUST NOT be implemented from
+the GREEN contracts above.
+
 ## Pending Metric Candidates
 
 **Status: YELLOW**
@@ -1595,7 +1806,7 @@ The following domains require the same candidate-by-candidate review before
 implementation:
 
 - Tyre-change event settlement.
-- Pit lane duration and detailed stationary-stop reports.
+- Dedicated pit-topic fallbacks and physical stationary spans.
 - Physical X/Y/Z position.
 - Session clock, lap count, and track state.
 - Weather.
