@@ -957,9 +957,10 @@ sporting deletion cannot retract a finalized Delta observation.
 
 **Status: GREEN**
 
-Only the lap-time histogram adds `f1.tyre.compound`. It is the settled
-`TimingAppData.Stints[n].Compound` for the source stint that owns the lap under
-the lap-aligned in-lap/out-lap rule, selected when the lap finalizes. The
+Only the lap-time histogram adds `f1.tyre.compound`. It is the current coherent
+`TimingAppData.Stints[n].Compound` from the source run paired to the owning
+trace stint when the lap finalizes. This is a provisional live classification,
+not a claim that the source assignment can no longer be corrected. The
 dimension is mandatory and uses exactly one of:
 
 ```text
@@ -968,18 +969,20 @@ soft, medium, hard, intermediate, wet, test, unknown, other
 
 Normalization trims ASCII surrounding whitespace and compares ASCII
 case-insensitively. `SOFT`, `MEDIUM`, `HARD`, `INTERMEDIATE`, and `WET` map to
-their lower-case values. A non-empty source value containing the standalone
-ASCII token `TEST` maps to `test`. Missing or explicitly empty compound maps to
-`unknown`; any other non-empty source value maps to `other`. Display spelling,
-source stint index, tyre-set identity, and inferred slick/intermediate/wet
-class MUST NOT become metric attributes.
+their lower-case values. Literal `UNKNOWN`, missing, and explicitly empty
+compound map to `unknown`. `TEST` and values beginning with `TEST_` or `TEST-`
+map to `test`; any other non-empty source value maps to `other`. Display
+spelling, source stint index, tyre-set identity, and inferred
+slick/intermediate/wet class MUST NOT become metric attributes.
 
-Compound assignment is mutable only while the completed lap is pending. A
-later correction MUST NOT revise an exported histogram observation. A cold
-metric-only completed record uses the coherent source stint assignment from the
-replacement snapshot and otherwise uses `unknown`; it MUST NOT infer compound
-from another driver or adjacent stint. Compound has no effect on the
-last-lap-time Gauge or lap span identity.
+Compound assignment is mutable only while the completed lap is pending. If no
+source run is paired uniquely, its entry is incoherent, or its compound is
+missing or a placeholder, the histogram uses `unknown` and does not wait beyond
+normal lap finalization. A later correction MUST NOT revise an exported
+observation. A cold metric-only completed record uses a uniquely paired
+coherent source run from the replacement snapshot and otherwise uses `unknown`;
+it MUST NOT infer compound from another driver or adjacent run. Compound has no
+effect on the last-lap-time Gauge or lap span identity.
 
 Completed sectors follow the same dual representation:
 
@@ -1292,6 +1295,146 @@ same-patch phase transition suppression; clear, delete, malformed, zero,
 negative, and overflow cases; cold metric-only completion; revision-transition
 identity; reconnect deduplication; and valid siblings beside invalid entries.
 
+### Tyre And Source-Run State
+
+**Status: GREEN**
+
+Internally, each `TimingAppData.Lines[driver].Stints[n]` entry is a **source
+run**: a mutable source description associated with one pit-separated driving
+run. It is not a tyre-set identity and its publication timestamp is not a stint
+boundary. A source key alone MUST NOT open or close a trace span, emit a pit or
+tyre event, or prove that tyres changed.
+
+Source keys are canonical, zero-based, non-negative decimal integers. Snapshot
+`Stints` MAY be a complete array or numeric-key map and replaces the driver's
+source-run state. Feed `Stints` is a sparse numeric-key map; a feed array remains
+invalid until a fixture-backed patch contract exists. The current source run is
+the greatest key in a coherent reduced sequence. An invalid or deleted current
+entry makes current tyre state unavailable; the reducer MUST NOT fall back to
+an older completed run.
+
+Known source-run fields are:
+
+| Field | Accepted state meaning |
+|---|---|
+| `Compound` | Mutable source compound normalized by the Lap Compound Dimension contract. |
+| `TotalLaps` | Non-negative integral total use of the fitted tyres, including use in earlier sessions. |
+| `StartLaps` | Non-negative integral tyre age when fitted; corroborating state only. |
+| `New` | Exact string `"true"` or `"false"`; whether the source currently reports the fitted tyres as new. |
+| `TyresNotChanged` | Exact string `"0"` or `"1"`; provisional source classification retained as evidence only. |
+| `LapNumber` | Sparse source association metadata, not a canonical lap boundary. |
+
+`New` and `TyresNotChanged` are strings in the observed protocol. Unknown
+lexical values remain bounded invalid evidence and cannot drive projection.
+Source-run entry failures quarantine only that entry when valid siblings can
+still be reduced. Gaps, aliased numeric keys, or conflicting current entries
+make current-run selection incoherent.
+
+The active coherent source run's `TotalLaps` projects as:
+
+```text
+Name:       f1.driver.tyre.age
+Type:       Int64 Gauge
+Unit:       {lap}
+Series:     one per driver per session
+Cadence:    on valid value or active-source-run change
+```
+
+Zero is valid. The Gauge is explicitly non-monotonic: tyres may have prior
+session use, a used set may be fitted, and source corrections may decrease or
+reset the value. A feed datapoint uses its `TimingAppData` publication time. A
+coherent snapshot hydrates once at Collector observation time. `StartTimestamp`
+is unset, repeated unchanged patches emit nothing, and there is no heartbeat.
+Changing to a new active source run emits even when its numeric `TotalLaps`
+equals the prior value. Empty/deleted current state, invalid current state, or
+authoritative snapshot absence clears the Gauge without a zero tombstone.
+
+The metric has only common racing and driver identity. Compound, phase, lap,
+trace stint, source-run key, `New`, `StartLaps`, and `TyresNotChanged` MUST NOT
+be attributes. Bargeboard MUST NOT add a current-compound Gauge, source-run
+count, stint count, stint length, or stint-age metric. Compound remains a
+dimension only on `f1.driver.lap_time`.
+
+### Source Runs And Trace Stints
+
+**Status: GREEN**
+
+`TimingData.InPit` transitions own observed pit visits; source-run keys do not.
+The first valid `InPit` value establishes a baseline without an event. A fully
+observed visit requires the feed sequence `false → true → false`. Snapshot state
+cannot manufacture either edge, and `PitOut` is corroborating state only.
+
+The trace remains lap-aligned. Pit entry leaves the in-lap in the current trace
+stint. The first validated `NumberOfLaps` boundary after that entry opens the
+next trace stint and that stint owns the out-lap. A drive-through creates a new
+trace stint even when the source says `TyresNotChanged="1"` or no coherent
+source run exists. Without a later lap boundary, no empty post-pit stint is
+created. Ambiguous source-run correlation suppresses only tyre enrichment; it
+MUST NOT damage pit, lap, or trace-stint assembly.
+
+Pairing is by exact ordinal, never by nearest publication time. Source run `n`
+can enrich only trace stint ordinal `n+1`. It pairs when that stint exists, the
+run is coherent, and any source `LapNumber` does not contradict the stint's lap
+range. A premature source run remains unpaired until the matching observed
+stint exists; a missing run leaves that stint's compound `unknown`. A skipped,
+extra, invalid, or deleted key MUST NOT shift later pairings. If an earlier
+missing key arrives later, only still-unexported matching laps can gain its
+enrichment.
+
+The zero-based source key MAY initialize the one-based current trace-stint
+ordinal from a cold coherent snapshot as defined by deterministic identity, but
+it cannot create historical spans. A reconnect snapshot with the same source
+run can preserve a previously feed-observed pairing. A higher key first
+discovered in a snapshot seeds current state and the current ordinal while
+suppressing missed transitions; it never pairs historical laps. A disconnect
+spanning either pit edge cannot produce a complete visit. Only `InPit` edges
+after the canonical driver-session root starts participate in live visit
+correlation.
+
+### Tyre-Change Event Candidate
+
+**Status: YELLOW**
+
+`f1.tyre.changed` is not accepted for implementation. Live assignments are
+correctable and have no source settlement marker. Pit exit, first known
+compound, first post-pit lap, elapsed time, and `TotalLaps` progression MUST NOT
+be treated as finality. In public evidence, `Compound`, `New`, and
+`TyresNotChanged` were corrected seconds or minutes after a visit.
+
+A candidate source-announcement event requires all of:
+
+1. A complete feed-observed pit visit.
+2. One uniquely paired non-initial source run.
+3. Final `TyresNotChanged="0"` on that run.
+4. A non-placeholder compound assignment.
+5. Settlement by a later coherent source-run key or synchronized session
+   `Ends`.
+
+The settlement rule is non-binding until compact public fixtures demonstrate
+that no assignment field changes after the next coherent key. `Finalised`, a
+fixed timeout, and a completed lap are not substitutes. `New` may corroborate
+but cannot decide because a used set can be fitted. Same-compound replacements
+remain possible.
+
+If promoted later, the candidate would use the correlated pit-exit publication
+time with `f1.time.quality=publication_time`, deduplicate by canonical session,
+driver, and pit-visit ordinal, and emit at most once. Owner precedence would be
+the still-buffered out-lap, its post-pit stint, then the open driver-session
+root. A snapshot would seed state and seen identities but emit nothing. A
+correction before settlement would replace pending state; a contradiction after
+emission could only create a bounded diagnostic, never a retraction. Exact
+physical tyre-fitting time is unsupported.
+
+Implementation of the GREEN source-run and tyre-age contracts requires compact
+public fixtures for complete list/map snapshots; sparse numeric-key feed
+patches; fresh, used, same-compound, unknown, and unchanged runs; non-monotonic
+`TotalLaps`; active-run deletion; malformed entries beside valid siblings;
+pit-entry/exit ordering; drive-throughs; cold starts; reconnect overlap and
+missed edges; snapshot hydration; and absence of every forbidden metric
+attribute. Event-candidate fixtures must additionally include short and
+multi-minute assignment corrections, source runs before and after pit exit, and
+the proposed next-key settlement invariant.
+
 ## Pending Metric Candidates
 
 **Status: YELLOW**
@@ -1299,7 +1442,7 @@ identity; reconnect deduplication; and valid siblings beside invalid entries.
 The following domains require the same candidate-by-candidate review before
 implementation:
 
-- Tyre age and change state.
+- Tyre-change event settlement.
 - Pit entry, exit, lane duration, stop duration, and visit counts.
 - Physical X/Y/Z position.
 - Session clock, lap count, and track state.
