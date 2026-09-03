@@ -297,11 +297,13 @@ The accepted event names are:
 - `f1.position.changed`
 - `f1.lap_time.deleted`
 - `f1.lap_time.reinstated`
+- `f1.personal_best`
+- `f1.personal_best.revised`
+- `f1.fastest_lap`
 
-`f1.gap.lap_deficit.changed`, `f1.position.exchange`, fastest-lap,
-personal-best, track-status, team-radio, typed penalty and investigation, and
-final retirement events remain **YELLOW** until their domain contract is
-recorded below.
+`f1.gap.lap_deficit.changed`, `f1.position.exchange`, track-status, team-radio,
+typed penalty and investigation, and final retirement events remain **YELLOW**
+until their domain contract is recorded below.
 
 Pit entry, stop, and exit MUST be represented by the accepted lap event names
 above. Pit activity belongs on the lap containing the observed timestamp.
@@ -437,7 +439,7 @@ Instruments add only their declared conditional attributes:
 | Instrument population | Additional attributes and types |
 |---|---|
 | Per-driver | `f1.driver.number` Int64, `f1.driver.acronym` String |
-| Qualifying timing | `f1.session.phase` String |
+| Phase-scoped qualifying timing | `f1.session.phase` String |
 | Sector timing | `f1.sector.number` Int64 |
 | Speed-trap timing | `f1.speed_trap.location` String |
 | Lap-time histogram | `f1.tyre.compound` String |
@@ -1011,7 +1013,7 @@ and the Gauges do not heartbeat.
 
 ### Timing Repair And Boundaries
 
-**Status: GREEN with fixture gates**
+**Status: GREEN**
 
 Timing duration strings use this exact ASCII grammar:
 
@@ -1098,6 +1100,198 @@ metric-only cold completion; shutdown partial-window flushing; reported versus
 reconstructed metric populations; compound normalization and ownership; and
 phase-safe deletion/reinstatement correlation.
 
+### Best Timing State
+
+**Status: GREEN**
+
+Live Timing owns provisional personal-best state. It is correction-tolerant
+current state, not a monotonic record:
+
+```text
+Name:       f1.driver.best_lap_time
+Type:       Double Gauge
+Unit:       s
+Series:     one per driver per session, plus phase in qualifying-like sessions
+Cadence:    on accepted source value change
+```
+
+For practice, sprint, and race, `TimingData.BestLapTime.Value` is the sole
+source. For qualifying-like sessions, the singular value owns the resolved
+current phase and is authoritative over that phase's corresponding
+zero-indexed `TimingData.BestLapTimes` entry. Every valid sparse plural snapshot
+or feed entry MUST update its resolved phase's retained state. A feed change
+emits the Gauge, and a coherent snapshot MUST hydrate it at Collector
+observation time, except that a conflicting current-phase entry cannot override
+a present singular value. Indexes 0, 1, and 2 map exactly to
+`q1`, `q2`, `q3` or `sq1`, `sq2`, `sq3`; other indexes are invalid. A
+qualifying phase transition clears the singular active-phase baseline before
+accepting values for the new phase. A plural entry that conflicts with a
+present singular value for the current phase is retained only as a diagnostic;
+the singular value wins.
+
+Duration parsing reuses the timing duration grammar. `BestLapTime.Lap` and the
+plural entry's `Lap` MAY correlate trace state only when the positive lap number
+resolves uniquely in the same phase; lap number is not a metric attribute.
+`TimingStats.PersonalBestLapTime` MUST NOT duplicate this Gauge because it loses
+the qualifying phase reset semantics.
+
+The Gauge accepts both faster values and explicit slower rollbacks after a lap
+deletion. Feed datapoints use publication time. A coherent snapshot MUST hydrate
+each retained phase at Collector observation time. `StartTimestamp` is unset,
+there is no heartbeat, and a repeated identical value emits nothing. Missing
+feed fields retain state. An empty `Value`, an applicable `_deleted`, or
+authoritative snapshot absence clears state without a zero-valued datapoint.
+
+`TimingStats` owns two session-wide ranked best tables:
+
+```text
+Name:       f1.driver.best_sector_time
+Type:       Double Gauge
+Unit:       s
+Series:     one per driver per session and sector 1..3
+Source:     TimingStats.BestSectors[0..2].Value
+
+Name:       f1.driver.best_speed_trap
+Type:       Int64 Gauge
+Unit:       km/h
+Series:     one per driver per session and speed-trap location
+Source:     TimingStats.BestSpeeds.{I1,I2,FL,ST}.Value
+```
+
+These Gauges are cumulative across qualifying phases and deliberately omit
+`f1.session.phase`; eliminated drivers remain represented. `BestSectors`
+indexes map 0, 1, and 2 to `f1.sector.number` 1, 2, and 3. Speed keys map `I1`,
+`I2`, `FL`, and `ST` to `f1.speed_trap.location` values `i1`, `i2`, `fl`, and
+`st`. Ranking `Position`, lap number, and source index are supporting state and
+MUST NOT become metric attributes.
+
+A best-table Gauge emits only when its valid `Value` changes, including a
+slower sector or lower speed correction. A position-only patch emits nothing.
+Feed timestamps are publication time; coherent snapshots hydrate at Collector
+observation time. `StartTimestamp` is unset and there is no heartbeat. Empty
+values and authorized deletion clear state without a tombstone. Snapshot
+absence removes stale state. Sector values use the timing duration grammar.
+Speed values use one or more ASCII decimal digits, no sign or whitespace, and
+must be positive and fit Int64; they are exported without binary float parsing.
+
+### Speed-Trap Observations
+
+**Status: GREEN**
+
+`TimingData.Speeds.{I1,I2,FL,ST}.Value` owns live trap observations:
+
+```text
+Name:       f1.driver.speed_trap
+Type:       Int64 Gauge
+Unit:       km/h
+Series:     one per driver, session, phase when applicable, and location
+Cadence:    every explicit accepted source observation
+```
+
+Location and speed parsing use the exact best-speed rules above. Every explicit
+valid `Value` is a measurement and emits once, including the same numeric value
+at a later publication time. Missing fields retain patch state but do not emit;
+empty values and authorized deletion clear without emitting zero. Feed
+publication time is the datapoint timestamp, `StartTimestamp` is unset, and
+there is no heartbeat. Subscription snapshots seed patch state but emit no trap
+observation because they do not establish a trustworthy lap or phase placement.
+
+Trap values participate in the completed-lap five-second buffer. In a patch
+that advances `NumberOfLaps` from `N` to `N+1`, every explicit `I1`, `I2`, and
+`FL` value attaches to pending lap `N` before the boundary, while every explicit
+`ST` value belongs to open lap `N+1`. During the five seconds after a boundary,
+explicit `I1`, `I2`, and `FL` values attach to the pending lap; `ST` attaches to
+the open lap. Outside that interval all four attach to the open lap. For the lap
+selected by these location-specific rules, a later explicit value replaces an
+occupied slot while its owning lap is unexported, whether that lap is open or
+pending, and still emits a new Gauge observation. An omitted field never
+populates a lap slot merely because reduced topic state retains an older value.
+
+A `TimingData` feed patch is a phase-transition patch when any applicable
+`SessionPart` entry changes the canonical session phase. Trap observations from
+all `Lines` entries in that atomic patch are suppressed because their phase
+ownership is ambiguous: they emit no Gauge, populate no lap slot, and create no
+span attribute. Raw patch state still reduces for later sparse updates, but an
+omitted value in a later patch cannot resurrect the suppressed observation.
+Conflicting `SessionPart` entries suppress all phase-scoped projection until a
+later coherent patch.
+
+When an owning lap span exists, accepted values also become bounded Int64 span
+attributes in km/h named `f1.lap.speed_trap.i1_kph`,
+`f1.lap.speed_trap.i2_kph`, `f1.lap.speed_trap.fl_kph`, and
+`f1.lap.speed_trap.st_kph`. They do not alter metric series identity. A
+metric-only cold completion can emit an associated Gauge but creates no span
+attributes. Bargeboard MUST NOT infer one trap from sector number, use trap
+values as high-rate vehicle speed, construct a trap histogram, or derive a
+per-lap maximum.
+
+### Best-Timing Events
+
+**Status: GREEN**
+
+Only `TimingData.LastLapTime` source flags create best-lap events. Sector and
+speed flags remain display state and emit no events.
+
+An accepted completed-lap duration with explicit `PersonalFastest=true` emits
+`f1.personal_best`. Explicit `OverallFastest=true` emits `f1.fastest_lap`.
+`f1.fastest_lap` means that Live Timing announced an overall-fastest lap at
+that moment; it is not the final classified fastest lap. A later driver can
+therefore emit another event. False clears flag state without an event, and an
+omitted flag retains sparse patch state only within its owning lap.
+
+Each event is deduplicated by canonical session, driver, phase-or-`none`, lap
+number, and event name. A true flag split from its `Value` MAY emit only while
+both facts resolve to the same pending lap; flags are never carried across a lap
+boundary. Snapshot flags seed current state but emit no events. A timing
+integrity conflict suppresses both events.
+
+A phase-transition `TimingData` patch first clears every driver's lap-local best
+flags and suppresses all `LastLapTime` best flags across its atomic `Lines`
+entries. They are not attributed to either phase. Later explicit flags belong
+to the newly resolved phase. This rule also applies when the transition patch
+carries empty lap values.
+
+`BestLapTime` has one candidate-specific sparse rule: when `Value` changes and
+the same patch omits `Lap`, the previous lap number MUST NOT carry onto the new
+value. The new value's lap correlation becomes absent. A supplied positive
+`Lap` can update the current value's correlation without emitting a Gauge; an
+empty `Value` clears both fields.
+
+A feed update that replaces an already observed current `BestLapTime` with a
+slower valid duration emits `f1.personal_best.revised` once for that source
+transition. It carries Double `f1.personal_best.previous_duration` and
+`f1.personal_best.current_duration` in seconds. It adds Int64
+`f1.personal_best.previous_lap` and `f1.personal_best.current_lap` only when the
+respective number is source-supplied and phase-resolved; the attributes are
+independently optional. Faster normal progression, snapshot replacement,
+clears, plural `BestLapTimes` maintenance, and repeated values do not emit the
+revision event.
+
+Revision events use a separate source-transition identity: canonical session,
+driver, phase-or-`none`, previous duration and lap-or-`none`, current duration
+and lap-or-`none`, and source publication Unix nanoseconds. The session reducer
+retains this bounded seen set across reconnect. A snapshot establishes the
+current baseline but seeds no revision identity and emits no event; its first
+unchanged feed value therefore remains silent.
+
+A personal-best or fastest-lap event belongs to its still-pending completed lap
+at that lap's finalized boundary. If the observed lap was already exported, it
+belongs to the still-open driver-session root at the same boundary. A
+metric-only cold completion emits no best event because no lap trace identity
+was observed. The revision event belongs to the active lap at its publication
+timestamp, then the open root. If no legal owner remains open, the event is
+suppressed with a bounded diagnostic rather than reopening a trace.
+
+Implementation requires compact public snapshot and patch fixtures for the
+singular and plural best-lap forms; qualifying phase reset and retained phase
+entries; best rollback and deletion; all three best-sector indexes; all four
+speed locations; value-only versus position-only updates; repeated equal trap
+values; same-patch and five-second lap association including the `ST` exception;
+split true/value flags; true-to-false holder turnover; snapshot suppression;
+same-patch phase transition suppression; clear, delete, malformed, zero,
+negative, and overflow cases; cold metric-only completion; revision-transition
+identity; reconnect deduplication; and valid siblings beside invalid entries.
+
 ## Pending Metric Candidates
 
 **Status: YELLOW**
@@ -1105,7 +1299,6 @@ phase-safe deletion/reinstatement correlation.
 The following domains require the same candidate-by-candidate review before
 implementation:
 
-- Speed-trap and personal-best timing.
 - Tyre age and change state.
 - Pit entry, exit, lane duration, stop duration, and visit counts.
 - Physical X/Y/Z position.
