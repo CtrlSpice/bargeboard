@@ -94,6 +94,8 @@ F1 Live Timing owns provisional, low-latency live data:
 
 - Car telemetry and position samples.
 - Live timing, sectors, positions, gaps, and intervals.
+- Provisional pit-lane and stationary-stop durations when the dedicated live
+  topics are enabled.
 - Session, track, weather, race-control, and radio updates.
 - Live driver-session traces and their stint, lap, and sector structure.
 
@@ -106,7 +108,8 @@ OpenF1 owns normalized and post-session domains:
 
 - Historical backfill when no live projection for that session is active.
 - Final results, starting grids, championship standings, and points.
-- Normalized pit-lane and stationary-stop durations where documented.
+- Final or historical normalized pit-lane and stationary-stop durations where
+  documented.
 - Post-session facts unavailable from the subscribed Live Timing topics.
 
 Historical OpenF1 access is public. Live OpenF1 access requires sponsor
@@ -121,6 +124,33 @@ mode later, but MUST NOT be the default.
 Every projected signal SHOULD identify its source using a bounded source value
 such as `livetiming` or `openf1`. Source identity MUST NOT include endpoint,
 token, cookie, or connection values.
+
+## Session Coverage
+
+**Status: GREEN**
+
+The canonical model covers each session in an F1 weekend:
+
+| Source session | Canonical type | Canonical name |
+|---|---|---|
+| Practice 1 | `practice` | `practice_1` |
+| Practice 2 | `practice` | `practice_2` |
+| Practice 3 | `practice` | `practice_3` |
+| Qualifying | `qualifying` | `qualifying` |
+| Sprint Shootout or sprint-format qualifying | `sprint_qualifying` | `sprint_qualifying` |
+| Sprint | `sprint` | `sprint` |
+| Grand Prix | `race` | `race` |
+
+Historical display names MUST be classified by their documented format rather
+than string alone. In particular, the 2021 name `Sprint Qualifying` described a
+race-like sprint, while later seasons use similar wording for a qualifying-like
+session. Unknown formats MUST remain unknown until fixture-backed classification
+exists.
+
+Each session creates a separate set of driver-session traces. Practice,
+qualifying, sprint qualifying, sprint, and race use one common trace contract;
+they are not separate trace types. Q1/Q2/Q3 and SQ1/SQ2/SQ3 are phases within
+one qualifying-like session and MUST NOT become separate traces.
 
 ## Time Model
 
@@ -153,9 +183,22 @@ Subscription snapshots initialize current state. They MUST NOT synthesize a
 historical transition time or emit transition events merely because a state was
 present in the snapshot.
 
-Derived boundaries MUST carry a bounded quality description. Exact attribute
-names remain **YELLOW**, but the model MUST distinguish at least observed,
-publication-time, and estimated boundaries.
+An applicable subscription snapshot MUST replace topic state atomically. A
+field absent from an authoritative snapshot is absent; it MUST NOT retain stale
+pre-reconnect state. Valid hydrated current-state Gauges MAY emit once at the
+Collector observation time and begin their freshness interval there. Snapshots
+MUST NOT replay historical histogram observations, Sum deltas, span events,
+logs, laps, or state transitions. Indexed event collections MUST seed their
+seen identities so later replayed keys do not become new events.
+
+Derived boundaries MUST use `f1.time.quality` with one of these bounded values:
+
+- `observed` for a direct source event or measurement boundary.
+- `publication_time` when only publication placement is known.
+- `estimated` for a bounded derivation from source facts.
+
+The delivery mode `feed` or `snapshot` is not time quality and MUST NOT become a
+metric dimension.
 
 ## Trace Model
 
@@ -168,13 +211,17 @@ does not start.
 
 ```text
 driver.session
-├── stint
-│   ├── lap
-│   │   ├── sector 1
-│   │   ├── sector 2
-│   │   └── sector 3
-│   └── lap
-└── stint
+├── qualifying.phase (qualifying-like sessions only)
+│   └── stint
+│       └── lap
+│           ├── sector 1
+│           ├── sector 2
+│           └── sector 3
+└── stint (all other sessions)
+    └── lap
+        ├── sector 1
+        ├── sector 2
+        └── sector 3
 ```
 
 This creates roughly one trace per entered driver, preserves progression
@@ -185,6 +232,17 @@ Span names MAY include bounded racing context such as driver acronym, stint
 number, lap number, or sector number when that materially improves the local
 viewer. Canonical identity MUST remain in attributes rather than relying on the
 display name.
+
+`TimingData.SessionPart` is the primary qualifying-phase identity. Session
+status cycles MAY provide fallback boundary evidence, but `Started` after
+`Aborted` resumes the same phase and MUST NOT create another phase. Drivers
+knocked out in an earlier phase MUST NOT receive synthetic later phase spans.
+Practice, sprint, and race traces omit the phase layer.
+
+Stint spans are lap-aligned, pit-separated strategic runs so every lap remains
+inside its parent. The old stint owns its in-lap and the new stint owns its
+out-lap. Exact pit entry, stop, and exit times remain lap events. A drive-through
+starts a new driving stint even when the tyres remain fitted.
 
 ### Status
 
@@ -203,6 +261,22 @@ A DNS trace MUST be a zero-duration driver-session root at the observed session
 start, or at the scheduled session start when no observed start exists. It has
 no stint, lap, or sector children, uses an estimated time-quality marker when
 necessary, and carries `Error` status with a `did not start` message.
+
+Race and sprint roots start at the observed competitive start and close at the
+individual driver's confirmed finish crossing or final-authority retirement.
+The provisional Live Timing `Retired` field MUST NOT close a root because the
+source can reverse it. Practice and qualifying-like roots start at the first
+canonical `Started` state and normally close at `Finalised`; elimination closes
+the driver's last phase span, not the root.
+
+`Finished` records a competitive-stop transition but MUST leave roots open for
+trailing timing facts. `Finalised` begins final-result waiting, and `Ends` is a
+terminal feed boundary. A completed live root remains unexported until the first
+of an authoritative final result, `Ends`, five minutes after `Finalised`, or
+receiver shutdown. The five-minute default SHOULD be configurable. Without
+final authority, the root closes as provisional or incomplete rather than
+inventing DNF, DNS, DSQ, or a classified finish. A later final result MUST use a
+correlated log and result metrics; an exported root MUST NOT be resent.
 
 ### Events
 
@@ -248,9 +322,11 @@ session span. Parent and trace identifiers MUST remain stable for the session.
 The exact deterministic identity algorithm is **YELLOW** and MUST be decided
 before trace projection is implemented.
 
-A short finalization delay MAY retain completed laps long enough to attach
-normally late timing facts. Later race-control or radio records SHOULD use trace
-and span correlation rather than forcing a rewrite of an exported span.
+A completed lap MUST remain mutable for five seconds of source time so normally
+late lap, sector, and speed-trap facts can attach before its single export. Hard
+lifecycle closure MAY finalize it sooner. Later race-control or radio records
+MUST use trace and span correlation rather than forcing a rewrite of an exported
+span.
 
 ## Metric Race Control
 
