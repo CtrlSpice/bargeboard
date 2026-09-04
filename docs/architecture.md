@@ -137,28 +137,296 @@ token, cookie, or connection values.
 
 **Status: GREEN**
 
-The canonical model covers each session in an F1 weekend:
+The canonical model covers these fixture-backed Live Timing session formats:
 
-| Source session | Canonical type | Canonical name |
-|---|---|---|
-| Practice 1 | `practice` | `practice_1` |
-| Practice 2 | `practice` | `practice_2` |
-| Practice 3 | `practice` | `practice_3` |
-| Qualifying | `qualifying` | `qualifying` |
-| Sprint Shootout or sprint-format qualifying | `sprint_qualifying` | `sprint_qualifying` |
-| Sprint | `sprint` | `sprint` |
-| Grand Prix | `race` | `race` |
+| Context | Source `Type` | Source `Name` | Canonical type | Canonical name |
+|---|---|---|---|---|
+| Seasons 2021-2022 and `Meeting.Name="Pre-Season Test"` | `Practice` | `Practice N` | `testing` | `testing_day_N` |
+| Seasons 2023-2024 and `Meeting.Name="Pre-Season Testing"` | `Practice` | `Practice N` | `testing` | `testing_day_N` |
+| Seasons 2025-2026 and `Meeting.Name="Pre-Season Testing"` | `Practice` | `Day N` | `testing` | `testing_day_N` |
+| Grand Prix context | `Practice` | `Practice 1` | `practice` | `practice_1` |
+| Grand Prix context | `Practice` | `Practice 2` | `practice` | `practice_2` |
+| Grand Prix context | `Practice` | `Practice 3` | `practice` | `practice_3` |
+| Season 2020 and `Meeting.Key=1057` | `Practice` | `Practice` | `practice` | `practice_1` |
+| Grand Prix context | `Qualifying` | `Qualifying` | `qualifying` | `qualifying` |
+| Grand Prix context | `Qualifying` | `Sprint Shootout` | `sprint_qualifying` | `sprint_qualifying` |
+| Grand Prix context | `Qualifying` | `Sprint Qualifying` | `sprint_qualifying` | `sprint_qualifying` |
+| Season 2021 and Grand Prix context | `Race` | `Sprint Qualifying` | `sprint` | `sprint` |
+| Grand Prix context | `Race` | `Sprint` | `sprint` | `sprint` |
+| Grand Prix context | `Race` | `Race` | `race` | `race` |
 
-Historical display names MUST be classified by their documented format rather
-than string alone. In particular, the 2021 name `Sprint Qualifying` described a
-race-like sprint, while later seasons use similar wording for a qualifying-like
-session. Unknown formats MUST remain unknown until fixture-backed classification
-exists.
+In the testing rows, `N` is exactly one ASCII digit `1`, `2`, or `3`, copied to
+the canonical name. Grand Prix context requires `Meeting.Name` to end with the
+exact case-sensitive suffix ` Grand Prix`. Every other comparison is also exact
+and case-sensitive; whitespace trimming, case folding, broad `Type` fallback,
+`Number`, path parsing, and fuzzy matching are forbidden. In particular, the
+2021 name `Sprint Qualifying` described a race-like sprint, while 2024 uses that
+same name for qualifying-like sessions. Unknown year-constrained combinations,
+meeting contexts, and field combinations remain unresolved until fixture-backed
+classification exists.
 
-Each session creates a separate set of driver-session traces. Practice,
-qualifying, sprint qualifying, sprint, and race use one common trace contract;
-they are not separate trace types. Q1/Q2/Q3 and SQ1/SQ2/SQ3 are phases within
-one qualifying-like session and MUST NOT become separate traces.
+Each accepted session creates a separate set of driver-session traces. Testing,
+practice, qualifying, sprint qualifying, sprint, and race use one common trace
+contract; they are not separate trace types. Q1/Q2/Q3 and SQ1/SQ2/SQ3 are
+phases within one qualifying-like session and MUST NOT become separate traces.
+
+## Live Timing Session Identity
+
+**Status: GREEN**
+
+`SessionInfo` is the sole owner of canonical Live Timing session identity and
+session-generation replacement. It is a complete descriptor, not a sparse
+event stream. Every root object delivered in a subscription snapshot, ordinary
+feed invocation, or feed keyframe completely replaces the prior descriptor.
+Missing fields never inherit values from an earlier `SessionInfo` object.
+`_kf` is transport metadata only and does not change these semantics.
+
+As of 2026-09-04T10:45:44Z, an index-plus-schedule scan retrieved 652
+`SessionInfo.json` objects and 651 `SessionInfo.jsonStream` files containing 953
+records across seasons 2021 through 2026. F1 origin supplied 546 objects and 545
+streams; 106 of each used FastF1 mirror fallback after origin 403 responses.
+Seven objects still reported `ArchiveStatus=Generating`; these are current
+snapshots, not claims of finality. Every retrievable stream record was a complete
+descriptor. The unavailable 2022 index and partial 2024 index do not authorize
+a broader mapping. One material correction was observed: 2021 Abu Dhabi
+Practice 1 used source session key `6594` in its stream and `7165` in its later
+snapshot while every logical-session field remained the same. A source session
+key therefore MUST NOT independently select a generation or OTLP identity. The
+exact 2020 Imola practice row is an additional direct official fixture outside
+that corpus.
+
+### Descriptor Grammar
+
+One JSON object contains independently validated logical identity, routing, and
+schedule bundles:
+
+| Source field | Contract |
+|---|---|
+| `Key` | Routing member; a positive canonical JSON integer fitting Int64. |
+| `Meeting` | JSON object containing the required meeting fields below. |
+| `Meeting.Key` | Positive canonical JSON integer fitting Int64. |
+| `Meeting.Name` | String used by the exact testing and Grand Prix context rules. |
+| `Type` | String matched exactly by Session Coverage. |
+| `Name` | String matched exactly by Session Coverage. |
+| `StartDate` | Valid Gregorian local time in exact `YYYY-MM-DDTHH:MM:SS` form. |
+
+A canonical JSON integer is an unquoted base-ten token with no sign, fraction,
+exponent, whitespace, or leading zero. The `StartDate` year is four digits from
+1000 through 9999. It becomes the canonical season before any UTC-offset
+calculation. Fractions, `Z`, numeric offsets, whitespace, and leap-second `60`
+are invalid in this local-time field. Missing, invalid, or duplicate logical
+members make `E` unresolved. An unknown classification combination is a valid
+source shape but likewise leaves `E` unresolved and non-projectable. A missing,
+invalid, or duplicate `Key` makes only `K_route` unavailable and emits a bounded
+diagnostic; coherent `E` remains synchronized for Live Timing projection.
+
+`EndDate` and `GmtOffset` form optional schedule metadata; they do not decide
+identity. A present `EndDate` uses the same local-time grammar. A present
+`GmtOffset` uses exact `[-]HH:MM:00`: positive values have no plus sign, the
+absolute value is at most `14:00:00`, `14` requires zero minutes, and negative
+zero is invalid. When both are valid, UTC is local time minus the offset and the
+end MUST be later than the start. Absence, invalidity, or a duplicate at either
+optional path clears the complete schedule bundle and emits a bounded diagnostic
+without invalidating an otherwise coherent identity candidate.
+
+Embedded `SessionStatus`, `ArchiveStatus`, `_kf`, `Number`, `Path`, meeting and
+circuit display metadata other than `Meeting.Name`'s classification role, and
+unknown members do not enter identity. They cannot repair an unresolved
+candidate. `Path` MUST NOT be used to construct an archive URL, provide season
+or session identity, or enter a signal or diagnostic. The only accepted `_kf`
+value is Boolean `true`; another present value emits a bounded diagnostic but
+does not change logical, routing, or replacement state.
+The relative `HH:mm:ss.SSS` prefixes in static `SessionInfo.jsonStream` files are
+per-stream archive publication coordinates. They preserve order within that
+file but are not RFC3339 feed-envelope time, cross-topic wire order, or sporting
+lifecycle boundaries.
+
+Acceptance of the date and offset grammar does not authorize a scheduled start,
+DNS time, lifecycle transition, trace boundary, polling gate, or result time.
+Embedded status and archive-completion fields likewise have no lifecycle
+authority. Descriptor metadata and a same-tuple correction create no
+current-generation metric, span, event, log, link, or exemplar. A new-tuple
+replacement may create old-generation terminal effects under existing lifecycle
+rules.
+
+### Logical And Routing Identity
+
+The reducer keeps these separate values:
+
+```text
+T       = (season, Meeting.Key, canonical session name)
+K_route = latest accepted SessionInfo.Key for the current T
+E       = (season, Meeting.Key, canonical type, canonical session name)
+```
+
+`T` is the logical session tuple and the only SessionInfo-based generation
+selector. Canonical name also determines one canonical type under Session
+Coverage. Installing `T` also installs immutable emitted identity `E` for that
+generation. Every common OTLP session identity, metric series, deterministic
+trace or span ID, emitted semantic deduplication identity, and OpenF1-derived
+signal uses `E`. Snapshot-seeded transport identities remain generation-local
+until an effect is created; they do not require a racing signal or deterministic
+ID.
+
+`K_route` is correction-aware internal routing state used only to query and
+validate source data. It MUST NOT become an OTLP attribute, metric dimension,
+deterministic-ID input, or semantic deduplication input. In particular,
+`f1.session.key` is not emitted: the source corrected that value in place, so it
+cannot provide replay-stable session identity. Projection requires synchronized
+`E`; new OpenF1 route establishment additionally requires synchronized
+`K_route`.
+
+### Corrections And Replacement
+
+A complete coherent descriptor reduces as follows:
+
+| Incoming descriptor | Required behavior |
+|---|---|
+| No current candidate | Install `T` and `E`, plus valid `K_route` or unavailable routing, without emitting. |
+| Same `T`, same key | Refresh permitted non-identity metadata and restore SessionInfo synchronization. |
+| Same `T`, different or restored valid key | Preserve or restore `E`, replace `K_route` and its routing epoch, and re-resolve OpenF1 routing as defined below. |
+| Same `T`, missing or invalid key | Preserve or restore `E`; make routing unavailable and invalidate prior OpenF1 routing only if route availability changed. |
+| New unseen `T` | Perform canonical generation replacement with valid or unavailable routing, regardless of source-key equality or reuse. |
+| A retained retired `T` | Reject it as stale replay; it cannot become current again. |
+
+A routing transition is a same-tuple routing-key change, loss, or restoration.
+It never closes a root, resets topic state, changes generation, rewrites an
+attribute or deterministic ID, or reopens an exported effect. Every routing
+transition increments an internal OpenF1 routing epoch, returns cancellation
+for work issued under the old route, and clears the frozen OpenF1 identity
+bundle. A valid new route requires `/sessions` and
+`/drivers` coherence before result polling resumes; an unavailable route blocks
+new OpenF1 dispatch. Previously accepted result value, local revision, request
+budget, deadline, and global request-spacing state remain intact. A completion
+from an older routing epoch may release receiver-global request ownership and
+update global spacing. A stale HTTP 429 with a valid positive `Retry-After` MUST
+monotonically extend the receiver-global rate-limit deadline. No stale completion
+can mutate session or result state or create a racing effect.
+Repeated descriptors with unchanged routing value or unavailability do not
+advance the routing epoch or restart work.
+
+Source-key reuse across different tuples is not an identity collision and does
+not block Live Timing replacement. OpenF1 remains unavailable unless its
+response matches both current `K_route` and `E`. Retaining old source keys would
+add no safety and is forbidden.
+
+At most 256 retired logical tuples are retained in FIFO retirement order. Within
+that explicit replay-defense horizon, a retired tuple cannot be resurrected.
+Retiring the 257th generation evicts the oldest tuple; no stronger replay claim
+is made after eviction or process restart. Because `E` and deterministic IDs
+derive from the logical tuple rather than source key, replay after that horizon
+reuses the same semantic identity instead of colliding with another session.
+
+An accepted new tuple replaces the generation atomically in this order:
+
+1. Create any old-generation terminal effects allowed by existing lifecycle
+   rules using only old state and `E`.
+2. Advance the generation token and return commands that cancel or invalidate
+   timers, HTTP requests, and other asynchronous work so late completions cannot
+   mutate session state.
+3. Retire the old logical tuple.
+4. Clear every session-scoped reducer, registry, candidate, baseline,
+   watermark, deduplication set, diagnostic latch, and unresolved staging area.
+5. Install the new `T`, `E`, and `K_route` under the advanced generation.
+6. Reduce remaining topics from the same atomic snapshot into the new
+   generation.
+7. Derive new-generation hydration effects only after the complete batch is
+   coherent.
+
+Old-generation effects precede new-generation effects in reducer output, while
+their trace, metric, and log delivery remains independent. Receiver-global
+transport state and the OpenF1 request-spacing or rate-limit gate survive
+replacement. Replacement is an export gate, not evidence of `Finished`,
+`Finalised`, `Ends`, or a sporting outcome.
+
+### Snapshot And Reconnect Reduction
+
+Every successful subscription completion MUST reach the reducer as one explicit
+batch, including a `null`, empty-object, or partial response. The batch contains
+its `snapshot` delivery kind, the complete requested-topic set, exact
+present-topic set, normalized updates, and one Collector observation time. The
+protocol boundary validates framing, the top-level result and manifest, and
+payload normalization all-or-nothing. Semantic validation remains topic-local
+at the narrowest independently valid boundary. Synthesizing empty payloads for
+absent topics is forbidden.
+
+Snapshot reduction proceeds as one transaction:
+
+1. Decode and resolve `SessionInfo` before mutating any session-scoped topic,
+   independent of JSON map or sorted decoder order.
+2. Apply any same-session recovery, key correction, or old/new generation
+   replacement.
+3. Only when identity remains synchronized, stage every other present topic's
+   complete replacement or semantic failure and every requested omission
+   without mutating current state.
+4. Reconcile cross-topic dependencies from that complete staged state, then
+   commit topic-local states and availability atomically.
+5. Derive immutable signal effects and bounded operational commands only after
+   the complete batch commits.
+
+This ordering lets a new-session snapshot bind `DriverList`, status, timing, and
+other state to the new generation while returning old closure effects first.
+Snapshot state and effects MUST be invariant to JSON member order and decoder
+ordering. Feed invocations remain strict wire-order updates; they are never
+globally sorted by source time.
+
+A successful snapshot that omits `SessionInfo`, a present null or non-object
+value, an empty object, an unresolved logical bundle, or a retained stale tuple
+retains prior state only as non-projectable recovery state and marks session
+identity unsynchronized. Steps 3 through 5 do not run; every other present or
+omitted topic outcome in that batch is discarded without mutating a generation.
+None of these cases is termination or replacement. A later complete coherent
+object may restore the same tuple, apply a key correction, or establish a new
+generation.
+
+When `E` becomes unsynchronized, every session-scoped Live Timing topic other
+than `SessionInfo` also becomes unsynchronized and recovery-only. Restoring `E`
+alone does not make stale topic state projectable. Each topic requires a later
+identity-synchronized authoritative snapshot before its feed patches can resume
+projection; successful omission then follows that topic's normal unavailable
+rule.
+
+Feed omission of the `SessionInfo` topic is no update. Any present feed value
+that is null, non-object, empty, has an unresolved logical bundle, or names a
+retained stale tuple follows the same unsynchronized recovery rule as an invalid
+snapshot. A routing-only failure follows the independent `K_route` rule and does
+not unsynchronize `E`. Because SessionInfo feed values are complete replacements,
+generic sparse-feed recovery does not apply. A later coherent feed descriptor
+can restore identity but cannot replay intervening updates.
+
+While no synchronized identity exists, unbound Live Timing snapshot and feed
+updates MUST NOT mutate a current generation or create racing effects,
+deterministic IDs, durable signal candidates, or delayed observation queues. A
+coherent `SessionInfo` in the same atomic snapshot allows that snapshot's
+current-state hydration and baseline seeding. Identity resolved in a later
+callback does not replay or hydrate data from earlier unbound snapshots or
+feeds; only observations after the applicable topic resynchronizes may project.
+Already-created effects remain deliverable, and generation-stamped terminal
+timers or a previously frozen OpenF1 identity bundle may continue to act on
+already accepted state in the retained generation.
+
+The current protocol decoder drops successful null and empty subscription
+completions and does not retain a requested-versus-present manifest. That seam
+MUST be corrected before the SessionInfo reducer or any omission-dependent topic
+projection is enabled.
+
+Implementation requires compact public fixtures for every Session Coverage row
+and lexical near miss; testing with no phase layer, `Started` root opening,
+`Finalised` closure, singular best-lap state, and no race-like lap or gap signal;
+the Abu Dhabi 2021 Practice 1 `6594` to `7165` correction before and after signal
+creation; exact integer, local-date, calendar, and offset bounds; complete
+snapshot, ordinary-feed, and defensive `_kf`-feed replacements;
+missing fields, null, empty, embedded-status-only changes, and schedule clearing;
+initial, same-tuple, corrected-key, key-reversion, new-tuple with distinct and
+reused keys, and retired-tuple cases; 256 and 257 retired generations; reconnect
+omission, invalidity, and later restoration; `null`, empty, partial, and permuted
+snapshot batches; topic-local semantic failure; cross-topic staged coherence;
+pre-identity no-replay behavior; generation effect ordering; OpenF1 route
+invalidation and re-resolution; a cold terminal snapshot returning one gated
+`/sessions` dispatch command; exact stable OTLP attributes and deterministic IDs
+across key correction and process restart; and proof that schedule, embedded
+status, archive status, path, and descriptor metadata create no
+current-generation racing signal.
 
 ## Time Model
 
@@ -259,7 +527,7 @@ display name.
 status cycles MAY provide fallback boundary evidence, but `Started` after
 `Aborted` resumes the same phase and MUST NOT create another phase. Drivers
 knocked out in an earlier phase MUST NOT receive synthetic later phase spans.
-Practice, sprint, and race traces omit the phase layer.
+Testing, practice, sprint, and race traces omit the phase layer.
 
 Stint spans are lap-aligned, pit-separated strategic runs so every lap remains
 inside its parent. The old stint owns its in-lap and the new stint owns its
@@ -284,27 +552,32 @@ starts a new driving stint even when the tyres remain fitted.
 A DNS trace MUST be a zero-duration driver-session root at the observed
 competitive `Started` time. It has no stint, lap, sector, or fanned-out session
 events and carries `Error` status with a `did not start` message. Without an
-observed start, no DNS root is emitted; scheduled-start fallback remains YELLOW
-until a SessionInfo time contract is accepted.
+observed start, no DNS root is emitted. `SessionInfo` scheduled-start fallback
+remains **YELLOW** and MUST NOT be implemented from the accepted descriptor
+grammar alone.
 
 Race and sprint roots start at the observed competitive start. Except for DNS,
 OpenF1 result state never owns their end: they close at the accepted Live Timing
 lifecycle fallback defined under OpenF1 Race-Like Result Observations. The
 provisional Live Timing `Retired` field MUST NOT close a root because the source
-can reverse it. Practice and qualifying-like roots start at the first canonical
-`Started` state and normally close at `Finalised`; elimination closes the
-driver's last phase span, not the root.
+can reverse it. Testing, practice, and qualifying-like roots start at the first
+canonical `Started` state and normally close at `Finalised`; elimination closes
+the driver's last phase span, not the root.
 
 `Finished` records a competitive-stop transition but MUST leave roots open for
-trailing timing facts. `Finalised` begins the export grace period, and `Ends` is
-a terminal feed boundary. A live root remains unexported until the first of
-`Ends`, five minutes after `Finalised`, canonical session replacement, or
-receiver shutdown. The five-minute default SHOULD be configurable. The latest
-accepted result observation already reduced when the root effect is created may
-settle status; a result HTTP response never triggers export. Without an accepted
-outcome, the root closes as unresolved rather than inventing DNF, DNS, DSQ, or a
-classified finish. A later result observation or correction uses correlated
-logs; an exported root MUST NOT be resent.
+trailing timing facts. `Ends` is a terminal feed boundary. A testing, practice,
+or qualifying-like root remains unexported until the first of `Finalised`,
+`Ends`, canonical session replacement, or receiver shutdown. A race or sprint
+root remains unexported until the first of `Ends`, five minutes after
+`Finalised`, canonical session replacement, or receiver shutdown. The
+five-minute default SHOULD be configurable.
+
+For race-like roots, the latest accepted result observation already reduced when
+the root effect is created may settle status; a result HTTP response never
+triggers export. Without an accepted outcome, the root closes as unresolved
+rather than inventing DNF, DNS, DSQ, or a classified finish. A later result
+observation or correction uses correlated logs; an exported root MUST NOT be
+resent.
 
 ### Events
 
@@ -448,19 +721,26 @@ merge resolution and tests.
 
 ### Series Cardinality
 
-Racing metric datapoints MUST have exactly these common identity attributes:
+The common OTLP session identity is exactly these attributes and types. Every
+racing metric datapoint, span, and standalone racing log MUST carry all five;
+domain contracts may add only their declared local attributes.
 
 | Attribute | Type | Contract |
 |---|---|---|
-| `f1.session.key` | Int64 | Positive Live Timing `SessionInfo.Key` or matching OpenF1 `session_key`. |
 | `f1.season.year` | Int64 | Four-digit session season. |
+| `f1.meeting.key` | Int64 | Positive Live Timing `Meeting.Key` from immutable identity `E`. |
 | `f1.session.type` | String | Canonical broad type from Session Coverage. |
 | `f1.session.name` | String | Canonical specific name from Session Coverage. |
 | `f1.data.source` | String | `livetiming` or `openf1`. |
 
-An OpenF1 handoff MUST verify that its `session_key` equals the Live Timing key
-before sharing trace identity. A missing or conflicting key blocks cross-source
-correlation.
+For metric datapoints these are exactly the common identity attributes. A metric
+instrument adds only the conditional attributes declared below.
+
+Before an OpenF1 identity bundle freezes, source rows MUST validate against the
+synchronized current `K_route` and `E`. A missing routing key or conflicting
+logical identity blocks bundle establishment. After bundle freeze, that bundle
+remains authoritative until a routing transition or generation replacement;
+temporary Live Timing identity or registry unavailability does not rewrite `E`.
 
 Instruments add only their declared conditional attributes:
 
@@ -476,10 +756,12 @@ Instruments add only their declared conditional attributes:
 Driver acronym and constructor name MUST be normalized and frozen before their
 first metric datapoint for the session. A driver acronym is the validated
 uppercase ASCII source acronym; a constructor name is the first non-empty
-validated source display name. Session key, season, canonical type, canonical
-name, and selected source authority also freeze at first racing signal. A later
-conflict updates unexported trace or log state where safe and emits a bounded
-diagnostic, but MUST NOT split an existing metric series.
+validated source display name. Session season, meeting key, canonical type, and
+canonical name are immutable in `E` from generation installation. `K_route`
+remains correction-aware internal state. Selected source authority is fixed by
+its domain contract. A later metadata conflict updates unexported state where
+safe and emits a bounded diagnostic, but MUST NOT split an existing metric
+series.
 
 ### Session Driver Registry
 
@@ -487,10 +769,10 @@ diagnostic, but MUST NOT split an existing metric series.
 
 `DriverList` is the sole Live Timing owner of the all-session driver registry.
 A non-empty authoritative snapshot object establishes the complete roster for
-practice, qualifying-like, sprint, and race sessions. Canonical driver entry
-keys are positive decimal numbers without sign or leading zero and must fit
-Int64. A present `RacingNumber` must use the same grammar and equal its key. A
-canonical entry must contain source `Tla` as one to four uppercase ASCII
+testing, practice, qualifying-like, sprint, and race sessions. Canonical driver
+entry keys are positive decimal numbers without sign or leading zero and must
+fit Int64. A present `RacingNumber` must use the same grammar and equal its key.
+A canonical entry must contain source `Tla` as one to four uppercase ASCII
 letters. More than 32 canonical driver entries makes a snapshot incoherent;
 pre-freeze feed state beyond that bound is discarded with one bounded
 diagnostic.
@@ -498,18 +780,20 @@ diagnostic.
 The registry freezes at the first coherent non-empty authoritative `DriverList`
 snapshot after session identity resolves, including a cold mid-session
 snapshot. An empty, malformed, or semantically conflicting snapshot cannot
-freeze a registry. Before freeze, sparse feed updates may enrich staged state
-but cannot prove completeness. After freeze, metadata can fill previously empty
-non-identity fields, but a roster, racing-number, or acronym conflict is
-diagnosed and MUST NOT rewrite signal identity.
+freeze a registry. After synchronized session identity exists but before
+registry freeze, sparse feed updates may enrich staged state but cannot prove
+completeness. Unbound DriverList updates are discarded under Session Identity.
+After freeze, metadata can fill previously empty non-identity fields, but a
+roster, racing-number, or acronym conflict is diagnosed and MUST NOT rewrite
+signal identity.
 
-Reconnect to the same session preserves the frozen registry. A coherent
-replacement snapshot must agree for projection to resume; missing or conflicting
-frozen drivers make registry-dependent signals unavailable. Session replacement
-discards it. Non-driver keys are ignored by the registry and cannot create
-racing identity. A signal arriving before required driver resolution emits only
-its independently valid session-level form and is never queued for later driver
-attribution.
+Reconnect to the same session preserves the frozen registry. Only an
+identity-synchronized atomic snapshot can establish agreement for projection to
+resume; missing or conflicting frozen drivers make registry-dependent signals
+unavailable. Session replacement discards it. Non-driver keys are ignored by
+the registry and cannot create racing identity. A signal arriving before
+required driver resolution emits only its independently valid session-level
+form and is never queued for later driver attribution.
 
 Whenever coherent state first establishes both a frozen registry and current
 authoritative `Started` or `Aborted` state without an observed root-opening
@@ -555,12 +839,10 @@ attributes.
 
 Meeting and circuit display metadata MUST NOT be copied into every metric series.
 Uncertain identity MUST delay projection rather than emitting a label correction
-that creates another series. State received before identity resolution MAY be
-retained, but observations MUST NOT be queued without bound or replayed after
-identity appears. A complete staged snapshot resolves identity before projecting
-its current state; unresolved feed observations are excluded with a bounded
-diagnostic. Collector-internal receiver metrics do not use racing identity and
-are outside this table.
+that creates another series. The Live Timing Session Identity contract owns
+snapshot pre-resolution and forbids unbound updates from mutating a generation,
+queuing observations, or replaying after identity appears. Collector-internal
+receiver metrics do not use racing identity and are outside this table.
 
 All F1-produced signals use one stable Bargeboard emitter resource:
 
@@ -875,8 +1157,8 @@ Unit:       {lap}
 Status:     YELLOW
 ```
 
-Practice and qualifying-like `TimeDiffToFastest` fields are a different domain
-and are not projected by this contract. Elapsed values are non-negative.
+Testing, practice, and qualifying-like `TimeDiffToFastest` fields are a different
+domain and are not projected by this contract. Elapsed values are non-negative.
 Leader state is confirmed only when one driver has `Position == 1`, its parsed
 gap is `LeaderLap(N)` with positive `N`, and `LapCount.CurrentLap == N`.
 Confirmed leader state emits zero gap and clears retained interval state even
@@ -967,12 +1249,12 @@ normally arrive late. A hard lifecycle boundary MAY finalize it sooner.
 
 The per-session lap-finalization watermark is the greatest accepted timestamp,
 after normal timestamp precedence, of any `TimingData` feed patch processed in
-wire order. It never moves backward. A pending lap with observed boundary `T`
-finalizes when that watermark is greater than or equal to `T + 5s`, or at a
-hard phase/session boundary or receiver shutdown. Patches from other topics do
-not advance this watermark. Reducer tests inject timestamps; the functional
-core never reads a clock. A late patch can enrich only a still-pending lap and
-cannot reopen an exported one.
+wire order. It never moves backward. A pending lap with observed boundary
+`T_lap` finalizes when that watermark is greater than or equal to
+`T_lap + 5s`, or at a hard phase/session boundary or receiver shutdown. Patches
+from other topics do not advance this watermark. Reducer tests inject timestamps;
+the functional core never reads a clock. A late patch can enrich only a
+still-pending lap and cannot reopen an exported one.
 
 When one driver patch advances the current index from `N` to `N+1`,
 `LastLapTime` and prior-lap timing fields changed by that same atomic patch are
@@ -1224,10 +1506,10 @@ Series:     one per driver per session, plus phase in qualifying-like sessions
 Cadence:    on accepted source value change
 ```
 
-For practice, sprint, and race, `TimingData.BestLapTime.Value` is the sole
-source. For qualifying-like sessions, the singular value owns the resolved
-current phase and is authoritative over that phase's corresponding
-zero-indexed `TimingData.BestLapTimes` entry. Every valid sparse plural snapshot
+For testing, practice, sprint, and race, `TimingData.BestLapTime.Value` is the
+sole source. For qualifying-like sessions, the singular value owns the resolved
+current phase and is authoritative over that phase's corresponding zero-indexed
+`TimingData.BestLapTimes` entry. Every valid sparse plural snapshot
 or feed entry MUST update its resolved phase's retained state. A feed change
 emits the Gauge, and a coherent snapshot MUST hydrate it at Collector
 observation time, except that a conflicting current-phase entry cannot override
@@ -1707,13 +1989,12 @@ corroboration; it MUST NOT independently emit an event or histogram observation.
 This authority split prevents the direct record and its mirrored or duplicated
 series entry from counting twice.
 
-The subscription decoder MUST preserve the requested-versus-present topic
-manifest for each completed snapshot. Successful omission marks that dedicated
-topic unavailable, clears its current and pending report state, preserves
-session-scoped consumed signatures, and emits nothing. Unavailable is not
-unsynchronized. A later snapshot containing the topic performs normal atomic
-replacement. The current decoder must gain this manifest before dedicated-topic
-projection is enabled; synthesizing an empty payload is forbidden.
+Under the snapshot-manifest contract in Live Timing Session Identity,
+successful omission marks that dedicated topic unavailable, clears its current
+and pending report state, preserves session-scoped consumed signatures, and
+emits nothing. Unavailable is not unsynchronized. A later snapshot containing
+the topic performs normal atomic replacement. Dedicated-topic projection MUST
+remain disabled until the protocol carries that manifest.
 
 `PitLaneTimeCollection.PitTimes` is a sparse map keyed by canonical driver
 number. The map key owns driver identity; a present `RacingNumber` MUST agree.
@@ -1980,8 +2261,8 @@ MUST NOT create datapoints until fixture-backed.
 **Status: GREEN**
 
 `LapCount` owns race-like session lap state. Projection is allowed only for
-canonical `race` and `sprint`; endpoint presence cannot enable it in practice or
-qualifying-like sessions.
+canonical `race` and `sprint`; endpoint presence cannot enable it in testing,
+practice, or qualifying-like sessions.
 
 ```text
 Name:       f1.session.current_lap
@@ -2140,8 +2421,8 @@ Lifecycle ordering is:
 - `Aborted` records interruption but closes no driver root and does not infer an
   outcome or qualifying phase.
 - `Finished` records competitive stop while retaining roots for trailing facts.
-- `Finalised` attaches its events before practice/qualifying closure or the
-  race-like export grace period begins.
+- `Finalised` attaches its events before testing/practice/qualifying closure or
+  the race-like export grace period begins.
 - `Ends` attaches its events before the terminal feed closure and export.
 
 These refine, but do not replace, the existing trace-lifecycle rules.
@@ -2494,10 +2775,10 @@ Session-status and fanned-out track-status events are ineligible because their
 driver association is not a driver-specific source fact. Future event kinds
 require explicit opt-in in their GREEN domain contract.
 
-For event time `E`, select the latest retained state for the same session and
-driver with measurement time `P <= E`. It is eligible exactly when
-`0 <= E-P <= 1_000_000_000` integer nanoseconds and its triplet is available.
-The one-second boundary is inclusive. A future sample, absolute time
+For event time `T_event`, select the latest retained state for the same session
+and driver with measurement time `P <= T_event`. It is eligible exactly when
+`0 <= T_event-P <= 1_000_000_000` integer nanoseconds and its triplet is
+available. The one-second boundary is inclusive. A future sample, absolute time
 difference, nearest neighbour, interpolation, extrapolation, or sample from
 another driver is forbidden. If the selected state is all-zero or invalid, do
 not search behind it.
@@ -2516,7 +2797,7 @@ Eligible enrichment adds all four attributes atomically or none:
 | `f1.position.x` | Double | m | Track-local X in metres. |
 | `f1.position.y` | Double | m | Track-local Y in metres. |
 | `f1.position.z` | Double | m | Track-local Z in metres. |
-| `f1.position.sample_age` | Double | s | Exact integer-nanosecond `E-P` converted to seconds. |
+| `f1.position.sample_age` | Double | s | Exact integer-nanosecond `T_event-P` converted to seconds. |
 
 Raw decimetres, sample timestamp, source status, coordinate-system labels, and
 Position entry keys are not exported. The attributes never enter resources,
@@ -2565,10 +2846,10 @@ coordinates.
 
 `RaceControlMessages.Messages` is the sole source for race-control logs and
 driver notices. `RcmSeries` MUST NOT emit or seed these signals. Record identity
-is only canonical session key, literal topic `RaceControlMessages`, and a
-collection index using exact grammar `0 | non-zero-digit, { digit }` and fitting
-Int64. Content is deliberately not identity: a different index with identical
-fields is another source record.
+is only immutable session identity `E`, literal topic `RaceControlMessages`, and
+a collection index using exact grammar `0 | non-zero-digit, { digit }` and
+fitting Int64. Content is deliberately not identity: a different index with
+identical fields is another source record.
 
 The evidence baseline is a 2024-through-2026 review of 309 public official
 session streams and their final snapshots, containing 16,575 stream record
@@ -3003,27 +3284,28 @@ resolved duration must be from one second through 30 minutes inclusive and
 defaults to five minutes. It governs the race-like root export timer whether or
 not OpenF1 observation is enabled.
 
-Polling becomes eligible when the adapter is enabled; Live Timing has frozen
-session key, four-digit season, canonical type and name, and the Session Driver
-Registry; and an authoritative indexed `Finished`, `Finalised`, or `Ends` has
+Polling first becomes eligible when the adapter is enabled; immutable Live
+Timing identity `E` is available; `K_route` is synchronized; the Session Driver
+Registry is frozen; and an authoritative indexed `Finished`, `Finalised`, or `Ends` has
 been accepted, including terminal state recovered from a coherent snapshot.
 `Finished` starts observation eligibility but is not result finality or a root
 boundary.
 
 The adapter requests these endpoints sequentially with
-`Accept: application/json`, `Accept-Encoding: identity`, and an exact canonical
-positive decimal session key:
+`Accept: application/json`, `Accept-Encoding: identity`, and the exact canonical
+positive decimal `K_route` captured in that request's routing epoch:
 
 ```text
-GET /sessions?session_key=<session-key>
-GET /drivers?session_key=<session-key>
-GET /session_result?session_key=<session-key>
+GET /sessions?session_key=<K_route>
+GET /drivers?session_key=<K_route>
+GET /session_result?session_key=<K_route>
 ```
 
 It MUST NOT use `latest`, broad meeting/year/name queries, mutable result-field
 filters, pagination parameters, or response order as identity. `/sessions` and
-`/drivers` establish one frozen OpenF1 identity bundle. Once that succeeds, only
-`/session_result` is polled. A 200 response must have media type
+`/drivers` establish one frozen OpenF1 identity bundle for that routing epoch and
+logical tuple. Once that succeeds, only `/session_result` is polled. A 200
+response must have media type
 `application/json` after case-insensitive media-type parsing; parameters such as
 `charset=utf-8` are allowed. Any content encoding other than absent or exact
 `identity` is rejected. The 256 KiB body cap applies to bytes read after HTTP
@@ -3043,9 +3325,10 @@ than preserving source revision history.
 
 A `/sessions` response is coherent only when it contains exactly one object with:
 
-- Positive canonical JSON integer `session_key` equal to Live Timing session
-  key.
-- Positive canonical JSON integer `meeting_key`.
+- Positive canonical JSON integer `session_key` equal to the request's
+  `K_route`.
+- Positive canonical JSON integer `meeting_key` equal to the logical tuple's
+  `Meeting.Key`.
 - Four-digit canonical JSON integer `year` equal to the frozen season.
 - Exact String `session_type="Race"`.
 - Exact String `session_name="Race"` for canonical `race`, or `"Sprint"` for
@@ -3062,25 +3345,31 @@ configured endpoint may expose it earlier. Either case is valid coverage and
 MUST NOT delay a root beyond its Live Timing export gate.
 
 A `/drivers` response is coherent only when it contains one to 32 objects. Each
-requires matching canonical Integer `session_key` and `meeting_key`, a unique
-positive canonical Integer `driver_number` fitting Int64, and String
-`name_acronym` of one to four uppercase ASCII letters exactly equal to the
-frozen Live Timing acronym for that number. Its driver-number set MUST equal the
-frozen Session Driver Registry exactly. Missing, additional, duplicate, or
-conflicting drivers reject the complete identity response. Names, teams,
-colours, images, and other OpenF1 driver fields cannot rewrite Live Timing
-identity.
+requires canonical Integer `session_key` equal to the request's `K_route`,
+`meeting_key` equal to the logical tuple's `Meeting.Key`, a unique positive
+canonical Integer `driver_number` fitting Int64, and String `name_acronym` of
+one to four uppercase ASCII letters exactly equal to the frozen Live Timing
+acronym for that number. Its driver-number set MUST equal the frozen Session
+Driver Registry exactly. Missing, additional, duplicate, or conflicting drivers
+reject the complete identity response. Names, teams, colours, images, and other
+OpenF1 driver fields cannot rewrite Live Timing identity.
 
 Zero or multiple session rows, cancellation, an empty driver response, and any
 identity conflict leave the OpenF1 identity bundle unavailable. Once frozen it
-survives same-session Live Timing reconnect and is not re-resolved from mutable
-display metadata.
+survives a same-tuple Live Timing reconnect with the same `K_route` and is not
+re-resolved from mutable display metadata. A routing transition invalidates the
+bundle and request epoch under Live Timing Session Identity; every stale
+completion is discarded before semantic reduction. When eligibility still
+holds, bundle establishment restarts at `/sessions` under the existing
+request-spacing, backoff, budget, and deadline gates; the transition resets none
+of those bounds.
 
 ### Result Snapshot Reduction
 
 A non-empty `/session_result` response is accepted only as one coherent whole.
 Every frozen driver appears exactly once and no other driver appears. Each row
-requires matching canonical Integer `session_key` and `meeting_key`, a roster
+requires canonical Integer `session_key` equal to the frozen bundle's
+`K_route`, `meeting_key` equal to the logical tuple's `Meeting.Key`, a roster
 `driver_number`, `position` as null or a positive canonical Integer no greater
 than roster size, `number_of_laps` as null or a non-negative canonical Integer
 fitting Int64, and exact Boolean `dnf`, `dns`, and `dsq`. Non-null positions are
@@ -3242,9 +3531,10 @@ OpenF1 requests have a ten-second timeout, run at most one at a time, and start
 at least one second apart. One adapter attempt is exactly one RoundTripper call:
 the client and transport disable redirects, automatic retries, and automatic
 idempotent request replay. The attempt budget is charged immediately before
-dispatch. After identity freeze, result polls begin at least 30 seconds after
-the prior request completes. Before identity freeze, each retry starts again at
-`/sessions`, then requests `/drivers` only after a coherent session row.
+dispatch. After the OpenF1 identity bundle freezes, result polls begin at least
+30 seconds after the prior request completes. Before bundle freeze, each retry
+starts again at `/sessions`, then requests `/drivers` only after a coherent
+session row.
 
 Observation stops after the first of one hour of injected monotonic time from
 eligibility, 128 total HTTP attempts, revision-overflow latch, session
@@ -3288,27 +3578,37 @@ rate limit, response size, decode, validation, revision overflow, and request
 budget. They contain no endpoint, query, header, credential, response body,
 name, acronym, driver number, or result value.
 
-Same-session Live Timing reconnect preserves the identity bundle, current
-result, revision, polling budget/deadline, and diagnostic latches. Polling may
-continue while Live Timing is disconnected. Once cross-source identity has
-frozen, a later missing or conflicting Live Timing registry snapshot does not
-invalidate it: coherent result completions still create revisions and logs, and
-the latest accepted revision may enrich a root effect. Before identity freeze,
-registry unavailability prevents requests from starting.
+A same-tuple, same-route Live Timing reconnect preserves the identity bundle,
+current result, revision, polling budget/deadline, and diagnostic latches.
+Polling may continue while Live Timing is disconnected. Once cross-source
+identity has frozen, a later missing or conflicting Live Timing registry snapshot
+does not invalidate it: coherent result completions still create revisions and
+logs, and the latest accepted revision may enrich a root effect. A routing
+transition is the explicit exception and follows Live Timing Session Identity.
+Before bundle freeze, registry or routing unavailability prevents requests from
+starting.
 
-Session replacement generation-invalidates and cancels the old HTTP request,
-exports old roots from only already accepted state, then clears all result and
-session polling state. A receiver-global request-start gate, including a
-rate-limit deadline, survives session replacement and prevents the new session
-from bypassing prior spacing or `Retry-After`. Every request and timer action
-carries session generation; a stale completion or timer creates no effect.
+Session replacement first creates old root effects from only already accepted
+state, then generation-invalidates and returns cancellation for the old HTTP
+request, and then clears all result and session polling state. A receiver-global
+request-start gate, including a rate-limit deadline, survives session replacement
+and prevents the new session from bypassing prior spacing or `Retry-After`.
+Every request and timer action carries session generation and routing epoch. A
+stale completion releases only receiver-global request ownership, updates
+global spacing, and MUST monotonically extend the global rate-limit deadline from
+a valid positive HTTP 429 `Retry-After`; it creates no racing effect or
+session-state mutation.
 
 Cancellation does not release the one-request slot until RoundTrip returns. New
-session dispatch waits for that release. Shutdown cancels without a final fetch,
-waits for the request goroutine, exports from accepted state, and then clears
-global adapter state. HTTP completions and timer actions enter the same
-single-owner reducer queue as Live Timing updates; an HTTP goroutine MUST NOT
-mutate session state directly.
+session dispatch waits for that release. Shutdown begins with a reducer action
+that latches HTTP dispatch and timer scheduling disabled before returning
+cancellation commands; no later completion may re-enable or return new work.
+The shell executes cancellation without a final fetch but keeps the reducer
+queue available for the request completion. After the request goroutine joins,
+the shell enqueues one FIFO shutdown barrier; reducing that barrier exports from
+accepted state and then clears global adapter state.
+HTTP completions and timer actions enter the same single-owner reducer queue as
+Live Timing updates; an HTTP goroutine MUST NOT mutate session state directly.
 
 Implementation requires compact sanitized fixtures for exact Race and Sprint
 session identity; every empty, duplicate, cancelled, malformed, and conflicting
@@ -3385,12 +3685,12 @@ was complete on first appearance, and no same-index replay, correction,
 deletion, or non-initial feed array occurred. These absences constrain fixtures
 but do not justify content-based identity or an unbounded reducer.
 
-Record identity is only canonical session key, literal topic `TeamRadio`, and a
-collection index using exact grammar `0 | non-zero-digit, { digit }` and fitting
-Int64. Content is not identity. In particular, `Utc`, `RacingNumber`, `Path`,
-the filename token, and the filename's embedded clock MUST NOT deduplicate a
-record. A different index is a distinct source publication even when another
-record has equal metadata.
+Record identity is only immutable session identity `E`, literal topic
+`TeamRadio`, and a collection index using exact grammar
+`0 | non-zero-digit, { digit }` and fitting Int64. Content is not identity. In
+particular, `Utc`, `RacingNumber`, `Path`, the filename token, and the filename's
+embedded clock MUST NOT deduplicate a record. A different index is a distinct
+source publication even when another record has equal metadata.
 
 An authoritative snapshot `Captures` array atomically replaces current capture
 payload and assigns zero-based implicit indexes. Every present index is marked
@@ -3552,6 +3852,11 @@ Reducer requirements:
 - Unknown topics MUST remain capturable and MUST NOT crash known-topic state.
 - Semantic validation errors MUST use bounded diagnostics without payload data.
 
+`SessionInfo` is the topic-specific exception to generic sparse feed patching:
+every snapshot, ordinary feed, and `_kf` object is a complete descriptor
+replacement under Live Timing Session Identity. Its missing members never
+inherit state from an earlier object.
+
 Feed patches MUST apply strictly in wire order. Source timestamps own OTLP
 chronology, while arrival order owns current state. Equal source timestamps use
 later wire order. Mixed topic patches MUST NOT be globally event-time sorted.
@@ -3568,17 +3873,21 @@ Sparse object patching is presence-aware and recursive:
   ordinary field can recreate deleted state.
 - JSON `null` clears only a field whose topic schema explicitly defines null as
   clear; otherwise it is a semantic validation failure and prior state remains.
-- An empty object is a no-op feed patch and empty snapshot state at that object.
+- Except for a topic-specific complete-object contract such as `SessionInfo`, an
+  empty object is a no-op feed patch and empty snapshot state at that object.
 - Snapshot arrays replace applicable state. Feed arrays are normalized as
   indexed updates only where a fixture-backed topic contract permits it; an
   unsupported feed-array form is quarantined without mutation.
 - Numeric-key maps are sparse indexed patches in feed updates.
 - Snapshot absence removes state, while feed-patch absence retains state.
 
-The functional core MUST return reduced state, signal effects, and bounded
-diagnostics without calling a clock, logger, network, or Collector consumer.
-The imperative shell supplies Collector observation time only where the time
-model permits it.
+The functional core MUST return reduced state, immutable signal effects, bounded
+operational commands, and bounded diagnostics without calling a clock, logger,
+network, or Collector consumer. Commands describe work such as timer scheduling
+or cancellation and HTTP dispatch or cancellation; the imperative shell alone
+executes them. Returned effects and commands MUST NOT alias mutable state that a
+later reduction can clear. The shell supplies Collector observation time only
+where the time model permits it.
 
 The imperative shell MUST copy registered consumer pointers under the consumer
 mutex, release the mutex, and only then call downstream consumers.
@@ -3600,10 +3909,11 @@ lexical variants remain safely representable and do not stop the stream.
 An invalid authoritative snapshot MUST retain prior topic state only as
 non-projectable recovery state, mark that topic unsynchronized, and suppress all
 signals derived from it until a later valid authoritative snapshot replaces it.
-Sparse feed patches MAY still update the retained recovery state but MUST NOT
-declare it synchronized or project it. Invalid SignalR framing, decompression,
-size limits, UTF-8, JSON, or feed-envelope timestamp remain permanent
-source-protocol failures.
+Sparse feed patches MAY still update that topic's retained recovery state but
+MUST NOT declare it synchronized or project it. The complete-object SessionInfo
+exception instead follows its global unbound-update rule. Invalid SignalR
+framing, decompression, size limits, UTF-8, JSON, or feed-envelope timestamp
+remain permanent source-protocol failures.
 
 ## OTLP Projection
 
@@ -3633,49 +3943,48 @@ incompatible telemetry semantics. Executable releases MUST NOT create new scope
 versions merely because `service.version` changed. Scope attributes are empty.
 
 Every span repeats the minimum independently searchable identity:
-`f1.session.key`, `f1.session.type`, `f1.session.name`, `f1.season.year`,
+`f1.season.year`, `f1.meeting.key`, `f1.session.type`, `f1.session.name`,
 `f1.driver.number`, `f1.driver.acronym`, and `f1.data.source`. Driver-session
-roots additionally carry meeting, circuit, driver name, and constructor
-metadata when known. Child spans add their local phase, stint, lap, and sector
-identity. Logs carry the minimum session and driver identity needed for
-independent search and correlation. No signal relies on attribute inheritance,
-which OTLP does not provide.
+roots additionally carry meeting and circuit display metadata, driver name, and
+constructor metadata when known. Child spans add their local phase, stint, lap,
+and sector identity. Logs carry the minimum session and driver identity needed
+for independent search and correlation. No signal relies on attribute
+inheritance, which OTLP does not provide.
 
 ### Deterministic IDs
 
 Trace and span identity uses SHA-256 over unambiguous length-prefixed parts:
 
 ```text
-LP(value) = uint32 big-endian UTF-8 byte length || UTF-8 bytes
-H(parts)  = SHA-256(LP(part_1) || LP(part_2) || ...)
+LP(value)       = uint32 big-endian UTF-8 byte length || UTF-8 bytes
+EID             = LP("season") || LP(Y)
+                  || LP("meeting") || LP(M)
+                  || LP("session.type") || LP(C)
+                  || LP("session.name") || LP(S)
+ID(marker, ...) = SHA-256(LP("bargeboard.otlp.id/v1")
+                  || LP(marker) || EID || LP(part_1) || LP(value_1) || ...)
 ```
 
-Every part, including namespace and marker strings, uses `LP`. Integers use
-unsigned base-10 without leading zeros. A positive session key and driver number
-are required. The first 16 bytes form the TraceID and the first 8 bytes form the
-SpanID.
+Every value, including namespace, marker, and part-name strings, uses `LP`. `Y`
+is canonical season, `M` is positive meeting key, `C` is canonical session type,
+`S` is canonical session name, and `D` is positive driver number. Integers use
+unsigned base-10 without leading zeros. Source `K_route` is absent. The first 16
+bytes form the TraceID and the first 8 bytes form the SpanID.
 
 ```text
-trace = H("bargeboard.otlp.id/v1", "trace",
-          "session", S, "driver", D)[:16]
+trace = ID("trace", "driver", D)[:16]
 
-root = H("bargeboard.otlp.id/v1", "span",
-         "session", S, "driver", D, "driver.session")[:8]
+root = ID("span", "driver", D, "driver.session", "root")[:8]
 
-phase = H("bargeboard.otlp.id/v1", "span",
-          "session", S, "driver", D,
-          "qualifying.phase", P)[:8]
+phase = ID("span", "driver", D, "qualifying.phase", P)[:8]
 
-stint = H("bargeboard.otlp.id/v1", "span",
-          "session", S, "driver", D,
-          "phase", P_OR_NONE, "stint", N)[:8]
+stint = ID("span", "driver", D,
+           "phase", P_OR_NONE, "stint", N)[:8]
 
-lap = H("bargeboard.otlp.id/v1", "span",
-        "session", S, "driver", D,
-        "phase", P_OR_NONE, "lap", L)[:8]
+lap = ID("span", "driver", D,
+         "phase", P_OR_NONE, "lap", L)[:8]
 
-sector = H("bargeboard.otlp.id/v1", "span",
-           "session", S, "driver", D,
+sector = ID("span", "driver", D,
            "phase", P_OR_NONE, "lap", L,
            "sector", N)[:8]
 ```
@@ -3702,10 +4011,11 @@ quarantined and diagnosed rather than rewriting identity. Lap numbers are
 positive and unique within `P_OR_NONE`; a source reset requires a resolved phase
 before export.
 
-Source, names, constructor, timestamps, and mutable result state MUST NOT enter
-identity. An unresolved session, driver, phase, or lap identity blocks export of
-the affected span. IDs MUST remain stable across reconnect, early child export,
-and the handoff from Live Timing to OpenF1 result observations.
+Source `K_route`, display names, constructor, timestamps, and mutable result
+state MUST NOT enter identity. An unresolved session, driver, phase, or lap
+identity blocks export of the affected span. IDs MUST remain stable across
+reconnect, source-key correction, process restart, early child export, and the
+handoff from Live Timing to OpenF1 result observations.
 
 An all-zero output MUST be rehashed by appending the length-prefixed parts
 `"retry"`, `"1"`, then increasing the canonical decimal counter until non-zero.
@@ -3805,6 +4115,8 @@ Before committing a behavior slice:
 |---|---|---|
 | Hybrid signal model led by traces and metrics | GREEN | Logs remain curated and raw capture is opt-in. |
 | Per-domain source authority | GREEN | Live Timing owns live chronology; OpenF1 owns explicit observed post-session domains. |
+| Logical Live Timing session identity | GREEN | A same-session source-key correction changes routing without replacing the generation or emitted identity. |
+| Source `SessionInfo.Key` as OTLP identity | RED | The corrected-in-place value remains internal routing metadata and cannot split telemetry identity. |
 | OpenF1 Race/Sprint result observations | GREEN | Current outcomes can settle unexported root status but never claim legal finality or own chronology. |
 | One driver-session trace | GREEN | Stints, laps, and sectors form the waterfall hierarchy. |
 | Pit activity as lap events | GREEN | No separate pit trace by default. |
