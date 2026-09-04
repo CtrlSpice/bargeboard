@@ -57,6 +57,8 @@ as the behavior and its tests.
 - High-frequency samples MUST NOT become one span or log each.
 - Driver, lap, stint, event, timestamp, trace, and media identifiers MUST NOT
   create unbounded metric series.
+- Bargeboard MUST NOT describe an observed result response as legally final or
+  infer when a retirement, disqualification, or correction took effect.
 - The historical TypeScript model MUST NOT be copied into Go without a fresh
   architecture decision.
 
@@ -107,7 +109,8 @@ captured with fixtures before semantic promotion.
 OpenF1 owns normalized and post-session domains:
 
 - Historical backfill when no live projection for that session is active.
-- Final results, starting grids, championship standings, and points.
+- Correction-aware observed race and sprint results under the contract below.
+- Starting grids, championship standings, and points after separate review.
 - Final or historical normalized pit-lane and stationary-stop durations where
   documented.
 - Post-session facts unavailable from the subscribed Live Timing topics.
@@ -120,6 +123,11 @@ authentication and MUST remain optional.
 Source authority MUST be selected before a pipeline starts. Running both
 sources for the same semantic domain MAY be supported as an explicit audit
 mode later, but MUST NOT be the default.
+
+The accepted OpenF1 result handoff is a one-way enrichment seam, not duplicate
+authority: Live Timing retains root chronology and identity while OpenF1 owns
+only observed result outcome and published position. A standalone OpenF1
+projector cannot mutate or re-emit an already exported Live Timing root.
 
 Every projected signal SHOULD identify its source using a bounded source value
 such as `livetiming` or `openf1`. Source identity MUST NOT include endpoint,
@@ -206,6 +214,8 @@ these bounded values:
 - `observed` for a direct source event or measurement boundary.
 - `publication_time` when only publication placement is known.
 - `estimated` for a bounded derivation from source facts.
+- `collector_observation` when an untimestamped external snapshot exposes only
+  when this Collector observed its current state.
 
 The delivery mode `feed` or `snapshot` is not time quality and MUST NOT become a
 metric dimension. Metric datapoint attributes all participate in series
@@ -261,6 +271,8 @@ starts a new driving stint even when the tyres remain fitted.
 - A finish without DNF, DNS, or DSQ MUST set the driver-session root to `OK`.
 - DNF, DNS, and DSQ MUST set the driver-session root to `Error`, even when a DNF
   is classified, with a short result message.
+- A race-like root without an accepted outcome at export remains `Unset`; lack
+  of result coverage MUST NOT become a successful finish.
 - A stint MAY be `Error` when direct evidence says it ended through a puncture,
   collision, or mechanical retirement.
 - An invalidated, deleted, aborted, or retirement lap MAY be `Error`.
@@ -269,26 +281,30 @@ starts a new driving stint even when the tyres remain fitted.
 - Racing incidents MUST NOT use the semantic `exception` event name. That name
   remains reserved for software exceptions.
 
-A DNS trace MUST be a zero-duration driver-session root at the observed session
-start, or at the scheduled session start when no observed start exists. It has
-no stint, lap, or sector children, uses an estimated time-quality marker when
-necessary, and carries `Error` status with a `did not start` message.
+A DNS trace MUST be a zero-duration driver-session root at the observed
+competitive `Started` time. It has no stint, lap, sector, or fanned-out session
+events and carries `Error` status with a `did not start` message. Without an
+observed start, no DNS root is emitted; scheduled-start fallback remains YELLOW
+until a SessionInfo time contract is accepted.
 
-Race and sprint roots start at the observed competitive start and close at the
-individual driver's confirmed finish crossing or final-authority retirement.
-The provisional Live Timing `Retired` field MUST NOT close a root because the
-source can reverse it. Practice and qualifying-like roots start at the first
-canonical `Started` state and normally close at `Finalised`; elimination closes
-the driver's last phase span, not the root.
+Race and sprint roots start at the observed competitive start. Except for DNS,
+OpenF1 result state never owns their end: they close at the accepted Live Timing
+lifecycle fallback defined under OpenF1 Race-Like Result Observations. The
+provisional Live Timing `Retired` field MUST NOT close a root because the source
+can reverse it. Practice and qualifying-like roots start at the first canonical
+`Started` state and normally close at `Finalised`; elimination closes the
+driver's last phase span, not the root.
 
 `Finished` records a competitive-stop transition but MUST leave roots open for
-trailing timing facts. `Finalised` begins final-result waiting, and `Ends` is a
-terminal feed boundary. A completed live root remains unexported until the first
-of an authoritative final result, `Ends`, five minutes after `Finalised`, or
-receiver shutdown. The five-minute default SHOULD be configurable. Without
-final authority, the root closes as provisional or incomplete rather than
-inventing DNF, DNS, DSQ, or a classified finish. A later final result MUST use a
-correlated log and result metrics; an exported root MUST NOT be resent.
+trailing timing facts. `Finalised` begins the export grace period, and `Ends` is
+a terminal feed boundary. A live root remains unexported until the first of
+`Ends`, five minutes after `Finalised`, canonical session replacement, or
+receiver shutdown. The five-minute default SHOULD be configurable. The latest
+accepted result observation already reduced when the root effect is created may
+settle status; a result HTTP response never triggers export. Without an accepted
+outcome, the root closes as unresolved rather than inventing DNF, DNS, DSQ, or a
+classified finish. A later result observation or correction uses correlated
+logs; an exported root MUST NOT be resent.
 
 ### Events
 
@@ -507,8 +523,8 @@ accepted driver-specific racing fact whose effective time is not before that
 observation boundary. The root starts at the fact's effective time with its time
 quality; it is not backdated and no prior metric, event, or lap is replayed. This
 is the coverage-safe exception to normal root start boundaries. A driver with
-no subsequent participation remains rootless so final authority can still
-create the required zero-duration DNS trace. `Inactive`, `Finished`,
+no subsequent participation remains rootless so a later accepted DNS outcome
+can create the required zero-duration trace. `Inactive`, `Finished`,
 `Finalised`, `Ends`, and a later session-status transition do not themselves
 cause late live root creation. A later `Started` resumes the same
 first-driver-fact rule.
@@ -2124,8 +2140,8 @@ Lifecycle ordering is:
 - `Aborted` records interruption but closes no driver root and does not infer an
   outcome or qualifying phase.
 - `Finished` records competitive stop while retaining roots for trailing facts.
-- `Finalised` attaches its events before practice/qualifying closure or
-  race-like final-result waiting begins.
+- `Finalised` attaches its events before practice/qualifying closure or the
+  race-like export grace period begins.
 - `Ends` attaches its events before the terminal feed closure and export.
 
 These refine, but do not replace, the existing trace-lifecycle rules.
@@ -2201,7 +2217,7 @@ The value is the count of frozen canonical entrants whose coherent reduced
 line-level `Stopped` value is explicit Boolean `false`. `Stopped=true` removes a
 car and a later `false` adds it back. This is provisional current state, not a
 terminal classification. Sector-level `Stopped`, `Retired`, `InPit`, `PitOut`,
-coordinates, telemetry freshness, and final OpenF1 result state MUST NOT affect
+coordinates, telemetry freshness, and OpenF1 result observations MUST NOT affect
 the count. A car in the pit lane remains running when line-level `Stopped` is
 false.
 
@@ -2264,7 +2280,7 @@ unchanged continuously available value emits nothing.
 The metric has exactly the common session identity and no driver, phase,
 stopped, retirement, roster-size, or result attributes. It never closes traces,
 emits retirement events, or assigns DNF, DNS, DSQ, classified finish, or points.
-Final result authority remains independent and does not rewrite prior live
+OpenF1 result observation remains independent and does not rewrite prior live
 Gauge observations.
 
 Implementation requires compact public fixtures for complete and partial
@@ -2683,9 +2699,12 @@ log, suppresses driver event and metric effects, and produces a bounded
 diagnostic containing neither identity value nor message text.
 
 A successfully resolved structured or permitted textual identity adds Int64
-`f1.driver.number` and String `f1.driver.acronym` to the log and MAY use
-trace/span correlation when a legal already-created driver owner contains event
-time. Otherwise the independently valid session log remains unattributed.
+`f1.driver.number` and String `f1.driver.acronym` to the log. When that record
+also creates a driver event, the log MAY share the event owner's TraceID and
+SpanID. A log-only record MAY correlate only to an already-projected lap or root
+whose final interval contains event time; an open provisional root is not
+sufficient. Otherwise the independently valid session log remains
+uncorrelated.
 
 ### Race-Control Driver Events
 
@@ -2934,6 +2953,377 @@ enrichment; requested-topic omission and recovery; `RcmSeries` coexistence and
 non-seeding; feed and snapshot-recovered `Ends`; terminal folding during
 registry unavailability; and independent log/trace/metric delivery failure.
 
+## OpenF1 Race-Like Result Observations
+
+**Status: GREEN**
+
+This contract applies only to canonical `race` and `sprint` sessions. OpenF1
+`/session_result` is a scraped, correction-aware current result snapshot. It
+exposes no source publication time, effective time, finality flag, or public
+revision identifier. Bargeboard MUST call it an observed result snapshot, never
+an FIA-final result. Practice, testing, qualifying-like results, historical
+backfill, grids, result metrics, points, and championship state remain outside
+this slice.
+
+Live Timing remains the sole owner of trace chronology, participation facts,
+children, events, and deterministic trace identity. OpenF1 owns only the latest
+accepted race-like outcome and published position. `TimingData.Retired`, any
+`Stopped` or status field, telemetry cessation, last completed lap, pit state,
+result duration, and result gap MUST NOT infer an outcome or retirement time.
+The handoff is implemented beside the Live Timing session reducer because a
+standalone result projector cannot enrich an unexported root safely.
+
+### Adapter And Fetch Boundary
+
+The first implementation exposes this receiver configuration and defaults it to
+disabled so cross-source network egress is explicit:
+
+```yaml
+receivers:
+  f1livetiming:
+    finalised_grace: 5m
+    openf1_results:
+      enabled: false
+      endpoint: https://api.openf1.org/v1
+```
+
+The endpoint must be an absolute HTTPS URL without user-info, query, or fragment.
+It must not end in `/`; request construction appends the literal relative
+segments `/sessions`, `/drivers`, or `/session_result` to the unchanged endpoint
+string before adding the encoded query. A URL-reference resolver that could drop
+the configured `/v1` or an opaque proxy prefix is forbidden. Plain HTTP is
+accepted only for a loopback integration-test server. Redirects MUST NOT be
+followed. This slice has no OpenF1 credential setting, OAuth flow, or live
+sponsor authentication. The F1 TV token MUST NOT be attached to an OpenF1
+request.
+
+`finalised_grace` is a positive canonical decimal integer followed by exact
+suffix `s` or `m`, with no sign, fraction, whitespace, or compound duration. Its
+resolved duration must be from one second through 30 minutes inclusive and
+defaults to five minutes. It governs the race-like root export timer whether or
+not OpenF1 observation is enabled.
+
+Polling becomes eligible when the adapter is enabled; Live Timing has frozen
+session key, four-digit season, canonical type and name, and the Session Driver
+Registry; and an authoritative indexed `Finished`, `Finalised`, or `Ends` has
+been accepted, including terminal state recovered from a coherent snapshot.
+`Finished` starts observation eligibility but is not result finality or a root
+boundary.
+
+The adapter requests these endpoints sequentially with
+`Accept: application/json`, `Accept-Encoding: identity`, and an exact canonical
+positive decimal session key:
+
+```text
+GET /sessions?session_key=<session-key>
+GET /drivers?session_key=<session-key>
+GET /session_result?session_key=<session-key>
+```
+
+It MUST NOT use `latest`, broad meeting/year/name queries, mutable result-field
+filters, pagination parameters, or response order as identity. `/sessions` and
+`/drivers` establish one frozen OpenF1 identity bundle. Once that succeeds, only
+`/session_result` is polled. A 200 response must have media type
+`application/json` after case-insensitive media-type parsing; parameters such as
+`charset=utf-8` are allowed. Any content encoding other than absent or exact
+`identity` is rejected. The 256 KiB body cap applies to bytes read after HTTP
+framing and before JSON decoding; read at most one extra byte to detect overflow.
+The body contains exactly one top-level array and no trailing JSON value and is
+discarded after reduction. Unknown object members are ignored inside the bound.
+
+The evidence baseline is all 77 completed, non-cancelled Race and Sprint
+sessions exposed for 2024 through 2026-09-04: 1,572 result rows. Exact-key
+responses had at most 22 rows; maximum observed bodies were 381 bytes for
+`/sessions`, 9,168 bytes for `/drivers`, and 4,065 bytes for
+`/session_result`. OpenF1 exposes no `ETag`, `Last-Modified`, update time, or
+settlement marker, and a later correction replaces public current state rather
+than preserving source revision history.
+
+### Cross-Source Identity
+
+A `/sessions` response is coherent only when it contains exactly one object with:
+
+- Positive canonical JSON integer `session_key` equal to Live Timing session
+  key.
+- Positive canonical JSON integer `meeting_key`.
+- Four-digit canonical JSON integer `year` equal to the frozen season.
+- Exact String `session_type="Race"`.
+- Exact String `session_name="Race"` for canonical `race`, or `"Sprint"` for
+  canonical `sprint`.
+- Valid RFC3339 `date_start` and `date_end` with explicit offsets, with end after
+  start.
+- Exact Boolean `is_cancelled=false`.
+
+Schedule timestamps establish OpenF1 identity coherence only. They MUST NOT gate
+polling or result acceptance, replace Live Timing boundaries, create a DNS time,
+or be compared to Live Timing with an invented tolerance. Public unauthenticated
+OpenF1 may withhold the current session until after root export; a compatible
+configured endpoint may expose it earlier. Either case is valid coverage and
+MUST NOT delay a root beyond its Live Timing export gate.
+
+A `/drivers` response is coherent only when it contains one to 32 objects. Each
+requires matching canonical Integer `session_key` and `meeting_key`, a unique
+positive canonical Integer `driver_number` fitting Int64, and String
+`name_acronym` of one to four uppercase ASCII letters exactly equal to the
+frozen Live Timing acronym for that number. Its driver-number set MUST equal the
+frozen Session Driver Registry exactly. Missing, additional, duplicate, or
+conflicting drivers reject the complete identity response. Names, teams,
+colours, images, and other OpenF1 driver fields cannot rewrite Live Timing
+identity.
+
+Zero or multiple session rows, cancellation, an empty driver response, and any
+identity conflict leave the OpenF1 identity bundle unavailable. Once frozen it
+survives same-session Live Timing reconnect and is not re-resolved from mutable
+display metadata.
+
+### Result Snapshot Reduction
+
+A non-empty `/session_result` response is accepted only as one coherent whole.
+Every frozen driver appears exactly once and no other driver appears. Each row
+requires matching canonical Integer `session_key` and `meeting_key`, a roster
+`driver_number`, `position` as null or a positive canonical Integer no greater
+than roster size, `number_of_laps` as null or a non-negative canonical Integer
+fitting Int64, and exact Boolean `dnf`, `dns`, and `dsq`. Non-null positions are
+unique and exactly one row has position 1. At most one status Boolean may be
+true. One malformed row rejects the entire response and retains prior accepted
+state.
+
+Rows reduce in this precedence-free table:
+
+| Source condition | Outcome | Additional validation |
+|---|---|---|
+| `dsq=true` | `dsq` | Laps may be null or non-negative. |
+| `dns=true` | `dns` | Position is null and laps are exactly zero. |
+| `dnf=true`, position present | `classified_dnf` | Laps are non-null and non-negative. |
+| `dnf=true`, position null | `unclassified_dnf` | Laps are non-null and non-negative. |
+| All flags false, position present | `finished` | Laps are positive. |
+| All flags false, position null | `unresolved` | Laps are positive. |
+
+The unique position-1 row must reduce to `finished`. `Classified` means only
+that OpenF1 supplied a numeric position; lap percentage and FIA classification
+rules are not reconstructed. The 2024-through-2026 baseline contained 19
+classified DNF rows, 121 unclassified positive-lap DNF rows, 28 zero-lap DNF
+rows, 17 exact DNS rows, nine DSQ rows including eight with null laps, and three
+all-false unresolved rows. No row had overlapping true flags.
+
+`points`, `duration`, `gap_to_leader`, and every other result field are ignored
+in this slice. They do not affect validation, semantic revision identity,
+traces, metrics, events, or logs. A 200 empty array and HTTP 404 both mean result
+unavailable at that observation; neither clears prior state nor creates an empty
+revision.
+
+The canonical result value is the array sorted by driver number containing only
+driver number, position-or-null, and outcome. JSON formatting, object-member or
+row order, and ignored-field changes are semantically equal. The first accepted
+value is Collector-local revision 1. A later coherent complete value increments
+the revision exactly once when it differs from the immediately prior accepted
+value; reverting to older content is another revision. This revision is neither
+an OpenF1 version nor a finality marker and may restart at 1 after process state
+loss.
+
+The reducer retains only the frozen identity bundle, latest canonical result,
+local revision, bounded polling state, and diagnostic latches. Raw responses and
+prior revision bodies are never retained.
+
+### Root Outcome And Closure
+
+An OpenF1 response never triggers root export. A live accepted `Finalised`
+starts the configurable grace timer, default five minutes, at the transition's
+Collector monotonic observation boundary. A coherent snapshot that first
+recovers current `Finalised` starts it at that snapshot's observation boundary.
+The source `Utc` remains the eventual span-end candidate, not the timer origin.
+Repeated or replayed `Finalised` state does not restart the timer. Timer actions
+carry session generation and are reduced in the same queue as source updates.
+
+The single-owner reducer order decides whether a completed result observation
+was accepted before or after the existing `Ends`, Finalised-grace,
+session-replacement, or shutdown root effect. Result arrival changes only the
+latest retained outcome; it does not reshape a provisional trace tree. At effect
+creation, each Race/Sprint root receives:
+
+| Attribute | Type | Rule |
+|---|---|---|
+| `f1.result.outcome` | String | Effective outcome, or `unresolved` without an accepted row. |
+| `f1.result.source` | String | `openf1` only when an accepted row supplied the outcome. |
+| `f1.result.snapshot.revision` | Int64 | Present only with an accepted row. |
+| `f1.result.position` | Int64 | Present only for a numeric source position. |
+
+The root keeps `f1.data.source=livetiming`; `mixed` is forbidden. Effective root
+status is:
+
+| Outcome | OTLP status | Exact description |
+|---|---|---|
+| `finished` | `OK` | Empty. |
+| `classified_dnf` | `Error` | `classified did not finish` |
+| `unclassified_dnf` | `Error` | `did not finish` |
+| `dns` | `Error` | `did not start` |
+| `dsq` | `Error` | `disqualified` |
+| `unresolved` | `Unset` | Empty. |
+
+Accepted feed evidence of participation is a post-competitive-start validated
+`NumberOfLaps` transition, live-created lap or sector child, or accepted pit
+entry or exit boundary. Snapshot hydration, roster membership, raw CarData,
+Position, line-level `Stopped` or `Retired`, driver-addressed race-control text,
+and TeamRadio metadata are not participation evidence. In particular, a static
+non-zero coordinate observed after `Started` cannot override DNS.
+
+A DNS row with no participation evidence changes projection only: an existing
+provisional root is emitted as the zero-duration DNS form at observed
+competitive start, with all provisional children and fanned-out session/track
+events omitted. A rootless late-coverage entry may project the same DNS root.
+The reducer need not delete or reconstruct provisional state, so a correction
+accepted before export simply changes the later projection decision.
+
+A DNS row conflicting with accepted participation reduces to effective
+`unresolved`, preserves the ordinary provisional tree, and emits one
+payload-free diagnostic. Without observed competitive start, no DNS root is
+emitted. Result state never creates a root for `finished`, either DNF, `dsq`, or
+`unresolved`; those outcomes enrich only an already-created Live Timing root.
+No result arriving after the export gate creates or resends a root.
+
+Every non-DNS root uses a Live Timing lifecycle fallback end. Accepted indexed
+`Ends` uses its record UTC; Finalised-grace expiry uses the accepted `Finalised`
+UTC rather than timer time; replacement or shutdown before either uses the
+greatest accepted source timestamp already owned by the root or descendants.
+The boundary is raised to any later already-owned child/event end and never
+precedes root start. These driver-level fallbacks use
+`f1.time.quality=estimated` because the session boundary does not identify the
+driver's physical finish or retirement.
+
+Collector shutdown time, grace timer time, OpenF1 observation or schedule time,
+result duration, last completed lap, telemetry cessation, `Retired`, and
+`Stopped` are forbidden non-DNS end candidates. An individual finish-crossing
+mapping remains YELLOW until a direct fixture-backed source contract exists.
+
+Once a root effect is created, result attributes, status, and interval freeze.
+A later first observation or correction cannot reopen, resize, restatus, or
+resend that root or any child.
+
+### Result Observation Logs
+
+Logs are the only standalone result signal in this slice. The first accepted
+result revision creates one log per driver:
+
+```text
+Body:              f1.driver.result.observed
+SeverityNumber:    INFO (9)
+SeverityText:      INFO
+Timestamp:         response-completion Collector observation time
+ObservedTimestamp: same value
+```
+
+A later semantic revision creates one log only for each changed driver, with
+body `f1.driver.result.revised` and that revision's single response-completion
+observation time. Every result log carries common session identity with
+`f1.data.source=openf1`, Int64 `f1.driver.number`, String
+`f1.driver.acronym`, Int64 `f1.result.snapshot.revision`, String
+`f1.result.outcome`, and `f1.time.quality=collector_observation`. A numeric
+position adds Int64 `f1.result.position`.
+
+Revision logs additionally carry String `f1.result.previous_outcome` and
+optional Int64 `f1.result.previous_position`. Attribute absence represents a
+null position; no sentinel is used. Ignored result fields, response hashes,
+endpoints, and polling state MUST NOT enter log bodies or other attributes.
+
+A result log MAY use the deterministic TraceID and driver root SpanID whenever
+that canonical root has already been created, exported or not. Unlike racing
+event ownership, the observation timestamp need not fall inside the root because
+the log records later source state about it. No canonical root means no trace
+correlation; a log never creates an orphan span solely for correlation.
+
+Logs are consumed when effects are created. Downstream failure cannot cause an
+HTTP refetch, duplicate effect generation, root suppression, Live Timing
+reconnect, or internal delivery retry. Post-export correction is represented
+only by these immutable logs in this slice.
+
+### Polling, Failure, And Bounds
+
+OpenF1 requests have a ten-second timeout, run at most one at a time, and start
+at least one second apart. One adapter attempt is exactly one RoundTripper call:
+the client and transport disable redirects, automatic retries, and automatic
+idempotent request replay. The attempt budget is charged immediately before
+dispatch. After identity freeze, result polls begin at least 30 seconds after
+the prior request completes. Before identity freeze, each retry starts again at
+`/sessions`, then requests `/drivers` only after a coherent session row.
+
+Observation stops after the first of one hour of injected monotonic time from
+eligibility, 128 total HTTP attempts, revision-overflow latch, session
+replacement, or shutdown. These are resource bounds, not settlement heuristics;
+equal responses at revision 64 or earlier never prove finality or stop polling
+early.
+
+Response handling is:
+
+| Response | Behavior |
+|---|---|
+| Valid 200 | Validate atomically; reset consecutive transient failures. |
+| Empty 200 or 404 | Retain state, reset transient failures, and retry identity or result after the normal 30-second interval. |
+| 401 or 403 | Retain state and retry after five minutes within budget. |
+| 429 | Honor valid `Retry-After`, with a minimum 30-second delay. |
+| Network error, timeout, 408, 425, or 5xx | Retain state and use transient backoff. |
+| Oversized, non-JSON, malformed, or semantically invalid 200 | Retain state and use transient backoff. |
+| Any non-200 2xx, including 204 or 206 | Retain state and use transient backoff. |
+| Any final 1xx, any 3xx, or other 4xx | Stop polling for this session. |
+
+`Retry-After` accepts canonical non-negative decimal seconds or a valid HTTP
+date in IMF-fixdate form. Decimal syntax has no sign or leading zero other than
+literal `0` and must fit Int64 seconds. An HTTP-date delay is computed from the
+injected response-completion wall time and converted immediately to a monotonic
+deadline. Missing, malformed, overflowing, zero, or past `Retry-After` uses
+transient backoff. A valid positive delay is raised to 30 seconds when shorter;
+one beyond the remaining observation budget ends observation.
+
+For transient failures, `n` is the one-based count of consecutive responses or
+transport outcomes classified as transient by the table. Wait
+`min(30s * 2^(n-1), 5m)` using saturating integer arithmetic. A coherent or
+empty 200 and a 404 reset `n` to zero; fixed-delay 401, 403, and valid 429 do not
+change it. The observation deadline and request budget always win.
+
+At revision 64, a different coherent 65th value latches revision overflow,
+retains revision 64, stops polling, and emits one operational diagnostic. The
+maximum racing-log effect count is therefore 32 initial logs plus 63 revisions
+times 32 drivers, or 2,048 per session. Operational diagnostics are rate-limited
+to once per session for each bounded category: identity, transport, HTTP status,
+rate limit, response size, decode, validation, revision overflow, and request
+budget. They contain no endpoint, query, header, credential, response body,
+name, acronym, driver number, or result value.
+
+Same-session Live Timing reconnect preserves the identity bundle, current
+result, revision, polling budget/deadline, and diagnostic latches. Polling may
+continue while Live Timing is disconnected. Once cross-source identity has
+frozen, a later missing or conflicting Live Timing registry snapshot does not
+invalidate it: coherent result completions still create revisions and logs, and
+the latest accepted revision may enrich a root effect. Before identity freeze,
+registry unavailability prevents requests from starting.
+
+Session replacement generation-invalidates and cancels the old HTTP request,
+exports old roots from only already accepted state, then clears all result and
+session polling state. A receiver-global request-start gate, including a
+rate-limit deadline, survives session replacement and prevents the new session
+from bypassing prior spacing or `Retry-After`. Every request and timer action
+carries session generation; a stale completion or timer creates no effect.
+
+Cancellation does not release the one-request slot until RoundTrip returns. New
+session dispatch waits for that release. Shutdown cancels without a final fetch,
+waits for the request goroutine, exports from accepted state, and then clears
+global adapter state. HTTP completions and timer actions enter the same
+single-owner reducer queue as Live Timing updates; an HTTP goroutine MUST NOT
+mutate session state directly.
+
+Implementation requires compact sanitized fixtures for exact Race and Sprint
+session identity; every empty, duplicate, cancelled, malformed, and conflicting
+session/driver response; 1-, 32-, and 33-driver rosters; all six outcomes;
+classified and zero-lap DNF; null-lap DSQ; unresolved rows; multiple flags; DNS
+shape, static post-start coordinates, and real participation conflict; unique
+and duplicate positions; whole-snapshot reorder, repeat, correction, and
+reversion; invalid-between-valid state; revision
+64 and overflow; root creation, conversion, status, hard-end boundaries, and
+pre/post-export corrections; exact initial/revision log schemas and correlation;
+every HTTP response class and `Retry-After` form; request spacing, timeout,
+backoff, deadline, budgets, cancellation, stale completion, reconnect, and
+shutdown; independent trace/log failure; and proof of no metric, result event,
+retirement time, points, duration, gap, raw response, or credential output.
+
 ## Pending Metric Candidates
 
 **Status: YELLOW**
@@ -2944,7 +3334,8 @@ implementation:
 - Tyre-change event settlement.
 - Dedicated pit-topic fallbacks and physical stationary spans.
 - Typed DRS, penalty, and investigation events.
-- Retirement, result, grid, and championship facts.
+- Retirement and individual finish-crossing events; result and points metrics;
+  grids; historical reconciliation; and championship facts.
 - Explainable pace, consistency, degradation, and pit-loss analysis.
 - Receiver lag, payload size, reconnects, and validation failures.
 
@@ -2958,6 +3349,7 @@ Default logs SHOULD be curated:
 
 - Race-control messages.
 - Team-radio metadata.
+- OpenF1 result observations and revisions.
 - Session and track transitions that benefit from a textual record.
 - Data-quality, decoding, and receiver failures.
 
@@ -2965,8 +3357,11 @@ Redacted normalized source payload logging MUST be opt-in. High-frequency car
 and position samples MUST NOT be raw logs by default. Raw capture is never a
 bypass around security rules.
 
-Log source timestamps and observed timestamps MUST remain distinct. Logs SHOULD
-carry trace and span IDs when a relevant driver lap is known.
+Log source timestamps and observed timestamps MUST remain separate fields. They
+may be equal only for a domain explicitly using
+`f1.time.quality=collector_observation`; equality then asserts no source
+timestamp. Logs SHOULD carry trace and span IDs when a relevant driver lap is
+known.
 
 ### Team-Radio Metadata
 
@@ -3087,13 +3482,12 @@ ObservedTimestamp: Collector observation wall time
 The log carries common session identity, Int64 `f1.team_radio.index`, safe
 String `f1.team_radio.path`, and `f1.time.quality`. Successful registry
 resolution also adds Int64 `f1.driver.number` and String
-`f1.driver.acronym`. Only an already-created driver-session root whose interval
-contains the log timestamp may provide log TraceID and SpanID; an active lap or
-stint is never selected because capture availability does not time the speech.
-The root may already be exported if its stable identifiers and final interval
-remain retained. Owner absence does not suppress the log and MUST NOT cause a
-span rewrite or TeamRadio span event. A TeamRadio record is not participation
-evidence and cannot open a late-coverage root.
+`f1.driver.acronym`. Only an already-projected driver-session root whose retained
+final interval contains the log timestamp may provide log TraceID and SpanID;
+an open provisional root, active lap, or stint is never selected because capture
+availability does not time the speech. Owner absence does not suppress the log
+and MUST NOT cause a span rewrite or TeamRadio span event. A TeamRadio record is
+not participation evidence and cannot open a late-coverage root.
 
 Session status does not gate this publication log. The corpus included 485 feed
 captures before the first `Started`, 1,443 after the last `Finished`, 554
@@ -3311,7 +3705,7 @@ before export.
 Source, names, constructor, timestamps, and mutable result state MUST NOT enter
 identity. An unresolved session, driver, phase, or lap identity blocks export of
 the affected span. IDs MUST remain stable across reconnect, early child export,
-and the handoff from Live Timing to final OpenF1 facts.
+and the handoff from Live Timing to OpenF1 result observations.
 
 An all-zero output MUST be rehashed by appending the length-prefixed parts
 `"retry"`, `"1"`, then increasing the canonical decimal counter until non-zero.
@@ -3343,6 +3737,9 @@ normative until their behavior slice begins.
 - Subscription tokens MUST be read from a local file reference.
 - Configured endpoints MUST reject URL user-info, query parameters, and
   fragments to remove common credential-bearing URL vectors.
+- OpenF1 requests MUST NOT receive the F1 TV token or another credential in the
+  first result-observation slice, follow redirects, or expose endpoint/query,
+  header, or response-body content through diagnostics.
 - Secrets MUST NOT appear in configuration examples, tests, logs, status events,
   spans, metrics, documentation, commits, or pull requests.
 - Configured endpoint paths MAY contain opaque proxy routing values. HTTP
@@ -3407,7 +3804,8 @@ Before committing a behavior slice:
 | Decision | Status | Consequence |
 |---|---|---|
 | Hybrid signal model led by traces and metrics | GREEN | Logs remain curated and raw capture is opt-in. |
-| Per-domain source authority | GREEN | Live Timing owns live data; OpenF1 owns historical/final domains. |
+| Per-domain source authority | GREEN | Live Timing owns live chronology; OpenF1 owns explicit observed post-session domains. |
+| OpenF1 Race/Sprint result observations | GREEN | Current outcomes can settle unexported root status but never claim legal finality or own chronology. |
 | One driver-session trace | GREEN | Stints, laps, and sectors form the waterfall hierarchy. |
 | Pit activity as lap events | GREEN | No separate pit trace by default. |
 | DNF, DNS, and DSQ as span errors | GREEN | Failed participation is visible in trace error navigation. |
