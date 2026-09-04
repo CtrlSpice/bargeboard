@@ -2100,6 +2100,104 @@ reconciliation; reconnect dedupe; first-known and repeated state; lifecycle
 ordering; root and active-lap ownership; no-owner logs; and independent
 trace/log delivery failure.
 
+### Cars Running
+
+**Status: GREEN**
+
+For race-like sessions, line-level `TimingData.Lines[driver].Stopped` owns a
+reversible live estimate of how many entered cars the timing feed currently
+considers running:
+
+```text
+Name:       f1.session.cars_running
+Type:       Int64 Gauge
+Unit:       {car}
+Series:     one per session
+Cadence:    on coherent aggregate value or availability change
+```
+
+The value is the count of frozen canonical entrants whose coherent reduced
+line-level `Stopped` value is explicit Boolean `false`. `Stopped=true` removes a
+car and a later `false` adds it back. This is provisional current state, not a
+terminal classification. Sector-level `Stopped`, `Retired`, `InPit`, `PitOut`,
+coordinates, telemetry freshness, and final OpenF1 result state MUST NOT affect
+the count. A car in the pit lane remains running when line-level `Stopped` is
+false.
+
+The entrant roster comes only from a non-empty authoritative `DriverList`
+snapshot staged for the same session. Its container MUST be an object. Every
+canonical positive driver-number key is an entrant and any present
+`RacingNumber` MUST agree. A malformed positive-key entry makes the aggregate
+roster incoherent; it is not silently dropped. Non-canonical keys are retained
+as non-driver metadata and excluded, including safety and medical cars.
+
+The roster freezes when an authoritative `SessionData.StatusSeries` `Started`
+transition activates the metric. Direct `SessionStatus` feed state cannot
+activate it. A coherent cold snapshot may instead freeze and activate only when
+the latest indexed series state and direct mirror agree that the session is
+currently `Started` or `Aborted`. If no complete roster exists at activation,
+the lifecycle becomes active but projection waits; the first later complete
+authoritative DriverList snapshot freezes it. Feed-only roster patches cannot
+prove completeness. Later metadata changes cannot add or remove entrants.
+
+Every frozen entrant MUST have coherent known `Stopped` state. The aggregate is
+all-or-nothing; missing or invalid state for one entrant suppresses projection
+rather than silently undercounting. Feed patches retain omitted driver fields.
+An authoritative `TimingData` snapshot replaces `Lines`; an absent roster
+driver makes the aggregate unavailable until coherent state returns. The
+`Lines` key owns driver identity and a present line-level `RacingNumber` MUST
+agree. An empty initial feed `Lines` object is not proof of an empty field.
+
+After applying all driver entries in one atomic `TimingData` patch, emit at most
+one aggregate datapoint when the resulting count or availability changed. Its
+timestamp is the feed-envelope publication time. Feed activation samples
+current state at the later of the authoritative `Started` record `Utc` and the
+greatest effective timestamp of contributing `Stopped` state. That maximum is
+the aggregate's accepted derived measurement boundary under the Time Model.
+Cold snapshot activation and snapshot hydration use Collector observation time.
+`StartTimestamp` is unset.
+
+The activation timestamp is the lower bound for the series. Equal-time updates
+within one callback flush once in wire order. A candidate before activation or
+not later than the prior datapoint is not emitted; it replaces one latest
+deferred aggregate rather than forming a queue. The next coherent `TimingData`
+feed patch with a legal later timestamp or a later coherent snapshot observation
+emits that deferred current value, even when its number is unchanged. Other
+topic feeds cannot release it. There is no heartbeat or age-based expiry.
+
+Projection continues through `Aborted` and later `Inactive` and ends at the
+first authoritative `Finished`, `Finalised`, or `Ends`; later stop flags cannot
+decrement finishers. A reconnect snapshot whose latest valid indexed series
+state is terminal deactivates before any aggregate hydration, regardless of a
+stale or missing direct mirror. This covers a missed terminal transition without
+replaying it. A cold terminal snapshot cannot activate.
+
+While active, projection pauses on disconnect or unsynchronized `TimingData`,
+`DriverList`, or authoritative `SessionData` lifecycle state. Direct
+`SessionStatus` mirror coherence is additionally required for cold activation or
+non-terminal reconnect resumption, but not for authoritative terminal
+deactivation; a delayed direct feed mirror cannot override an accepted indexed
+transition. Reconnect preserves a frozen roster and lifecycle state and
+atomically replaces current topic state. A value change or resumed availability
+creates one snapshot candidate at Collector observation time, which emits only
+when it passes the chronology guard above and otherwise remains deferred. An
+unchanged continuously available value emits nothing.
+
+The metric has exactly the common session identity and no driver, phase,
+stopped, retirement, roster-size, or result attributes. It never closes traces,
+emits retirement events, or assigns DNF, DNS, DSQ, classified finish, or points.
+Final result authority remains independent and does not rewrite prior live
+Gauge observations.
+
+Implementation requires compact public fixtures for complete and partial
+`DriverList` snapshots; non-driver entries; all-driver `TimingData` snapshots;
+empty initial `Lines`; one and simultaneous `Stopped` changes; true-to-false
+recovery; provisional `Retired`; pit entry/exit; pre-start, active, aborted,
+inactive, finished, and cold terminal lifecycle states; DNS-like participants;
+missing, invalid, deleted, and restored driver state; snapshot staging;
+reconnect roster preservation; equal and backward timestamps; and exact Gauge
+cardinality with no final-result side effects.
+
 ## Pending Metric Candidates
 
 **Status: YELLOW**
@@ -2110,7 +2208,6 @@ implementation:
 - Tyre-change event settlement.
 - Dedicated pit-topic fallbacks and physical stationary spans.
 - Physical X/Y/Z position.
-- Cars-running state.
 - Weather.
 - Race-control, penalty, radio, result, grid, and championship facts.
 - Explainable pace, consistency, degradation, and pit-loss analysis.
