@@ -342,13 +342,20 @@ replacement. Replacement is an export gate, not evidence of `Finished`,
 ### Snapshot And Reconnect Reduction
 
 Every successful subscription completion MUST reach the reducer as one explicit
-batch, including a `null`, empty-object, or partial response. The batch contains
-its `snapshot` delivery kind, the complete requested-topic set, exact
+batch, including a no-result, `null`, empty-object, or partial response. The batch
+contains its `snapshot` delivery kind, the complete requested-topic set, exact
 present-topic set, normalized updates, and one Collector observation time. The
 protocol boundary validates framing, the top-level result and manifest, and
 payload normalization all-or-nothing. Semantic validation remains topic-local
 at the narrowest independently valid boundary. Synthesizing empty payloads for
 absent topics is forbidden.
+
+The transport batch retains exact wire topic identities. Before reduction,
+normalization removes one terminal `.z` compression suffix from requested,
+present, and update topics together; a resulting alias collision invalidates the
+whole batch. The Collector observation `time.Time` retains its process-local
+monotonic reading for deadline arithmetic. Signal projection converts its wall
+component to UTC where required.
 
 Snapshot reduction proceeds as one transaction:
 
@@ -405,10 +412,12 @@ Already-created effects remain deliverable, and generation-stamped terminal
 timers or a previously frozen OpenF1 identity bundle may continue to act on
 already accepted state in the retained generation.
 
-The current protocol decoder drops successful null and empty subscription
-completions and does not retain a requested-versus-present manifest. That seam
-MUST be corrected before the SessionInfo reducer or any omission-dependent topic
-projection is enabled.
+The Go protocol and normalization seam carries successful no-result, null,
+empty-object, and partial subscription completions as explicit snapshot batches
+with the requested-versus-present manifest and one Collector observation time.
+Ignored hub records remain absent callbacks. The transactional SessionInfo
+reducer described above is not yet implemented; it and all omission-dependent
+topic projection remain disabled until that reducer lands.
 
 Implementation requires compact public fixtures for every Session Coverage row
 and lexical near miss; testing with no phase layer, `Started` root opening,
@@ -1993,8 +2002,9 @@ Under the snapshot-manifest contract in Live Timing Session Identity,
 successful omission marks that dedicated topic unavailable, clears its current
 and pending report state, preserves session-scoped consumed signatures, and
 emits nothing. Unavailable is not unsynchronized. A later snapshot containing
-the topic performs normal atomic replacement. Dedicated-topic projection MUST
-remain disabled until the protocol carries that manifest.
+the topic performs normal atomic replacement. The protocol manifest prerequisite
+is implemented; dedicated-topic projection remains disabled until its
+subscription and reducers land together.
 
 `PitLaneTimeCollection.PitTimes` is a sparse map keyed by canonical driver
 number. The map key owns driver identity; a present `RacingNumber` MUST agree.

@@ -527,6 +527,44 @@ func TestConnectSignalRHonorsHandshakeContext(t *testing.T) {
 	}
 }
 
+func TestSignalRConnectionRejectsDuplicateSubscriptionCompletion(t *testing.T) {
+	server := newConnectionTestServer(t, func(connection *websocket.Conn) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		_, _, _ = connection.Read(ctx)
+		_ = connection.Write(ctx, websocket.MessageText, []byte("{}\x1e"))
+		_, _, _ = connection.Read(ctx)
+		_ = connection.Write(ctx, websocket.MessageText, []byte(
+			`{"type":3,"invocationId":"0","result":{}}`+"\x1e"+
+				`{"type":3,"invocationId":"0","result":{}}`+"\x1e",
+		))
+	})
+	connection, err := connectSignalR(context.Background(), server.Client(), connectionTestConfig(t, server.URL))
+	if err != nil {
+		t.Fatalf("connectSignalR() error = %v", err)
+	}
+	defer connection.close(context.Background())
+	if err := connection.subscribe(context.Background()); err != nil {
+		t.Fatalf("subscribe() error = %v", err)
+	}
+
+	consumed := 0
+	err = connection.read(context.Background(), func(_ context.Context, batch liveTimingBatch) error {
+		consumed++
+		if batch.source != liveTimingUpdateSourceSnapshot {
+			t.Errorf("batch source = %d, want snapshot", batch.source)
+		}
+		return nil
+	})
+	if !errors.Is(err, errInvalidLiveTimingData) {
+		t.Fatalf("read() error = %v, want invalid live timing data", err)
+	}
+	if consumed != 1 {
+		t.Errorf("consumed batches = %d, want 1", consumed)
+	}
+}
+
 func TestSignalRConnectionRejectsMessageOverReadLimit(t *testing.T) {
 	server := newConnectionTestServer(t, func(connection *websocket.Conn) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -547,7 +585,7 @@ func TestSignalRConnectionRejectsMessageOverReadLimit(t *testing.T) {
 		t.Fatalf("subscribe() error = %v", err)
 	}
 
-	err = connection.read(context.Background(), func(context.Context, []liveTimingUpdate) error { return nil })
+	err = connection.read(context.Background(), func(context.Context, liveTimingBatch) error { return nil })
 	if !errors.Is(err, errInvalidLiveTimingData) {
 		t.Fatalf("read() error = %v, want invalid live timing data", err)
 	}

@@ -49,8 +49,9 @@ type negotiateResponse struct {
 }
 
 type signalRConnection struct {
-	conn    *websocket.Conn
-	pending []byte
+	conn            *websocket.Conn
+	pending         []byte
+	requestedTopics []string
 }
 
 func connectSignalR(ctx context.Context, client *http.Client, cfg *Config) (*signalRConnection, error) {
@@ -134,19 +135,21 @@ func hasAffinityCookie(cookies []*http.Cookie) bool {
 }
 
 func (c *signalRConnection) subscribe(ctx context.Context) error {
-	message, err := encodeSubscribeInvocation(subscriptionTopics())
+	topics := subscriptionTopics()
+	message, err := encodeSubscribeInvocation(topics)
 	if err != nil {
 		return err
 	}
 	if err := c.conn.Write(ctx, websocket.MessageText, message); err != nil {
 		return fmt.Errorf("write F1 topic subscription: %w", err)
 	}
+	c.requestedTopics = append([]string(nil), topics...)
 	return nil
 }
 
 func (c *signalRConnection) read(
 	ctx context.Context,
-	consume func(context.Context, []liveTimingUpdate) error,
+	consume func(context.Context, liveTimingBatch) error,
 ) error {
 	buffered := c.pending
 	c.pending = nil
@@ -158,13 +161,16 @@ func (c *signalRConnection) read(
 		}
 		buffered = remaining
 		for _, record := range records {
-			updates, err := decodeHubRecord(record)
+			batch, err := decodeHubRecord(record, c.requestedTopics)
 			if err != nil {
 				return err
 			}
-			if len(updates) > 0 {
-				if err := consume(ctx, updates); err != nil {
-					return fmt.Errorf("consume F1 live timing updates: %w", err)
+			if batch != nil {
+				if batch.source == liveTimingUpdateSourceSnapshot {
+					c.requestedTopics = nil
+				}
+				if err := consume(ctx, *batch); err != nil {
+					return fmt.Errorf("consume F1 live timing batch: %w", err)
 				}
 			}
 		}

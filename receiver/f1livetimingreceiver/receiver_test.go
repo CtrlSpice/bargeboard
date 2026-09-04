@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -43,15 +44,15 @@ func TestReceiverReconnectsAndConsumesFeed(t *testing.T) {
 	})
 
 	receiver := newLiveTimingReceiver(connectionTestConfig(t, server.URL), receivertest.NewNopSettings(Type))
+	observationTime := time.Date(2026, 8, 21, 10, 30, 1, 0, time.FixedZone("test", 2*60*60))
+	receiver.now = func() time.Time { return observationTime }
 	receiver.retryDelay = func(attempt int) time.Duration {
 		retryAttempts <- attempt
 		return 0
 	}
-	updates := make(chan normalizedLiveTimingUpdate, 1)
-	receiver.consume = func(_ context.Context, batch []normalizedLiveTimingUpdate) error {
-		for _, update := range batch {
-			updates <- update
-		}
+	batches := make(chan normalizedLiveTimingBatch, 1)
+	receiver.consume = func(_ context.Context, batch normalizedLiveTimingBatch) error {
+		batches <- batch
 		return nil
 	}
 
@@ -65,7 +66,17 @@ func TestReceiverReconnectsAndConsumesFeed(t *testing.T) {
 	})
 
 	select {
-	case update := <-updates:
+	case batch := <-batches:
+		if batch.source != liveTimingUpdateSourceFeed {
+			t.Errorf("batch source = %d, want feed", batch.source)
+		}
+		if batch.observationTime != observationTime {
+			t.Errorf("batch observation time = %s, want exact input %s", batch.observationTime, observationTime)
+		}
+		if len(batch.updates) != 1 {
+			t.Fatalf("batch update count = %d, want 1", len(batch.updates))
+		}
+		update := batch.updates[0]
 		if update.topic != "SessionStatus" {
 			t.Errorf("update topic = %q", update.topic)
 		}
@@ -92,6 +103,95 @@ func TestReceiverReconnectsAndConsumesFeed(t *testing.T) {
 			}
 		default:
 			t.Fatalf("missing retry attempt %d", want)
+		}
+	}
+}
+
+func TestReceiverConsumesEmptySubscriptionSnapshot(t *testing.T) {
+	var connections atomic.Int32
+	retryAttempts := make(chan int, 8)
+	server := newConnectionTestServer(t, func(connection *websocket.Conn) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		_, _, _ = connection.Read(ctx)
+		_ = connection.Write(ctx, websocket.MessageText, []byte("{}\x1e"))
+		_, _, _ = connection.Read(ctx)
+		connectionNumber := connections.Add(1)
+		if connectionNumber <= 2 {
+			_ = connection.Write(ctx, websocket.MessageText, []byte(`{"type":6}`+"\x1e"))
+			_ = connection.Close(websocket.StatusGoingAway, "test reconnect")
+			return
+		}
+		if connectionNumber > 3 {
+			_, _, _ = connection.Read(ctx)
+			return
+		}
+		_ = connection.Write(ctx, websocket.MessageText, []byte(
+			`{"type":3,"invocationId":"0","result":null}`+"\x1e",
+		))
+		_ = connection.Close(websocket.StatusGoingAway, "test reconnect")
+	})
+
+	receiver := newLiveTimingReceiver(connectionTestConfig(t, server.URL), receivertest.NewNopSettings(Type))
+	observationTime := time.Date(2026, 8, 21, 10, 30, 1, 0, time.UTC)
+	var observationCalls atomic.Int32
+	receiver.now = func() time.Time {
+		observationCalls.Add(1)
+		return observationTime
+	}
+	receiver.retryDelay = func(attempt int) time.Duration {
+		retryAttempts <- attempt
+		return 0
+	}
+	batches := make(chan normalizedLiveTimingBatch, 1)
+	receiver.consume = func(_ context.Context, batch normalizedLiveTimingBatch) error {
+		batches <- batch
+		return nil
+	}
+	wantRequestedTopics, err := normalizeLiveTimingTopics(subscriptionTopics())
+	if err != nil {
+		t.Fatalf("normalizeLiveTimingTopics() error = %v", err)
+	}
+
+	if err := receiver.Start(context.Background(), nil); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = receiver.Shutdown(ctx)
+	})
+
+	select {
+	case batch := <-batches:
+		if batch.source != liveTimingUpdateSourceSnapshot {
+			t.Errorf("batch source = %d, want snapshot", batch.source)
+		}
+		if !reflect.DeepEqual(batch.requestedTopics, wantRequestedTopics) {
+			t.Errorf("requested topics = %q, want %q", batch.requestedTopics, wantRequestedTopics)
+		}
+		if len(batch.presentTopics) != 0 || len(batch.updates) != 0 {
+			t.Errorf("empty snapshot present topics = %q, updates = %#v", batch.presentTopics, batch.updates)
+		}
+		if !batch.observationTime.Equal(observationTime) {
+			t.Errorf("batch observation time = %s, want %s", batch.observationTime, observationTime)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for empty subscription snapshot")
+	}
+	if got := observationCalls.Load(); got != 1 {
+		t.Errorf("observation clock calls = %d, want 1", got)
+	}
+
+	for _, want := range []int{0, 1, 0} {
+		select {
+		case got := <-retryAttempts:
+			if got != want {
+				t.Errorf("retry attempt = %d, want %d", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for retry attempt %d", want)
 		}
 	}
 }

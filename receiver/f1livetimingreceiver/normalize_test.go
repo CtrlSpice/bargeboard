@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -162,6 +163,181 @@ func TestNormalizeLiveTimingUpdatesPreservesOrderAndIsAllOrNothing(t *testing.T)
 	}
 	if !errors.Is(err, errInvalidLiveTimingData) {
 		t.Errorf("normalizeLiveTimingUpdates() error does not wrap errInvalidLiveTimingData")
+	}
+}
+
+func TestNormalizeLiveTimingBatchPreservesSnapshotManifest(t *testing.T) {
+	requestedTopics := []string{"Heartbeat", "SessionInfo", "TimingData"}
+	presentTopics := []string{"SessionInfo"}
+	batch := liveTimingBatch{
+		source:          liveTimingUpdateSourceSnapshot,
+		requestedTopics: requestedTopics,
+		presentTopics:   presentTopics,
+		updates: []liveTimingUpdate{{
+			topic:   "SessionInfo",
+			payload: json.RawMessage(`{"Key":6594}`),
+			source:  liveTimingUpdateSourceSnapshot,
+		}},
+	}
+	observationTime := time.Date(2026, 8, 21, 12, 30, 0, 0, time.FixedZone("test", 2*60*60))
+
+	got, err := normalizeLiveTimingBatch(batch, observationTime)
+	if err != nil {
+		t.Fatalf("normalizeLiveTimingBatch() error = %v", err)
+	}
+	if got.source != liveTimingUpdateSourceSnapshot {
+		t.Errorf("batch source = %d, want snapshot", got.source)
+	}
+	if !reflect.DeepEqual(got.requestedTopics, requestedTopics) {
+		t.Errorf("requested topics = %q, want %q", got.requestedTopics, requestedTopics)
+	}
+	if !reflect.DeepEqual(got.presentTopics, presentTopics) {
+		t.Errorf("present topics = %q, want %q", got.presentTopics, presentTopics)
+	}
+	if got.observationTime != observationTime {
+		t.Errorf("observation time = %s, want exact input %s", got.observationTime, observationTime)
+	}
+	if len(got.updates) != 1 {
+		t.Fatalf("update count = %d, want 1", len(got.updates))
+	}
+	if got.updates[0].topic != "SessionInfo" || got.updates[0].source != liveTimingUpdateSourceSnapshot {
+		t.Errorf("normalized update = %#v", got.updates[0])
+	}
+
+	requestedTopics[0] = "changed"
+	presentTopics[0] = "changed"
+	if got.requestedTopics[0] != "Heartbeat" || got.presentTopics[0] != "SessionInfo" {
+		t.Errorf("normalized manifest aliases input: requested = %q, present = %q", got.requestedTopics, got.presentTopics)
+	}
+}
+
+func TestNormalizeLiveTimingBatchNormalizesCompressedManifest(t *testing.T) {
+	observationTime := time.Now()
+	got, err := normalizeLiveTimingBatch(liveTimingBatch{
+		source:          liveTimingUpdateSourceSnapshot,
+		requestedTopics: []string{"CarData.z", "Position.z"},
+		presentTopics:   []string{"CarData.z"},
+		updates: []liveTimingUpdate{{
+			topic:   "CarData.z",
+			payload: compressedJSONPayload(t, []byte(`{"Entries":[]}`)),
+			source:  liveTimingUpdateSourceSnapshot,
+		}},
+	}, observationTime)
+	if err != nil {
+		t.Fatalf("normalizeLiveTimingBatch() error = %v", err)
+	}
+	if !reflect.DeepEqual(got.requestedTopics, []string{"CarData", "Position"}) {
+		t.Errorf("requested topics = %q", got.requestedTopics)
+	}
+	if !reflect.DeepEqual(got.presentTopics, []string{"CarData"}) {
+		t.Errorf("present topics = %q", got.presentTopics)
+	}
+	if len(got.updates) != 1 || got.updates[0].topic != "CarData" {
+		t.Errorf("normalized updates = %#v", got.updates)
+	}
+	if got.observationTime != observationTime {
+		t.Errorf("observation time lost its exact clock value")
+	}
+}
+
+func TestNormalizeLiveTimingBatchPreservesEmptySnapshot(t *testing.T) {
+	observationTime := time.Date(2026, 8, 21, 10, 30, 0, 0, time.UTC)
+	got, err := normalizeLiveTimingBatch(liveTimingBatch{
+		source:          liveTimingUpdateSourceSnapshot,
+		requestedTopics: []string{"SessionInfo"},
+		presentTopics:   []string{},
+		updates:         []liveTimingUpdate{},
+	}, observationTime)
+	if err != nil {
+		t.Fatalf("normalizeLiveTimingBatch() error = %v", err)
+	}
+	if len(got.presentTopics) != 0 || len(got.updates) != 0 {
+		t.Fatalf("normalized empty snapshot present topics = %q, updates = %#v", got.presentTopics, got.updates)
+	}
+	if !got.observationTime.Equal(observationTime) {
+		t.Errorf("observation time = %s, want %s", got.observationTime, observationTime)
+	}
+}
+
+func TestNormalizeLiveTimingBatchRejectsInvalidEnvelope(t *testing.T) {
+	validUpdate := liveTimingUpdate{
+		topic:     "SessionStatus",
+		payload:   json.RawMessage(`{"Status":"Started"}`),
+		timestamp: "2026-08-21T10:30:00.034Z",
+		source:    liveTimingUpdateSourceFeed,
+	}
+	observationTime := time.Date(2026, 8, 21, 10, 30, 1, 0, time.UTC)
+	tests := []struct {
+		name            string
+		batch           liveTimingBatch
+		observationTime time.Time
+	}{
+		{
+			name:            "zero observation time",
+			batch:           liveTimingBatch{source: liveTimingUpdateSourceFeed, updates: []liveTimingUpdate{validUpdate}},
+			observationTime: time.Time{},
+		},
+		{
+			name:            "feed manifest",
+			batch:           liveTimingBatch{source: liveTimingUpdateSourceFeed, presentTopics: []string{"SessionStatus"}, updates: []liveTimingUpdate{validUpdate}},
+			observationTime: observationTime,
+		},
+		{
+			name: "snapshot manifest mismatch",
+			batch: liveTimingBatch{
+				source:          liveTimingUpdateSourceSnapshot,
+				requestedTopics: []string{"SessionInfo"},
+				presentTopics:   []string{"SessionInfo"},
+				updates:         []liveTimingUpdate{},
+			},
+			observationTime: observationTime,
+		},
+		{
+			name: "inconsistent source",
+			batch: liveTimingBatch{
+				source:          liveTimingUpdateSourceSnapshot,
+				requestedTopics: []string{"SessionStatus"},
+				presentTopics:   []string{"SessionStatus"},
+				updates:         []liveTimingUpdate{validUpdate},
+			},
+			observationTime: observationTime,
+		},
+		{
+			name: "unrequested present topic",
+			batch: liveTimingBatch{
+				source:          liveTimingUpdateSourceSnapshot,
+				requestedTopics: []string{"SessionInfo"},
+				presentTopics:   []string{"WeatherData"},
+				updates: []liveTimingUpdate{{
+					topic:   "WeatherData",
+					payload: json.RawMessage(`{}`),
+					source:  liveTimingUpdateSourceSnapshot,
+				}},
+			},
+			observationTime: observationTime,
+		},
+		{
+			name: "normalized topic collision",
+			batch: liveTimingBatch{
+				source:          liveTimingUpdateSourceSnapshot,
+				requestedTopics: []string{"CarData", "CarData.z"},
+				presentTopics:   []string{},
+				updates:         []liveTimingUpdate{},
+			},
+			observationTime: observationTime,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := normalizeLiveTimingBatch(test.batch, test.observationTime)
+			if err == nil {
+				t.Fatal("normalizeLiveTimingBatch() error = nil")
+			}
+			if !errors.Is(err, errInvalidLiveTimingData) {
+				t.Errorf("error does not wrap errInvalidLiveTimingData")
+			}
+		})
 	}
 }
 
