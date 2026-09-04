@@ -2198,6 +2198,132 @@ missing, invalid, deleted, and restored driver state; snapshot staging;
 reconnect roster preservation; equal and backward timestamps; and exact Gauge
 cardinality with no final-result side effects.
 
+### Weather
+
+**Status: GREEN**
+
+Direct `WeatherData` owns seven session-scoped current-state Gauges:
+
+| Source field | Instrument | OTLP type | Unit |
+|---|---|---|---|
+| `AirTemp` | `f1.session.weather.air_temperature` | Double Gauge | `Cel` |
+| `TrackTemp` | `f1.session.weather.track_temperature` | Double Gauge | `Cel` |
+| `Humidity` | `f1.session.weather.relative_humidity` | Double Gauge | `%` |
+| `Pressure` | `f1.session.weather.air_pressure` | Double Gauge | `hPa` |
+| `WindSpeed` | `f1.session.weather.wind_speed` | Double Gauge | `m/s` |
+| `WindDirection` | `f1.session.weather.wind_direction` | Int64 Gauge | `deg` |
+| `Rainfall` | `f1.session.weather.rainfall_detected` | Int64 Gauge | `1` |
+
+The source pressure value is numerically millibar, which equals hectopascal, so
+projection changes the unit label but not the number. Each instrument has one
+series per session and exactly the common session attributes. Weather field,
+driver, phase, circuit, status, freshness, delivery mode, and time quality MUST
+NOT become metric attributes. Gauge `StartTimestamp` is unset.
+
+All seven source fields are JSON strings. Accepted lexical forms are:
+
+```ebnf
+digit          = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+nonzero-digit  = "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+whole          = "0" | nonzero-digit, { digit } ;
+tenth          = whole, ".", digit ;
+signed-tenth   = [ "-" ], tenth ;
+```
+
+`AirTemp` and `TrackTemp` use `signed-tenth`. `Humidity`, `Pressure`, and
+`WindSpeed` use `tenth`. `WindDirection` uses `whole` and MUST be in `0..359`.
+`Rainfall` is exactly `"0"` or `"1"`. Negative zero is non-canonical;
+humidity is in `0.0..100.0`; pressure is positive; wind speed is non-negative.
+Temperatures have no invented physical cutoff. Direction `360` and negative
+directions are invalid rather than wrapped. Source zero temperature, humidity,
+wind speed, and direction remain valid where their field domain permits them.
+
+Whitespace, leading plus, leading zero, exponent, comma, alternate precision,
+JSON-number or Boolean coercion, NaN, infinity, and integer overflow are
+invalid. Decimal fields parse to signed Int64 tenths without an intermediate
+binary float and divide by ten only while projecting Double values. Invalid
+values are never clamped, rounded, or converted to zero.
+
+Every explicit valid feed field emits one datapoint at its normalized SignalR
+feed-envelope publication timestamp, including an unchanged value at a later
+timestamp. A sparse payload emits only explicit fields; retained fields are not
+re-emitted. Within one normalized callback, equal-time candidates for one field
+coalesce in wire order and flush at callback end. A later callback timestamp not
+after that field's prior emitted timestamp is replay-only for projection: source
+state still reduces, but the candidate emits nothing, does not refresh metric
+freshness, and neither changes nor breaks the last fresh rainfall transition
+baseline. A later legal explicit field compares against that untouched fresh
+baseline and projects normally from its newly supplied value.
+
+A coherent authoritative snapshot atomically replaces the complete weather
+object and emits each present valid Gauge once at Collector observation time.
+Absent fields become unavailable. Any semantically invalid known snapshot field
+follows the global invalid-authoritative-snapshot rule and makes the whole topic
+unsynchronized; valid feed siblings continue independently only outside that
+snapshot case. An empty valid object clears all fields without tombstones. A
+successful requested-topic omission marks weather unavailable, clears current
+state, preserves transition dedupe, and emits nothing using the subscription
+manifest contract.
+
+Each projected field independently stores its value, source timestamp,
+Collector monotonic observation time, and deadline exactly 125 seconds later.
+It is fresh before the deadline and stale at `now >= deadline`. Missing feed
+fields do not refresh it. An invalid present feed field emits nothing, does not
+refresh, and leaves its prior valid state to expire; invalid rainfall also
+breaks rainfall-transition continuity. Expiry makes only that field unavailable
+inside the reducer and emits no datapoint, tombstone, zero, NaN, log, or event.
+A delayed timer applies all expirations before the next update and never
+backfills activity.
+
+The deadline uses monotonic Collector time, never source/Collector wall-clock
+subtraction. A snapshot starts new deadlines at observation time because its
+measurement age is unknowable. Disconnect makes weather non-projectable while
+existing deadlines continue to age. A reconnect snapshot replaces state and
+may hydrate fresh current Gauges but replays no missed samples. Direct weather
+is accepted before competitive `Started` once canonical session identity is
+known and stops at `Ends`; session status does not otherwise gate source
+observations. `WeatherDataSeries` MUST NOT backfill, interpolate, or duplicate
+this source.
+
+#### Rainfall Transition Log
+
+A fresh, synchronized feed change between accepted rainfall states emits one
+session-level log:
+
+```text
+Body:              f1.weather.rainfall.changed
+SeverityNumber:    INFO (9)
+SeverityText:      INFO
+Timestamp:         WeatherData feed-envelope publication time
+ObservedTimestamp: Collector observation wall time
+TraceID/SpanID:    unset
+```
+
+The log has the common session identity plus Boolean
+`f1.weather.rainfall_detected`, Boolean
+`f1.weather.previous_rainfall_detected`, and String
+`f1.time.quality=publication_time`. It MUST NOT copy other weather fields or fan
+out to driver spans.
+
+First valid state, repeated state, snapshot replacement, stale-to-known,
+invalid-to-known, requested-topic restoration, and session replacement establish
+baseline without a log. A snapshot baseline followed by a later fresh feed
+change is observed coverage and does emit. Semantic dedupe identity is session,
+log name, publication Unix nanoseconds, previous Boolean, and current Boolean;
+it is consumed when the reducer creates the effect and survives reconnect.
+Metric and log projection/delivery remain independent.
+
+Implementation requires compact public fixtures for all seven complete string
+fields and sparse single-field feed patches; signed temperature; fractional and
+zero humidity; high-altitude pressure; zero wind; directions 0, 359, negative,
+and 360; both rainfall transitions; repeated values and equal-time bursts; every
+lexical rejection; valid feed siblings beside an invalid field; invalid and
+empty snapshots; requested-topic omission; per-field freshness immediately
+before and at 125 seconds; delayed timers; disconnect/reconnect; pre-session and
+terminal observations; rainfall baseline, replay, dedupe, and continuity breaks;
+exact Gauge types/units/cardinality; exact log schema; and proof of no heartbeat,
+interpolation, expiry signal, driver fanout, or WeatherDataSeries replay.
+
 ## Pending Metric Candidates
 
 **Status: YELLOW**
@@ -2208,7 +2334,6 @@ implementation:
 - Tyre-change event settlement.
 - Dedicated pit-topic fallbacks and physical stationary spans.
 - Physical X/Y/Z position.
-- Weather.
 - Race-control, penalty, radio, result, grid, and championship facts.
 - Explainable pace, consistency, degradation, and pit-loss analysis.
 - Receiver lag, payload size, reconnects, and validation failures.
