@@ -310,9 +310,10 @@ The accepted event names are:
 - `f1.race_control.driver_notice`
 - `f1.blue_flag.shown`
 
-`f1.gap.lap_deficit.changed`, `f1.position.exchange`, team-radio, typed penalty
-and investigation, and final retirement events remain **YELLOW** until their
-domain contract is recorded below.
+`f1.gap.lap_deficit.changed`, `f1.position.exchange`, typed penalty and
+investigation, and final retirement events remain **YELLOW** until their domain
+contract is recorded below. Team-radio span events are **RED**; its accepted
+metadata log is defined under Logs.
 
 When a legal trace owner remains available, pit entry, stop, exit, and
 incomplete visit use the accepted event names above. Pit activity belongs on the
@@ -2943,7 +2944,7 @@ implementation:
 - Tyre-change event settlement.
 - Dedicated pit-topic fallbacks and physical stationary spans.
 - Typed DRS, penalty, and investigation events.
-- Radio, retirement, result, grid, and championship facts.
+- Retirement, result, grid, and championship facts.
 - Explainable pace, consistency, degradation, and pit-loss analysis.
 - Receiver lag, payload size, reconnects, and validation failures.
 
@@ -2956,7 +2957,7 @@ Pending candidates MUST NOT be inferred from the historical TypeScript metrics.
 Default logs SHOULD be curated:
 
 - Race-control messages.
-- Team-radio metadata or transcripts when available.
+- Team-radio metadata.
 - Session and track transitions that benefit from a textual record.
 - Data-quality, decoding, and receiver failures.
 
@@ -2966,6 +2967,168 @@ bypass around security rules.
 
 Log source timestamps and observed timestamps MUST remain distinct. Logs SHOULD
 carry trace and span IDs when a relevant driver lap is known.
+
+### Team-Radio Metadata
+
+**Status: GREEN**
+
+`TeamRadio.Captures` is the sole source for team-radio metadata logs. It records
+that the source published a relative media capture associated with a
+`RacingNumber`; it does not expose the audio contents, transcription, duration,
+beginning of speech, lap association, sentiment, strategy, incident cause, or
+sporting outcome. Bargeboard MUST NOT fetch the path, construct a media URL,
+transcribe audio, or create a metric, span, span event, link, or exemplar from
+this topic. A future transcript source requires a separate reviewed contract.
+
+The evidence baseline is a 2024-through-2026 review of 309 indexed official
+sessions. Of those, 276 TeamRadio streams were available and 33 returned 403;
+the available streams contained 10,436 captures. Every stream began with a
+non-empty array, accounting for 514 captures, followed by 9,922 captures in
+sparse numeric-key feed maps. Final static snapshots exactly matched reduced
+stream state. Observed indexes ranged from 0 through 173. Every observed entry
+was complete on first appearance, and no same-index replay, correction,
+deletion, or non-initial feed array occurred. These absences constrain fixtures
+but do not justify content-based identity or an unbounded reducer.
+
+Record identity is only canonical session key, literal topic `TeamRadio`, and a
+collection index using exact grammar `0 | non-zero-digit, { digit }` and fitting
+Int64. Content is not identity. In particular, `Utc`, `RacingNumber`, `Path`,
+the filename token, and the filename's embedded clock MUST NOT deduplicate a
+record. A different index is a distinct source publication even when another
+record has equal metadata.
+
+An authoritative snapshot `Captures` array atomically replaces current capture
+payload and assigns zero-based implicit indexes. Every present index is marked
+consumed without emitting a log, including an incomplete or invalid entry, so
+snapshot history cannot replay later. An empty array is a valid empty
+replacement even though none was observed. `null` is invalid. The optional
+snapshot member `_kf` is transport keyframe metadata: when present it is the
+Boolean `true` beside `Captures`, and it never becomes capture state or an OTLP
+attribute. Successful requested-topic omission clears current and incomplete
+payload but retains consumed identities and overflow state.
+
+A feed `Captures` object is a sparse numeric-key patch. Keys are processed in
+ascending numeric order inside that topic update; this does not reorder other
+topics. An invalid key is diagnosed and ignored without suppressing valid
+siblings. An empty object is a no-op. A feed array, `null`, or another container
+shape is unsupported and quarantined without mutation. `_deleted` and null
+entry deletion are unsupported because neither form is fixture-backed.
+
+An unseen feed index may accumulate a sparse entry until `RacingNumber` and
+`Path` are both present. The first patch with both fields attempts validation.
+Non-string or lexically invalid values, or disagreement between their racing
+numbers, consume the index without a log and produce a bounded payload-free
+diagnostic; a later correction cannot make that identity eligible. Valid values
+freeze all log content and event time, create the effect, and consume the index
+before downstream delivery. `Utc` is optional for completion and follows the
+fallback below. A later patch for a consumed index is diagnostic-only and MUST
+NOT retract, replace, or re-emit the log. Sparse partial entries and corrections
+are defensive reducer behavior; neither was observed in the evidence corpus.
+
+`RacingNumber` must be a canonical positive decimal string fitting Int64. It
+MUST resolve uniquely in the frozen Session Driver Registry before adding
+driver attributes or trace correlation. An unresolved record still emits its
+independently valid session log without driver attributes and is consumed; it
+is never queued for later attribution. The corpus contained only one- and
+two-digit values, and every feed capture resolved against coherent live
+DriverList state, but those observations do not narrow the shared registry
+grammar.
+
+`Path` must be ASCII and match this complete relative-path grammar, where the
+embedded racing number uses the same canonical value as `RacingNumber`:
+
+```ebnf
+path          = "TeamRadio/", token, "_", racing-number,
+                "_", date-digits, "_", time-digits, ".mp3" ;
+token         = upper, upper, upper
+              | upper, upper, upper, upper, upper, upper, digit, digit ;
+racing-number = non-zero-digit, { digit } ;
+date-digits   = digit, digit, digit, digit, digit, digit, digit, digit ;
+time-digits   = digit, digit, digit, digit, digit, digit ;
+upper         = "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I"
+              | "J" | "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R"
+              | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" ;
+digit         = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+non-zero-digit = "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+```
+
+The structured and embedded racing numbers must also resolve to that same
+registry driver for attribution. Across the corpus, 9,903 tokens used the
+six-uppercase-letter/two-digit form and 533 used the three-uppercase-letter
+form. The token is opaque and MUST NOT be compared with DriverList `Reference`,
+acronym, name, or another identity field. The fixed-width date and clock are
+opaque filename components and MUST NOT provide chronology. This allowlist
+rejects absolute paths, traversal, alternate extensions, separators, URL
+syntax, query strings, fragments, controls, and Unicode before the path reaches
+OTLP. The observed paths were 35 through 41 ASCII bytes; accepting a shared
+Int64 racing number gives a normative maximum of 58 bytes.
+
+Record `Utc` uses exact UTC syntax `YYYY-MM-DDTHH:MM:SSZ` with an optional
+fraction of one through seven decimal digits. A valid calendar value is the log
+timestamp and uses `f1.time.quality=observed`. The literal `Z` is required;
+numeric offsets are invalid. All fractional precisions from zero through seven
+were observed. Missing, non-string, invalid-calendar, or invalid-syntax `Utc`
+falls back to the feed-envelope timestamp with
+`f1.time.quality=publication_time` and a bounded diagnostic. The filename clock
+is never a fallback. Snapshots cannot use Collector observation time to create
+historical logs.
+
+Every coherent unseen feed record admitted within the identity bound creates
+exactly one curated log:
+
+```text
+Body:              f1.team_radio.available
+SeverityNumber:    INFO (9)
+SeverityText:      INFO
+Timestamp:         resolved record event time
+ObservedTimestamp: Collector observation wall time
+```
+
+The log carries common session identity, Int64 `f1.team_radio.index`, safe
+String `f1.team_radio.path`, and `f1.time.quality`. Successful registry
+resolution also adds Int64 `f1.driver.number` and String
+`f1.driver.acronym`. Only an already-created driver-session root whose interval
+contains the log timestamp may provide log TraceID and SpanID; an active lap or
+stint is never selected because capture availability does not time the speech.
+The root may already be exported if its stable identifiers and final interval
+remain retained. Owner absence does not suppress the log and MUST NOT cause a
+span rewrite or TeamRadio span event. A TeamRadio record is not participation
+evidence and cannot open a late-coverage root.
+
+Session status does not gate this publication log. The corpus included 485 feed
+captures before the first `Started`, 1,443 after the last `Finished`, 554
+strictly after `Finalised`, and 584 at the same static archive prefix as `Ends`;
+no capture had a later static prefix than `Ends`. Equal prefixes in separate
+static topic streams do not establish cross-topic wire order. A live fixture did
+establish a TeamRadio update after `Finalised`. The reducer therefore accepts a
+coherent current-session feed record independently of `Inactive`, `Started`,
+`Aborted`, `Finished`, `Finalised`, or `Ends` and derives no phase from those
+states.
+
+TeamRadio state retains at most 4,096 distinct indexes per session, including
+consumed identities and incomplete entries. Before applying a snapshot, compute
+the union of retained identities and all array positions; a union above 4,096
+makes the authoritative snapshot incoherent. A 4,097th distinct feed index
+latches overflow for that session: it and all later unseen indexes are neither
+retained nor emitted, while retained incomplete entries may still complete and
+consumed entries remain diagnostic-only. One rate-limited bounded diagnostic
+reports overflow. Identity state is never evicted because eviction could turn a
+replay into a new log. Disconnect clears current incomplete payload but retains
+consumed identities; reconnect snapshots replace payload and seed their
+indexes. Canonical session replacement resets all TeamRadio state.
+
+Diagnostics MUST NOT contain a path, racing number, filename token, raw field
+value, or payload fragment. Implementation requires compact sanitized fixtures
+derived from public records for snapshots with and without `_kf`; empty and
+omitted snapshots; single- and multi-key feed maps; partial completion and
+same-index correction; new-index equal content; invalid, maximum, and
+overflowing indexes; zero- and seven-digit UTC fractions plus every timestamp
+fallback; both token lengths; path traversal and lexical near misses;
+embedded/structured number conflicts; resolved and unresolved drivers;
+pre-start, post-`Finalised`, equal-`Ends`, and post-`Ends` wire order; reconnect
+and session replacement; exact log schema and correlation; and proof of no
+audio fetch, transcript, metric, span event, link, or payload-bearing
+diagnostic.
 
 Before capture, URL user-info, query strings, and fragments MUST be removed, and
 credential-shaped fields such as authorization, access token, cookie, secret,
