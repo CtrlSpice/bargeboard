@@ -6,8 +6,8 @@
  *   events.json        — all non-telemetry events (small, schema-heterogeneous)
  *   meta.json          — raceStartT, grid, version tag
  *
- * Cache is keyed by session_key. Race data is immutable once the event is
- * done, so we never expire entries — use --no-cache to force a fresh fetch.
+ * Cache is keyed by session_key and retained until explicitly bypassed. OpenF1
+ * may backfill or correct completed events, so use --no-cache for a fresh fetch.
  */
 
 import { mkdir, readFile, writeFile, access } from "node:fs/promises";

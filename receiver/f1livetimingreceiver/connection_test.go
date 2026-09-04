@@ -107,6 +107,11 @@ func TestParseNegotiateResponse(t *testing.T) {
 			}`,
 			wantErr: "text frames",
 		},
+		{
+			name:     "invalid UTF-8",
+			contents: "{\"connectionId\":\"public-id\",\"connectionToken\":\"\xff\",\"negotiateVersion\":1}",
+			wantErr:  "UTF-8",
+		},
 		{name: "malformed", contents: `{`, wantErr: "decode"},
 	}
 
@@ -261,6 +266,7 @@ func TestParseHandshakeResponse(t *testing.T) {
 		{name: "hub message", record: `{"type":6}`, wantErr: "expected"},
 		{name: "server error", record: `{"error":"unsupported protocol"}`, wantErr: "rejected"},
 		{name: "empty error", record: `{"error":""}`, wantErr: "decode"},
+		{name: "invalid UTF-8", record: "{\"extension\":\"\xff\"}", wantErr: "UTF-8"},
 		{name: "malformed", record: `{`, wantErr: "decode"},
 		{name: "null", record: `null`, wantErr: "decode"},
 	}

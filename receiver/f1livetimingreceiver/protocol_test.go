@@ -179,6 +179,8 @@ func TestDecodeHubRecord(t *testing.T) {
 		{name: "non-object subscription result", record: `{"type":3,"invocationId":"0","result":[]}`, wantErr: "decode"},
 		{name: "unrequested snapshot topic", record: `{"type":3,"invocationId":"0","result":{"WeatherData":{}}}`, wantErr: "unrequested"},
 		{name: "duplicate snapshot topic", record: `{"type":3,"invocationId":"0","result":{"SessionInfo":{"Key":1},"SessionInfo":{"Key":2}}}`, wantErr: "duplicate"},
+		{name: "invalid UTF-8 target", record: "{\"type\":1,\"target\":\"fee\xffd\"}", wantErr: "UTF-8"},
+		{name: "invalid UTF-8 feed topic", record: "{\"type\":1,\"target\":\"feed\",\"arguments\":[\"\xff\",{},\"2026-08-21T10:30:00Z\"]}", wantErr: "UTF-8"},
 		{name: "invalid feed arguments", record: `{"type":1,"target":"feed","arguments":[]}`, wantErr: "want 3"},
 		{name: "missing type", record: `{}`, wantErr: "missing type"},
 		{name: "malformed", record: `{`, wantErr: "decode"},

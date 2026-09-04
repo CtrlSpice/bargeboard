@@ -79,7 +79,9 @@ The F1 Live Timing receiver currently authenticates, negotiates SignalR,
 subscribes, reconnects, decodes records, distinguishes feed updates from
 subscription snapshots, validates timestamps and JSON, and inflates compressed
 telemetry. Its reducer and OTLP projector are not implemented yet, so its
-normalized-update consumer is currently a no-op.
+normalized-batch consumer is currently a no-op. The transport shell treats a
+valid batch as connection activity even if that consumer fails, emits one
+sanitized failure log, and continues reading rather than reconnecting.
 
 No Go OpenF1 receiver exists yet.
 
@@ -650,7 +652,13 @@ span.
 
 ### Delta Interval Contract
 
-**Status: GREEN**
+**Status: YELLOW pending lifecycle-anchor definition**
+
+The interval arithmetic and watermark rules below are accepted, but the default
+meanings of "observed session start" and "observed session end" are unresolved
+across `Started`, `Finished`, `Finalised`, `Ends`, recovered snapshots, session
+replacement, and shutdown. A domain-specific boundary overrides the default,
+but the default itself MUST be made GREEN before implementing a Delta projector.
 
 All accepted Delta metrics use deterministic event-time intervals:
 
@@ -871,9 +879,21 @@ explicit semantic-convention migration defines them.
 
 ## Accepted Metric Candidates
 
+### CarData Field Adapter
+
+**Status: YELLOW**
+
+`CarData.z` is the intended Live Timing source for field speed, engine speed,
+gear, and throttle. Their exact `Entries` / `Cars` / `Channels` container shape,
+channel identifiers, JSON token grammar, missing and sentinel handling, active
+driver rule, and throttle scaling require compact archive fixtures before source
+binding is accepted. The instrument contracts below do not authorize guessing
+those wire semantics, and these four metrics MUST NOT be implemented until this
+adapter becomes GREEN.
+
 ### Field Speed
 
-**Status: GREEN**
+**Status: GREEN instrument contract; YELLOW source adapter**
 
 ```text
 Name:        f1.field.speed
@@ -893,7 +913,7 @@ telemetry coverage. Raw per-driver speed Gauges are **RED** by default.
 
 ### Field Engine Speed
 
-**Status: GREEN**
+**Status: GREEN instrument contract; YELLOW source adapter**
 
 ```text
 Name:        f1.field.engine_speed
@@ -909,7 +929,7 @@ Gauges and Sums are **RED**.
 
 ### Field Gear
 
-**Status: GREEN**
+**Status: GREEN instrument contract; YELLOW source adapter**
 
 ```text
 Name:        f1.field.gear
@@ -929,7 +949,7 @@ the source cadence can miss rapid shifts.
 
 ### Field Throttle
 
-**Status: GREEN**
+**Status: GREEN instrument contract; YELLOW source adapter**
 
 ```text
 Name:        f1.field.throttle
@@ -3261,13 +3281,14 @@ children, events, and deterministic trace identity. OpenF1 owns only the latest
 accepted race-like outcome and published position. `TimingData.Retired`, any
 `Stopped` or status field, telemetry cessation, last completed lap, pit state,
 result duration, and result gap MUST NOT infer an outcome or retirement time.
-The handoff is implemented beside the Live Timing session reducer because a
-standalone result projector cannot enrich an unexported root safely.
+The handoff MUST be implemented beside the Live Timing session reducer because a
+standalone result projector cannot enrich an unexported root safely. No Go
+OpenF1 adapter or handoff is implemented yet.
 
 ### Adapter And Fetch Boundary
 
-The first implementation exposes this receiver configuration and defaults it to
-disabled so cross-source network egress is explicit:
+A future first implementation MUST expose this receiver configuration and
+default it to disabled so cross-source network egress is explicit:
 
 ```yaml
 receivers:

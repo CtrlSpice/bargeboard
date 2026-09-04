@@ -103,6 +103,7 @@ func (r *liveTimingReceiver) run(
 ) {
 	defer close(done)
 	attempt := 0
+	consumeFailureReported := false
 
 	for {
 		receivedBatch := false
@@ -111,10 +112,11 @@ func (r *liveTimingReceiver) run(
 			if err != nil {
 				return err
 			}
-			if err := r.consume(ctx, normalized); err != nil {
-				return err
-			}
 			receivedBatch = true
+			if err := r.consume(ctx, normalized); err != nil && !consumeFailureReported {
+				r.settings.Logger.Error("F1 live timing batch consumer failed")
+				consumeFailureReported = true
+			}
 			return nil
 		})
 		_ = connection.close(context.Background())

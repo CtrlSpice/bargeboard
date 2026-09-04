@@ -152,7 +152,7 @@ On the first run bargeboard fetches telemetry from OpenF1 (≈14 s for a full fi
 | `events.json` | All other events: laps, sectors, pits, flags, retirements, etc. |
 | `meta.json` | `raceStartT`, starting grid, cache version |
 
-The cache is never expired — race data doesn't change once the event is done. Use `--no-cache` to force a fresh fetch (e.g. if OpenF1 back-fills missing data after the fact). Driver-filtered runs (`--driver`) are not cached so a subsequent full-field run always fetches cleanly.
+The historical CLI never expires this cache automatically, so it may become stale after OpenF1 backfills or corrects an event. Use `--no-cache` to force a fresh fetch. Driver-filtered runs (`--driver`) are not cached so a subsequent full-field run always fetches cleanly.
 
 ## TypeScript quick start
 

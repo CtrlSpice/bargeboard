@@ -196,6 +196,76 @@ func TestReceiverConsumesEmptySubscriptionSnapshot(t *testing.T) {
 	}
 }
 
+func TestReceiverContinuesAfterConsumeFailure(t *testing.T) {
+	var connections atomic.Int32
+	var retries atomic.Int32
+	server := newConnectionTestServer(t, func(connection *websocket.Conn) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		_, _, _ = connection.Read(ctx)
+		_ = connection.Write(ctx, websocket.MessageText, []byte("{}\x1e"))
+		_, _, _ = connection.Read(ctx)
+		connections.Add(1)
+		_ = connection.Write(ctx, websocket.MessageText, []byte(
+			`{"type":1,"target":"feed","arguments":["SessionStatus",{"Status":"Started"},"2026-08-21T10:30:00Z"]}`+"\x1e"+
+				`{"type":1,"target":"feed","arguments":["SessionStatus",{"Status":"Finished"},"2026-08-21T10:31:00Z"]}`+"\x1e",
+		))
+		_, _, _ = connection.Read(ctx)
+	})
+
+	core, observedLogs := observer.New(zap.ErrorLevel)
+	settings := receivertest.NewNopSettings(Type)
+	settings.Logger = zap.New(core)
+	receiver := newLiveTimingReceiver(connectionTestConfig(t, server.URL), settings)
+	receiver.retryDelay = func(int) time.Duration {
+		retries.Add(1)
+		return 0
+	}
+	consumed := make(chan string, 2)
+	var consumeCalls atomic.Int32
+	receiver.consume = func(_ context.Context, batch normalizedLiveTimingBatch) error {
+		consumed <- batch.updates[0].topic
+		if consumeCalls.Add(1) == 1 {
+			return errors.New("sensitive downstream failure")
+		}
+		return nil
+	}
+
+	if err := receiver.Start(context.Background(), nil); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = receiver.Shutdown(ctx)
+	})
+
+	for range 2 {
+		select {
+		case topic := <-consumed:
+			if topic != "SessionStatus" {
+				t.Errorf("consumed topic = %q, want SessionStatus", topic)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for batch consumption")
+		}
+	}
+	if got := connections.Load(); got != 1 {
+		t.Errorf("connection count = %d, want 1", got)
+	}
+	if got := retries.Load(); got != 0 {
+		t.Errorf("retry count = %d, want 0", got)
+	}
+	logs := observedLogs.All()
+	if len(logs) != 1 || logs[0].Message != "F1 live timing batch consumer failed" {
+		t.Fatalf("consumer failure logs = %#v", logs)
+	}
+	if strings.Contains(logs[0].Message, "sensitive downstream failure") {
+		t.Errorf("consumer failure log exposed downstream error: %q", logs[0].Message)
+	}
+}
+
 func TestReceiverStopsWhenServerDisallowsReconnect(t *testing.T) {
 	var connections atomic.Int32
 	var retries atomic.Int32

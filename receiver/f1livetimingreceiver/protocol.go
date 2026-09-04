@@ -8,6 +8,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -153,6 +154,9 @@ func decodeHubRecord(record []byte, requestedTopics []string) (*liveTimingBatch,
 }
 
 func decodeHubMessage(record []byte) (hubMessage, error) {
+	if !utf8.Valid(record) {
+		return hubMessage{}, invalidLiveTimingData("SignalR hub message is not UTF-8")
+	}
 	decoder := json.NewDecoder(bytes.NewReader(record))
 	token, err := decoder.Token()
 	objectStart, ok := token.(json.Delim)

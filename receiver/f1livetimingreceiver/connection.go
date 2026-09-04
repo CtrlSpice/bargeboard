@@ -11,6 +11,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"time"
+	"unicode/utf8"
 
 	"github.com/coder/websocket"
 )
@@ -258,6 +259,9 @@ func negotiateEndpoint(raw string) (string, error) {
 }
 
 func parseNegotiateResponse(contents []byte) (negotiation, error) {
+	if !utf8.Valid(contents) {
+		return negotiation{}, invalidLiveTimingData("SignalR negotiation response is not UTF-8")
+	}
 	var response negotiateResponse
 	if err := json.Unmarshal(contents, &response); err != nil {
 		return negotiation{}, invalidLiveTimingData("decode SignalR negotiation response")
@@ -419,6 +423,9 @@ func splitFirstRecord(contents []byte) (record, remaining []byte, complete bool)
 }
 
 func parseHandshakeResponse(record []byte) error {
+	if !utf8.Valid(record) {
+		return invalidLiveTimingData("SignalR handshake response is not UTF-8")
+	}
 	var response map[string]json.RawMessage
 	if err := json.Unmarshal(record, &response); err != nil || response == nil {
 		return invalidLiveTimingData("decode SignalR handshake response")
