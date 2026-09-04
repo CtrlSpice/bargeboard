@@ -307,6 +307,8 @@ The accepted event names are:
 - `f1.fastest_lap`
 - `f1.session.status.changed`
 - `f1.track_status.changed`
+- `f1.race_control.driver_notice`
+- `f1.blue_flag.shown`
 
 `f1.gap.lap_deficit.changed`, `f1.position.exchange`, team-radio, typed penalty
 and investigation, and final retirement events remain **YELLOW** until their
@@ -461,6 +463,68 @@ validated source display name. Session key, season, canonical type, canonical
 name, and selected source authority also freeze at first racing signal. A later
 conflict updates unexported trace or log state where safe and emits a bounded
 diagnostic, but MUST NOT split an existing metric series.
+
+### Session Driver Registry
+
+**Status: GREEN**
+
+`DriverList` is the sole Live Timing owner of the all-session driver registry.
+A non-empty authoritative snapshot object establishes the complete roster for
+practice, qualifying-like, sprint, and race sessions. Canonical driver entry
+keys are positive decimal numbers without sign or leading zero and must fit
+Int64. A present `RacingNumber` must use the same grammar and equal its key. A
+canonical entry must contain source `Tla` as one to four uppercase ASCII
+letters. More than 32 canonical driver entries makes a snapshot incoherent;
+pre-freeze feed state beyond that bound is discarded with one bounded
+diagnostic.
+
+The registry freezes at the first coherent non-empty authoritative `DriverList`
+snapshot after session identity resolves, including a cold mid-session
+snapshot. An empty, malformed, or semantically conflicting snapshot cannot
+freeze a registry. Before freeze, sparse feed updates may enrich staged state
+but cannot prove completeness. After freeze, metadata can fill previously empty
+non-identity fields, but a roster, racing-number, or acronym conflict is
+diagnosed and MUST NOT rewrite signal identity.
+
+Reconnect to the same session preserves the frozen registry. A coherent
+replacement snapshot must agree for projection to resume; missing or conflicting
+frozen drivers make registry-dependent signals unavailable. Session replacement
+discards it. Non-driver keys are ignored by the registry and cannot create
+racing identity. A signal arriving before required driver resolution emits only
+its independently valid session-level form and is never queued for later driver
+attribution.
+
+Whenever coherent state first establishes both a frozen registry and current
+authoritative `Started` or `Aborted` state without an observed root-opening
+boundary, enter late-coverage mode at that state-establishing snapshot's
+Collector observation time. This covers a registry first received after live
+`Started` and a pre-existing registry whose `Started` was missed across a
+disconnect. The snapshot itself opens no roots.
+
+In late-coverage mode, each driver may open a root at their first subsequent
+accepted driver-specific racing fact whose effective time is not before that
+observation boundary. The root starts at the fact's effective time with its time
+quality; it is not backdated and no prior metric, event, or lap is replayed. This
+is the coverage-safe exception to normal root start boundaries. A driver with
+no subsequent participation remains rootless so final authority can still
+create the required zero-duration DNS trace. `Inactive`, `Finished`,
+`Finalised`, `Ends`, and a later session-status transition do not themselves
+cause late live root creation. A later `Started` resumes the same
+first-driver-fact rule.
+
+Registry unavailability after freeze pauses new registry-dependent projection
+but never invalidates an already created effect or bounded metric candidate
+whose driver attributes froze while the registry was coherent. Terminal state
+reduction may close and deliver those prior candidates without waiting for
+registry recovery.
+
+Implementation requires snapshot and sparse-feed fixtures for every canonical
+session type; matching and conflicting `RacingNumber`; valid and invalid
+acronyms; empty, malformed, 32-driver, and 33-driver rosters; pre-freeze feed
+state; cold mid-session freeze; agreeing and conflicting reconnect snapshots;
+late metadata fill; signals before and after resolution; late root activation
+without replay; a reconnect-recovered missed `Started`; terminal non-activation;
+and session replacement.
 
 Metric series MUST NOT use:
 
@@ -686,8 +750,8 @@ Observation: one time-weighted confirmed-active ratio per valid lap
 Accepted explicit upper bounds are 0%, 1%, 2%, 5%, 10%, 15%, 20%, 30%, 50%,
 and 100%. Lap observations MUST be suppressed below 90% known-state coverage.
 
-Global DRS enable/disable messages belong to race-control events, not these
-telemetry metrics.
+Global DRS enable/disable messages belong to curated race-control logs, not these
+telemetry metrics. A typed DRS race-control event remains YELLOW.
 
 ### Driver Classification Position
 
@@ -1112,9 +1176,8 @@ is the record's payload event time, falling back through normal precedence. If
 the referenced lap is still buffered, the event belongs to that lap. Otherwise
 it belongs to the driver's active lap at the decision timestamp, then the open
 driver-session root. If no owning span remains open, only the correlated log is
-emitted. Reinstatement carries the deleted event's bounded source identity when
-the source provides one; otherwise canonical session, driver, phase-or-`none`,
-and lap number form the correlation. If the qualifying phase cannot be resolved
+emitted. Reinstatement carries the matched deletion record index under the
+Race-Control Driver Events contract. If the qualifying phase cannot be resolved
 uniquely, only the race-control log is emitted.
 
 Implementation requires compact public fixtures for pseudo out-laps, normal
@@ -2141,21 +2204,18 @@ coordinates, telemetry freshness, and final OpenF1 result state MUST NOT affect
 the count. A car in the pit lane remains running when line-level `Stopped` is
 false.
 
-The entrant roster comes only from a non-empty authoritative `DriverList`
-snapshot staged for the same session. Its container MUST be an object. Every
-canonical positive driver-number key is an entrant and any present
-`RacingNumber` MUST agree. A malformed positive-key entry makes the aggregate
-roster incoherent; it is not silently dropped. Non-canonical keys are retained
-as non-driver metadata and excluded, including safety and medical cars.
+The entrant roster is the frozen Session Driver Registry. A malformed canonical
+driver entry makes the aggregate roster incoherent; it is not silently dropped.
+Non-driver metadata, including safety and medical cars, is excluded.
 
-The roster freezes when an authoritative `SessionData.StatusSeries` `Started`
-transition activates the metric. Direct `SessionStatus` feed state cannot
-activate it. A coherent cold snapshot may instead freeze and activate only when
-the latest indexed series state and direct mirror agree that the session is
-currently `Started` or `Aborted`. If no complete roster exists at activation,
-the lifecycle becomes active but projection waits; the first later complete
-authoritative DriverList snapshot freezes it. Feed-only roster patches cannot
-prove completeness. Later metadata changes cannot add or remove entrants.
+An authoritative `SessionData.StatusSeries` `Started` transition activates the
+metric. Direct `SessionStatus` feed state cannot activate it. A coherent cold
+snapshot may instead activate only when the latest indexed series state and
+direct mirror agree that the session is currently `Started` or `Aborted`. If no
+frozen registry exists at activation, the lifecycle becomes active but
+projection waits; the first later coherent authoritative `DriverList` snapshot
+may freeze it under the Session Driver Registry contract. Later metadata
+changes cannot add or remove entrants.
 
 Every frozen entrant MUST have coherent known `Stopped` state. The aggregate is
 all-or-nothing; missing or invalid state for one entrant suppresses projection
@@ -2365,12 +2425,11 @@ valid. Exactly `(0,0,0)` is an explicit unavailable sample, not the circuit
 origin. Z has an arbitrary track-local origin and MUST NOT be described as GPS
 altitude or guaranteed elevation.
 
-Position identity uses a coordinate-specific session roster for every canonical
-session type. It freezes at the first coherent non-empty authoritative
-`DriverList` snapshot after session identity resolves; it does not depend on the
-race-only Cars Running activation rule. A later conflicting DriverList snapshot
-makes Position unavailable but cannot rewrite the frozen roster. Samples
-received before roster resolution are dropped rather than queued.
+Position identity uses the frozen Session Driver Registry for every canonical
+session type. Registry freeze does not depend on the race-only Cars Running
+activation rule. A later conflicting snapshot makes Position unavailable but
+cannot rewrite the registry. Samples received before registry resolution are
+dropped rather than queued.
 
 A coherent observation frame contains every frozen roster driver exactly once
 and no extra canonical positive keys except non-roster auxiliary keys `241`,
@@ -2411,6 +2470,8 @@ without Position. Currently eligible kinds are:
 - `f1.personal_best`
 - `f1.personal_best.revised`
 - `f1.fastest_lap`
+- `f1.race_control.driver_notice`
+- `f1.blue_flag.shown`
 
 Session-status and fanned-out track-status events are ineligible because their
 driver association is not a driver-specific source fact. Future event kinds
@@ -2481,6 +2542,397 @@ eligible/ineligible event class; snapshot replacement/omission; disconnect and
 reconnect; zero standalone OTLP signals; and bounded diagnostics without raw
 coordinates.
 
+### Race-Control Records
+
+**Status: GREEN**
+
+`RaceControlMessages.Messages` is the sole source for race-control logs and
+driver notices. `RcmSeries` MUST NOT emit or seed these signals. Record identity
+is only canonical session key, literal topic `RaceControlMessages`, and a
+collection index using exact grammar `0 | non-zero-digit, { digit }` and fitting
+Int64. Content is deliberately not identity: a different index with identical
+fields is another source record.
+
+The evidence baseline is a 2024-through-2026 review of 309 public official
+session streams and their final snapshots, containing 16,575 stream record
+occurrences. Final snapshots used arrays, streams began with an array, explicit
+feed-map keys were contiguous canonical decimals from 1 through 328, and one
+non-initial stream array replayed prior indexes before adding the next. No key
+reuse was observed. Two records used three fractional UTC digits; all others
+used whole seconds. This supports indexed transport identity and replacement
+arrays, not content deduplication or append-only array assumptions.
+
+The same review found 2,203 lap deletion or reinstatement records. Every one was
+`Category="Other"`, carried driver identity in `Message` rather than structured
+`RacingNumber`, and fit the narrow grammar below. Future unmatched text remains
+a curated log until fixtures justify expanding that grammar; it MUST NOT be
+accepted by a permissive car-number or `LAP` substring search.
+
+A snapshot `Messages` array or numeric-key map atomically replaces collection
+state, using zero-based array position as implicit index, and seeds every
+present index as consumed without telemetry. Numeric-key maps are processed in
+ascending numeric index order; this source-defined member order is inside one
+outer topic update and does not reorder mixed-topic feed updates. An invalid map
+key makes an authoritative snapshot incoherent and is ignored with a bounded
+diagnostic in a feed patch.
+
+A feed numeric-key map patches records recursively. A fixture-backed feed array
+is a complete collection replacement: retained consumed identities remain
+consumed, pending retained indexes receive replacement payload, and unseen
+indexes are considered in ascending order. `_deleted`, shortening, or
+replacement can remove payload state but cannot remove a retained identity or
+make a consumed index eligible again. Coherent deletion and reinstatement
+history in a snapshot is reduced in numeric order solely for entries that the
+snapshot newly consumes; already consumed entries are never folded into
+correlation state again.
+
+Successful requested-topic omission clears current and incomplete record
+payload but retains same-session index identities, overflow state, and active
+deletion correlation. A later feed may emit a coherent unseen index; a recovery
+snapshot consumes every present index not already consumed, including a retained
+incomplete identity, and seeds correlation only when that record is coherent.
+Omission, recovery, and an accompanying `RcmSeries` snapshot cannot replay old
+records.
+
+An unseen feed record waits until `Category` and `Message` are strings. The
+first patch that makes both coherent freezes all signal content and event time.
+A later same-index replay or correction updates bounded diagnostic state only
+and MUST NOT retract, replace, or re-emit any signal. Consumption occurs when
+effects are created, before downstream delivery. Seen indexes survive reconnect
+and reset only with canonical session replacement.
+
+Race-control state retains at most 4,096 distinct indexes total per session,
+including consumed tombstones and incomplete records. Each retained record keeps
+only normalized bounded fields and a message prefix no longer than the maximum
+sanitized output; raw payload text is not retained. Before applying a snapshot
+or complete feed array, compute the union of retained identities and all present
+indexes. A snapshot whose union exceeds 4,096 is incoherent and cannot replace
+collection state. Such a complete feed array, or a 4,097th distinct feed-map
+index, latches overflow for that session: the update does not replace state and
+that and all later unseen indexes are neither retained nor emitted. Updates to
+already retained indexes remain diagnostic-only. One rate-limited bounded
+diagnostic reports overflow. No eviction can make an identity reusable. The
+observed source maximum is far below this safety bound.
+
+Record `Utc` uses exact zone-less UTC source syntax
+`YYYY-MM-DDTHH:MM:SS` with optional exactly three decimal digits. Interpret it
+as UTC without applying circuit offset. A valid calendar value is the event
+timestamp and uses `f1.time.quality=observed`. Missing or invalid `Utc` falls
+back to the feed envelope timestamp with `publication_time` and a bounded
+diagnostic. Embedded clock text in `Message` is display text and never owns
+chronology. Snapshots cannot use Collector observation time to manufacture
+historical record effects.
+
+Every coherent unseen feed record admitted within the identity bound creates
+exactly one curated session log. Overflow suppression is the sole resource-safety
+exception. Its schema is:
+
+```text
+Body:              sanitized source Message
+SeverityNumber:    INFO (9)
+SeverityText:      INFO
+Timestamp:         resolved record event time
+ObservedTimestamp: Collector observation wall time
+```
+
+Message sanitization is deterministic. For every valid Unicode scalar, any
+Unicode `White_Space` scalar or scalar in general category `Cc` or `Cf` becomes
+ASCII space; this includes line breaks, tabs, C0/C1 controls, bidirectional
+format controls, and zero-width format controls. Consecutive spaces collapse
+and leading and trailing spaces are removed. Other printable Unicode is
+preserved.
+
+ASCII-case-fold the complete whitespace-normalized body for detection only. If
+it contains `http://`, `https://`, `authorization`, `access token`,
+`access_token`, `access-token`, `cookie`, `secret`, `signature`, `api key`,
+`api_key`, or `api-key` anywhere, replace the complete body with literal
+`[redacted-message]`. This intentionally conservative whole-message rule has no
+overlap or scan-order behavior and is stronger than preserving a sanitized URL.
+Otherwise retain the whitespace-normalized body. Finally truncate the selected
+result to at most 4,096 UTF-8 bytes by dropping an incomplete final scalar.
+Diagnostics MUST NOT contain body or raw payload text.
+
+Every log carries common session identity, Int64 `f1.race_control.index`, String
+`f1.race_control.category`, and `f1.time.quality`. Optional valid source fields
+project as Int64 `f1.race_control.lap`, String `f1.race_control.flag`, String
+`f1.race_control.scope`, Int64 `f1.race_control.sector`, String
+`f1.race_control.status`, and String `f1.race_control.mode`. Body truncation adds
+Boolean `f1.race_control.message_truncated=true`; whole-message redaction adds
+Boolean `f1.race_control.message_redacted=true`.
+
+Known exact categories `Flag`, `Other`, `Drs`, `SafetyCar`, and `CarEvent`
+normalize to `flag`, `other`, `drs`, `safety_car`, and `car_event`. Every other
+string normalizes to `unknown`. Optional enum strings are accepted only as one
+to 64 ASCII letters, digits, spaces, hyphens, or underscores, with an
+alphanumeric first and last character. ASCII letters lowercase and each maximal
+separator run becomes one underscore. Optional `Lap` is a non-negative and
+`Sector` is a positive canonical decimal JSON number token fitting Int64;
+fractions, exponents, signs, leading zeros other than literal `0`, strings, and
+`null` are invalid. Invalid optional fields are omitted with a diagnostic and do
+not suppress the mandatory log.
+
+A structured `RacingNumber` must be a canonical positive decimal string fitting
+Int64 and resolve uniquely in the frozen Session Driver Registry. Outside an
+exact repair message, only that structured field can attribute a log. For an
+exact repair message, an absent structured field permits its resolved textual
+driver; a present structured field must itself be valid and resolve to the same
+driver. A present malformed, unresolved, or disagreeing structured field is an
+identity conflict. It omits all driver attributes and trace correlation from the
+log, suppresses driver event and metric effects, and produces a bounded
+diagnostic containing neither identity value nor message text.
+
+A successfully resolved structured or permitted textual identity adds Int64
+`f1.driver.number` and String `f1.driver.acronym` to the log and MAY use
+trace/span correlation when a legal already-created driver owner contains event
+time. Otherwise the independently valid session log remains unattributed.
+
+### Race-Control Driver Events
+
+**Status: GREEN**
+
+Each race-control record creates at most one driver event under this precedence:
+
+1. Exact `Category="Other"` lap deletion grammar with a resolved target.
+2. Exact `Category="Other"` lap reinstatement grammar with a matched deletion.
+3. Structured blue flag.
+4. Generic structured driver notice.
+
+A blue flag is structurally exactly `Category="Flag"`, `Scope="Driver"`, and
+`Flag="BLUE"`. With a resolved structured `RacingNumber`, it emits
+`f1.blue_flag.shown`; unresolved identity makes it log-only and MUST NOT
+downgrade to a generic notice. A generic notice is an exact `CarEvent`, or an
+exact non-blue driver-scoped `Flag`, with resolved structured `RacingNumber`; it
+emits `f1.race_control.driver_notice`. Specialized records MUST NOT also emit the
+generic event. Arbitrary message text is never scanned for generic car mentions.
+
+Every driver event carries Int64 `f1.race_control.index`, normalized String
+`f1.race_control.category`, sanitized String `f1.race_control.message`, all
+applicable valid optional normalized source fields, Int64 `f1.driver.number`,
+String `f1.driver.acronym`, and `f1.time.quality`. Message truncation also adds
+Boolean `f1.race_control.message_truncated=true`; redaction adds Boolean
+`f1.race_control.message_redacted=true`. Generic and blue-event owner precedence
+is the unexported driver lap containing event time, then the open driver-session
+root containing it. If no legal owner remains, only the log and any independently
+valid metric emit.
+
+Event identity is record identity plus event name and resolved driver. A
+different source index remains a distinct event even when content is identical.
+Log, trace, and metric effects are independently projectable and independently
+deliverable; failure of one does not suppress another.
+
+Penalty, investigation, track-limit, DRS, safety-car, sector-flag, and other
+text remains log-only unless it is an exact lap repair or satisfies the
+structured generic rule above. Bargeboard MUST NOT create penalty,
+investigation, or track-limit counters; typed penalty events; penalty spans; or
+inferred sporting outcomes. Race-control track flags never duplicate
+`f1.track_status.changed` events. The pending typed DRS, penalty, and
+investigation candidates require their own future GREEN contract before this
+prohibition can change.
+
+Every newly consumed coherent resolved structured blue record eligible below
+contributes one to:
+
+```text
+Name:        f1.driver.blue_flags
+Type:        Int64 Sum
+Unit:        {flag}
+Temporality: Delta
+Monotonic:   true
+Series:      one per driver per session
+Cadence:     terminal fold into non-empty aligned ten-second event-time windows
+```
+
+Blue accumulation opens at the first authoritative indexed `Started` UTC,
+including one recovered from coherent snapshot history. `Inactive`, `Aborted`,
+`Finished`, and `Finalised` neither pause nor close it. A resolved record is
+buffered as a metric candidate only when processed after opening and before
+`Ends`, and its event time is at or after `Started` UTC. No blue metric datapoint
+is projected before terminal folding, so a later cross-topic end timestamp
+cannot revise an exported interval.
+
+The first authoritative indexed `Ends` closes candidate admission in source wire
+order. A live feed transition immediately sorts admitted candidates by event
+time and then record index, discards any whose event time is after `Ends` UTC
+with a bounded diagnostic, and folds the remainder through the standard aligned
+Delta intervals with the final interval clipped exactly to `Ends` UTC. A
+candidate exactly at `Ends` UTC is included only when processed before the
+transition.
+
+An `Ends` recovered only from snapshot history records the same closing boundary
+but emits no Sum delta under the global snapshot rule; it defers the fold until
+receiver shutdown or session replacement. Without any `Ends`, those triggers
+instead close at the greatest admitted candidate time. A feed `Ends` and either
+deferred terminal trigger fold already admitted candidates even while a missing
+or conflicting reconnect registry pauses new projection. Candidate attributes
+were frozen while coherent and need no current registry lookup. No candidate
+means no datapoint.
+
+Snapshots, replayed or overflow-suppressed indexes, pre-open and post-close
+records, and unresolved blue records create no metric candidate. Candidate
+storage is bounded by the 4,096-index race-control limit and survives reconnect.
+The Sum uses only common session and per-driver metric attributes. A legally
+owned blue event MAY supply an exemplar; owner absence does not suppress the
+Sum. Trace events remain live and independent of delayed metric folding.
+
+#### Lap Deletion And Reinstatement
+
+Only complete messages matching this case-sensitive grammar are eligible for
+the existing specialized events; unsupported variants remain log-only:
+
+```ebnf
+message = numbered-time-deletion | numbered-lap-deletion
+        | phased-time-deletion | phased-durationless-deletion
+        | time-reinstatement | lap-reinstatement ;
+
+numbered-time-deletion =
+  "CAR ", car-number, " (", acronym, ") TIME ", lap-duration,
+  " DELETED - ", numbered-time-reason ;
+
+numbered-lap-deletion =
+  "CAR ", car-number, " (", acronym, ") LAP DELETED - ",
+  numbered-lap-reason ;
+
+phased-time-deletion =
+  "CAR ", acronym, " TIME ", lap-duration,
+  " DELETED - TRACK LIMITS AT TURN ", positive,
+  " (NEXT LAP) (", q-phase, ")" ;
+
+phased-durationless-deletion =
+  "CAR ", acronym,
+  " TIME DELETED - TRACK LIMITS AT TURN ", positive,
+  " (NEXT LAP PIT) (Q2)" ;
+
+time-reinstatement =
+  "CAR ", car-number, " (", acronym, ") TIME ", lap-duration,
+  " WILL BE REINSTATED" ;
+
+lap-reinstatement =
+  "CAR ", car-number, " (", acronym, ") LAP ", positive,
+  " WILL BE REINSTATED" ;
+
+numbered-time-reason = completed-track-limit | next-lap-track-limit
+                     | completed-and-next-lap-track-limit
+                     | pit-entry-track-limit | double-yellow
+                     | completed-double-yellow ;
+
+numbered-lap-reason = completed-track-limit
+                    | completed-track-limit, " (PIT)"
+                    | next-lap-pit-track-limit | double-yellow
+                    | completed-double-yellow
+                    | completed-double-yellow, " (PIT)" ;
+
+completed-track-limit =
+  "TRACK LIMITS AT TURN ", positive, " LAP ", positive, " ", clock ;
+next-lap-track-limit =
+  "TRACK LIMITS AT TURN ", positive, " (NEXT LAP)" ;
+next-lap-pit-track-limit =
+  "TRACK LIMITS AT TURN ", positive, " (NEXT LAP PIT)" ;
+completed-and-next-lap-track-limit =
+  "TRACK LIMITS AT TURN ", positive, " LAP ", positive,
+  " (NEXT LAP)" ;
+pit-entry-track-limit =
+  "TRACK LIMITS AT PIT ENTRY LAP ", positive, " ", clock ;
+double-yellow = "DOUBLE YELLOW AT TURN ", positive ;
+completed-double-yellow =
+  "DOUBLE YELLOW AT TURN ", positive, " LAP ", positive, " ", clock ;
+
+q-phase      = "Q1" | "Q2" ;
+lap-duration = minutes, ":", second, ".", digit, digit, digit ;
+clock        = hour, ":", second, ":", second ;
+minutes      = digit, { digit } ;
+second       = ( "0" | "1" | "2" | "3" | "4" | "5" ), digit ;
+hour         = digit | ( "0" | "1" ), digit
+             | "2", ( "0" | "1" | "2" | "3" ) ;
+car-number   = positive ;
+positive     = non-zero-digit, { digit } ;
+acronym      = upper, upper, upper ;
+```
+
+`digit` is ASCII `0..9`, `non-zero-digit` is ASCII `1..9`, and `upper` is ASCII
+`A..Z`. Every numeric production must fit Int64. `lap-duration` also satisfies
+the accepted timing duration grammar. The repair parser runs only for exact
+`Category="Other"`. Its exact three-letter acronym must resolve in the frozen
+Session Driver Registry. Number and acronym must resolve uniquely to the same
+driver when both are present. A control or format scalar anywhere in the
+original message, malformed complete message, unresolved driver, or
+structured/textual driver conflict makes the record log-only.
+
+At each validated contiguous `NumberOfLaps` boundary `N -> N+1` that closes an
+observed canonical lap identity under Driver Lap And Sector Timing, the reducer
+retains a correlation summary of driver, canonical phase-or-`none`, canonical
+lap `N`, source boundary value `N+1`, and optional currently accepted reported
+or reconstructed duration. The metric-only completion after a cold snapshot
+creates no summary. During the five-second lap buffer, summary duration follows
+the Timing Repair rules: a later accepted value can fill it and a conflict can
+clear it. A race-control record matches summary state at its own wire-order
+processing point and is never queued to await timing repair. Lap export freezes
+the summary. A later summary change cannot revise an already consumed
+race-control effect or its target identity.
+
+Buffered and already exported laps remain eligible. Retention is capped at 256
+lap summaries per driver per session without eviction; encountering a 257th
+latches repair correlation unavailable for that driver and makes later repair
+records log-only. Reconnect preserves summaries and session replacement clears
+them.
+
+A deletion target is selected by filtering those summaries with every clue in
+the exact message: driver always, source boundary value for explicit `LAP n`
+from a completed reason, head duration when present, and explicit `Q1` or `Q2`
+suffix when present. The source label is never compared directly to canonical
+lap `N` and the reducer MUST NOT try both `n` and `n-1`. Durationless messages
+without an explicit completed `LAP n` target are log-only. Exactly one summary
+must remain. Current receiver phase and outer structured
+`RaceControlMessages.Lap` are publication context and MUST NOT enter selection.
+Contradictory or ambiguous target lap, duration, or qualifying phase emits only
+the log.
+
+An accepted deletion sets that target's active deletion identity to its source
+index and stores the deletion message's optional duration and optional source
+reason-lap label; a later accepted deletion for the same target replaces that
+relation. A time reinstatement must match exactly one active deleted target for
+that driver and exact stored deletion duration. A lap reinstatement must match
+exactly one active deleted target for that driver and stored source reason-lap
+label across all phases; it is not matched against canonical lap number.
+Successful reinstatement carries Int64 `f1.race_control.related_index` for the
+active deletion and clears that target's active deletion state. No active or
+unique match makes the record log-only. Record payload removal and reconnect do
+not clear correlation; session replacement does.
+
+A permitted successfully parsed textual driver adds the same driver attributes
+to the log even when target selection fails. Deletion and reinstatement events
+carry the common driver-event attributes plus Int64 `f1.lap.number`, String
+`f1.session.phase`, and optional Double `f1.lap.reported_duration` in seconds
+when the message supplies a duration. A message with an explicit source
+reason-lap or reinstatement lap also carries Int64
+`f1.race_control.reason_lap`. Reinstatement additionally carries
+`f1.race_control.related_index`. Their owner precedence, timestamp, immutability,
+and fallback rules remain those in Timing Repair And Boundaries. Timing rollback
+MUST NOT duplicate the race-control event.
+
+Coherent snapshot repair records that become consumed for the first time seed
+active-deletion state in ascending index order when driver and target summaries
+are already resolvable, without logs or events. A reinstatement in that same
+history applies only to an earlier active deletion. Already consumed indexes,
+same-index corrections, shortened snapshots, and removed payload do not refold
+or clear correlation. Snapshot payload cannot manufacture missing lap history.
+
+Implementation requires compact public fixtures for array/map snapshots;
+keyframe and non-initial feed arrays; numeric-key patches; partial records;
+same-key replay/correction; new-key exact content duplicates; deletion and
+shortening; invalid, maximum, and overflowing indexes; bounded partial records;
+the 4,096-index and 256-lap safety bounds; whole-second and three-digit
+fractional zone-less UTC plus publication fallback; all known and unknown
+categories; exact numeric and enum validation; body controls, printable Unicode,
+redaction, and truncation; every driver-event precedence class; blue,
+black-and-white, and CarEvent notices; every accepted and near-miss repair
+grammar branch; structured/textual driver conflicts; explicit, duration,
+ambiguous, phase-delayed, and unresolved lap targets; repeated deletions and
+matched/unmatched reinstatements; snapshot correlation seeding; track-status
+coexistence; owner and no-owner paths; Delta blue-flag windows; coordinate
+enrichment; requested-topic omission and recovery; `RcmSeries` coexistence and
+non-seeding; feed and snapshot-recovered `Ends`; terminal folding during
+registry unavailability; and independent log/trace/metric delivery failure.
+
 ## Pending Metric Candidates
 
 **Status: YELLOW**
@@ -2490,7 +2942,8 @@ implementation:
 
 - Tyre-change event settlement.
 - Dedicated pit-topic fallbacks and physical stationary spans.
-- Race-control, penalty, radio, result, grid, and championship facts.
+- Typed DRS, penalty, and investigation events.
+- Radio, retirement, result, grid, and championship facts.
 - Explainable pace, consistency, degradation, and pit-loss analysis.
 - Receiver lag, payload size, reconnects, and validation failures.
 
