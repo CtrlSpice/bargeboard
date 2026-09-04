@@ -712,10 +712,27 @@ source publication timestamp. A periodic current-state observation uses the
 Collector observation timestamp and does not claim that the position changed at
 that time.
 
-Position changes SHOULD become lap events with previous, current, delta, and
-honest cause information. A state change is not necessarily an on-track
-overtake. A field position histogram is **RED** because a healthy classification
-is already approximately one car in every position.
+An accepted feed-driven change emits `f1.position.changed` with Int64
+`f1.position.previous`, Int64 `f1.position.current`, signed Int64
+`f1.position.delta = current - previous`, String
+`f1.position.change.kind=classification_update`, and
+`f1.time.quality=publication_time`. Snapshot hydration, first state without a
+prior baseline, periodic Gauge observations, repeated state, and invalid state
+emit no event.
+
+The event timestamp is the `TimingData` publication time. Owner precedence is
+the unexported lap containing that timestamp, then the open driver-session root;
+there is no unrelated active-lap fallback. If no legal owner remains, only the
+Gauge update survives. Event dedupe identity is canonical session, driver,
+publication Unix nanoseconds, previous position, and current position. A replay
+of the same directed change cannot emit twice across reconnect.
+
+`classification_update` deliberately states only what the source proved. Pit
+cycles, timing corrections, penalties, retirements, and on-track exchanges can
+all change classification. The event MUST NOT claim an overtake, infer another
+driver, add a cause from coordinates, or create a position-exchange link. A
+field position histogram is **RED** because a healthy classification is already
+approximately one car in every position.
 
 ### Driver Timing Gap And Interval
 
@@ -2324,6 +2341,146 @@ terminal observations; rainfall baseline, replay, dedupe, and continuity breaks;
 exact Gauge types/units/cardinality; exact log schema; and proof of no heartbeat,
 interpolation, expiry signal, driver fanout, or WeatherDataSeries replay.
 
+### Coordinate Context
+
+**Status: GREEN for internal state and event enrichment; RED for standalone signals**
+
+The wire topic `Position.z` remains compressed and normalizes to semantic topic
+`Position`. Its coordinates are bounded internal context only. Position cadence
+MUST NOT create Gauges, histograms, sums, logs, spans, events, exemplars, links,
+or driver identity. In particular, Bargeboard MUST NOT port the historical
+TypeScript coordinate metrics.
+
+The decompressed root has a `Position` array. Each item is one observation with
+strict RFC3339 `Timestamp` and object-valued `Entries`; the inner timestamp is
+the measurement time and feed-envelope fallback is forbidden. Each driver entry
+has `X`, `Y`, and `Z` as canonical signed JSON integer tokens fitting Int64.
+Strings, fractions, exponents, leading zeros, `-0`, and `null` are invalid.
+Coordinates are atomic per entry: axes MUST NOT merge across observations.
+
+Raw coordinates are track-local decimetres. The reducer retains signed Int64
+`x_dm`, `y_dm`, and `z_dm`; event projection converts each independently as
+`float64(value) / 10` metres. Negative values and zero on an individual axis are
+valid. Exactly `(0,0,0)` is an explicit unavailable sample, not the circuit
+origin. Z has an arbitrary track-local origin and MUST NOT be described as GPS
+altitude or guaranteed elevation.
+
+Position identity uses a coordinate-specific session roster for every canonical
+session type. It freezes at the first coherent non-empty authoritative
+`DriverList` snapshot after session identity resolves; it does not depend on the
+race-only Cars Running activation rule. A later conflicting DriverList snapshot
+makes Position unavailable but cannot rewrite the frozen roster. Samples
+received before roster resolution are dropped rather than queued.
+
+A coherent observation frame contains every frozen roster driver exactly once
+and no extra canonical positive keys except non-roster auxiliary keys `241`,
+`242`, and `243`, which are ignored. Any other extra positive key, missing
+driver, or duplicate/aliased key rejects that whole observation frame because
+public startup anomalies can collide with real racing numbers. Position never
+creates lasting state for an unknown or auxiliary key.
+
+Each valid frame entry MAY have exact case-sensitive `Status` `OnTrack` or
+`OffTrack`. Those values are retained only for bounded validation diagnostics
+and neither gates valid XYZ. Missing or unknown strings normalize internally to
+`unknown`; a non-string status is invalid only for status and does not invalidate
+valid coordinates. Status MUST NOT infer pit state, off-track excursion, crash,
+stationary state, retirement, DNF, or span error.
+
+After the key set passes frame validation, a malformed or partial XYZ triplet
+inserts an invalid barrier for only that driver at the frame timestamp; valid
+siblings continue. After stably ordering each source array by inner timestamp,
+retain at most 16 valid, all-zero, or invalid states per resolved driver. Equal
+timestamps use later wire order. Out-of-order feed batches can insert within the
+retained window; insertion beyond 16 evicts the oldest measurement timestamp.
+All-zero and invalid states are unavailable barriers so matching cannot search
+past them to an older non-zero location.
+
+#### Event Enrichment
+
+Coordinates MAY enrich only an already accepted, driver-specific trace event
+whose existence, driver, timestamp, owner, identity, and semantics were decided
+without Position. Currently eligible kinds are:
+
+- `f1.pit.entry`
+- `f1.pit.stop`
+- `f1.pit.exit`
+- `f1.pit.visit.incomplete`
+- `f1.position.changed`
+- `f1.lap_time.deleted`
+- `f1.lap_time.reinstated`
+- `f1.personal_best`
+- `f1.personal_best.revised`
+- `f1.fastest_lap`
+
+Session-status and fanned-out track-status events are ineligible because their
+driver association is not a driver-specific source fact. Future event kinds
+require explicit opt-in in their GREEN domain contract.
+
+For event time `E`, select the latest retained state for the same session and
+driver with measurement time `P <= E`. It is eligible exactly when
+`0 <= E-P <= 1_000_000_000` integer nanoseconds and its triplet is available.
+The one-second boundary is inclusive. A future sample, absolute time
+difference, nearest neighbour, interpolation, extrapolation, or sample from
+another driver is forbidden. If the selected state is all-zero or invalid, do
+not search behind it.
+
+Selection occurs only after the independent event timestamp, owner, and identity
+are final, immediately before its effect is created. Normal lap buffering can
+therefore make an already received causal sample eligible, but coordinate lookup
+adds no further wait. A later Position batch MUST NOT revise, duplicate, delay,
+suppress, or re-emit the event. Coordinates do not alter event timestamp, time
+quality, owner, identity, severity, deduplication, or span status.
+
+Eligible enrichment adds all four attributes atomically or none:
+
+| Attribute | OTLP type | Unit | Value |
+|---|---|---|---|
+| `f1.position.x` | Double | m | Track-local X in metres. |
+| `f1.position.y` | Double | m | Track-local Y in metres. |
+| `f1.position.z` | Double | m | Track-local Z in metres. |
+| `f1.position.sample_age` | Double | s | Exact integer-nanosecond `E-P` converted to seconds. |
+
+Raw decimetres, sample timestamp, source status, coordinate-system labels, and
+Position entry keys are not exported. The attributes never enter resources,
+metric series, trace/span IDs, event identity, or links.
+
+#### Snapshot And Lifecycle
+
+A coherent snapshot atomically replaces all prior Position history, processes
+its inner samples by measurement time, and retains only the newest bounded
+states per resolved driver. Collector observation time does not replace inner
+timestamps. The snapshot emits no signal and cannot enrich historical
+transitions represented by that snapshot. An empty snapshot array or successful
+requested-topic omission clears all Position state without tombstones. A
+structurally invalid root, frame key-set failure, or malformed XYZ entry makes
+the authoritative snapshot invalid under the global unsynchronized-topic rule;
+partial snapshot coordinates are non-projectable. For feed data, a frame
+key-set failure rejects that frame without changing older histories, while an
+entry-level XYZ failure creates the per-driver barrier above. An empty feed
+array is a no-op, not a clear.
+
+On disconnect, Position becomes ineligible before disconnect-triggered
+incomplete-visit events are created, so those events receive no coordinate
+context. A valid reconnect snapshot must replace state before enrichment
+resumes; pre-disconnect samples cannot cross the coverage boundary. For
+driver-removal, `Ends`, and shutdown processing, already accepted lifecycle
+events perform their final lookup before the applicable Position history is
+cleared. Other session statuses neither clear nor validate coordinates. Session
+replacement clears old Position state before any new-session event. No
+Collector timer, heartbeat, or wall-clock freshness calculation is used.
+
+Implementation requires compact sanitized compressed fixtures for live feed and
+snapshot shapes; multi-observation arrays; exact decimetre conversion; positive,
+negative, individual-zero, and all-zero coordinates; coherent roster frames,
+auxiliary keys, collisions, missing drivers, and startup anomalies; malformed
+axes beside otherwise valid entries; status variants with no semantic effects;
+stable ordering, equal timestamps, out-of-order insertion, and 16-state
+eviction; ages at zero, one second minus one nanosecond, exactly one second, one
+second plus one nanosecond, and future time; unavailable barriers; every
+eligible/ineligible event class; snapshot replacement/omission; disconnect and
+reconnect; zero standalone OTLP signals; and bounded diagnostics without raw
+coordinates.
+
 ## Pending Metric Candidates
 
 **Status: YELLOW**
@@ -2333,7 +2490,6 @@ implementation:
 
 - Tyre-change event settlement.
 - Dedicated pit-topic fallbacks and physical stationary spans.
-- Physical X/Y/Z position.
 - Race-control, penalty, radio, result, grid, and championship facts.
 - Explainable pace, consistency, degradation, and pit-loss analysis.
 - Receiver lag, payload size, reconnects, and validation failures.
