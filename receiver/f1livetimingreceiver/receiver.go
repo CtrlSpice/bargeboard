@@ -23,7 +23,8 @@ type liveTimingReceiver struct {
 
 	cancel     context.CancelFunc
 	done       chan struct{}
-	consume    func(context.Context, []normalizedLiveTimingUpdate) error
+	consume    func(context.Context, normalizedLiveTimingBatch) error
+	now        func() time.Time
 	retryDelay func(int) time.Duration
 
 	consumersMu sync.Mutex
@@ -42,9 +43,10 @@ func newLiveTimingReceiver(config *Config, settings receiver.Settings) *liveTimi
 				return http.ErrUseLastResponse
 			},
 		},
-		consume: func(context.Context, []normalizedLiveTimingUpdate) error {
+		consume: func(context.Context, normalizedLiveTimingBatch) error {
 			return nil
 		},
+		now:        time.Now,
 		retryDelay: reconnectDelay,
 	}
 }
@@ -101,18 +103,20 @@ func (r *liveTimingReceiver) run(
 ) {
 	defer close(done)
 	attempt := 0
+	consumeFailureReported := false
 
 	for {
-		receivedUpdates := false
-		err := connection.read(ctx, func(ctx context.Context, updates []liveTimingUpdate) error {
-			normalized, err := normalizeLiveTimingUpdates(updates)
+		receivedBatch := false
+		err := connection.read(ctx, func(ctx context.Context, batch liveTimingBatch) error {
+			normalized, err := normalizeLiveTimingBatch(batch, r.now())
 			if err != nil {
 				return err
 			}
-			if err := r.consume(ctx, normalized); err != nil {
-				return err
+			receivedBatch = true
+			if err := r.consume(ctx, normalized); err != nil && !consumeFailureReported {
+				r.settings.Logger.Error("F1 live timing batch consumer failed")
+				consumeFailureReported = true
 			}
-			receivedUpdates = true
 			return nil
 		})
 		_ = connection.close(context.Background())
@@ -123,7 +127,7 @@ func (r *liveTimingReceiver) run(
 			r.reportPermanentFailure(host)
 			return
 		}
-		if receivedUpdates {
+		if receivedBatch {
 			attempt = 0
 		}
 		if errors.Is(err, errSignalRClosed) {

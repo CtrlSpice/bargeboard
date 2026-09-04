@@ -65,6 +65,15 @@ func validateEndpoint(name, raw string, allowedSchemes ...string) error {
 	if err != nil || parsed.Host == "" {
 		return fmt.Errorf("%s must be an absolute URL", name)
 	}
+	if parsed.User != nil {
+		return fmt.Errorf("%s must not include user information", name)
+	}
+	if parsed.RawQuery != "" {
+		return fmt.Errorf("%s must not include query parameters", name)
+	}
+	if parsed.Fragment != "" {
+		return fmt.Errorf("%s must not include a fragment", name)
+	}
 	for _, scheme := range allowedSchemes {
 		if parsed.Scheme == scheme {
 			return nil

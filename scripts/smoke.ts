@@ -8,6 +8,7 @@
 import { ROOT_CONTEXT, trace } from "@opentelemetry/api";
 import { SeverityNumber } from "@opentelemetry/api-logs";
 import { SCOPE_NAME, SCOPE_VERSION } from "../src/emit/constants.js";
+import { MetricBank } from "../src/emit/metrics.js";
 import type { DriverInfo, SessionInfo } from "../src/models.js";
 import { makeDriverBundle, makeSessionBundle } from "../src/providers.js";
 import { raceTimeToUnixNanos } from "../src/util.js";
@@ -37,8 +38,9 @@ async function main(): Promise<void> {
 
   const sTracer = sb.tracerProvider.getTracer(SCOPE_NAME, SCOPE_VERSION);
   const dTracer = db.tracerProvider.getTracer(SCOPE_NAME, SCOPE_VERSION);
-  const dMeter = db.meterProvider.getMeter(SCOPE_NAME, SCOPE_VERSION);
   const dLogger = db.loggerProvider.getLogger(SCOPE_NAME, SCOPE_VERSION);
+  const metrics = new MetricBank(sb.resource, sb.metricExporter, session.start_time);
+  metrics.setStartTime(0);
 
   const wallStart = session.start_time;
   const t0 = Number(raceTimeToUnixNanos(wallStart, 0) / 1_000_000n);   // ms for span APIs
@@ -63,8 +65,12 @@ async function main(): Promise<void> {
   lapSpan.addEvent("smoke_marker", { "f1.note": "hello from bargeboard" }, t30);
   lapSpan.end(t60);
 
-  const speed = dMeter.createGauge("f1.car.speed", { unit: "km/h" });
-  speed.record(280);
+  metrics.setGauge("f1.car.speed", 280, {
+    "f1.driver.code": driver.code,
+    "f1.team": driver.team,
+  });
+  metrics.flush(60);
+  metrics.export();
 
   dLogger.emit({
     severityNumber: SeverityNumber.INFO,
@@ -76,6 +82,7 @@ async function main(): Promise<void> {
   raceSpan.end(t60);
   root.end(t60);
 
+  await metrics.drain();
   await Promise.all([sb.shutdown(), db.shutdown()]);
   console.log(`smoke emitted to ${endpoint} and flushed.`);
 }

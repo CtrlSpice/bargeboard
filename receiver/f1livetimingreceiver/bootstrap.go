@@ -64,7 +64,7 @@ func bootstrapConnection(ctx context.Context, client *http.Client, cfg *Config) 
 
 	response, err := client.Do(request)
 	if err != nil {
-		return connectionCredentials{}, fmt.Errorf("perform negotiation preflight: %w", err)
+		return connectionCredentials{}, sanitizedTransportError(ctx, "perform negotiation preflight", err)
 	}
 	defer response.Body.Close()
 	_, _ = io.Copy(io.Discard, response.Body)

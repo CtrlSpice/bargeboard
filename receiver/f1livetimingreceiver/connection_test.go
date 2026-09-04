@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -105,6 +106,11 @@ func TestParseNegotiateResponse(t *testing.T) {
 				"availableTransports":[{"transport":"WebSockets","transferFormats":["Binary"]}]
 			}`,
 			wantErr: "text frames",
+		},
+		{
+			name:     "invalid UTF-8",
+			contents: "{\"connectionId\":\"public-id\",\"connectionToken\":\"\xff\",\"negotiateVersion\":1}",
+			wantErr:  "UTF-8",
 		},
 		{name: "malformed", contents: `{`, wantErr: "decode"},
 	}
@@ -260,6 +266,7 @@ func TestParseHandshakeResponse(t *testing.T) {
 		{name: "hub message", record: `{"type":6}`, wantErr: "expected"},
 		{name: "server error", record: `{"error":"unsupported protocol"}`, wantErr: "rejected"},
 		{name: "empty error", record: `{"error":""}`, wantErr: "decode"},
+		{name: "invalid UTF-8", record: "{\"extension\":\"\xff\"}", wantErr: "UTF-8"},
 		{name: "malformed", record: `{`, wantErr: "decode"},
 		{name: "null", record: `null`, wantErr: "decode"},
 	}
@@ -325,6 +332,193 @@ func TestSensitiveConnectionValuesAreRedacted(t *testing.T) {
 	}
 }
 
+func TestHTTPTransportErrorsAreSanitized(t *testing.T) {
+	const sensitive = "secret-route-or-transport"
+	endpoint := "https://example.test/" + sensitive
+	credentials := connectionCredentials{token: "subscription-token"}
+
+	tests := []struct {
+		name    string
+		client  *http.Client
+		request func(*http.Client) error
+		want    string
+	}{
+		{
+			name: "preflight request",
+			client: &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+				return nil, errors.New(sensitive)
+			})},
+			request: func(client *http.Client) error {
+				cfg := createDefaultConfig().(*Config)
+				cfg.Auth.TokenFile = writeTokenFile(t, "subscription-token")
+				cfg.NegotiateEndpoint = endpoint
+				_, err := bootstrapConnection(context.Background(), client, cfg)
+				return err
+			},
+			want: "perform negotiation preflight failed",
+		},
+		{
+			name: "negotiation request",
+			client: &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+				return nil, errors.New(sensitive)
+			})},
+			request: func(client *http.Client) error {
+				_, _, err := negotiate(context.Background(), client, endpoint, credentials, nil)
+				return err
+			},
+			want: "perform SignalR negotiation failed",
+		},
+		{
+			name: "negotiation response body",
+			client: &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       failingReadCloser{err: errors.New(sensitive)},
+					Header:     make(http.Header),
+				}, nil
+			})},
+			request: func(client *http.Client) error {
+				_, _, err := negotiate(context.Background(), client, endpoint, credentials, nil)
+				return err
+			},
+			want: "read SignalR negotiation response failed",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.request(test.client)
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("request error = %v, want %q", err, test.want)
+			}
+			if strings.Contains(err.Error(), sensitive) {
+				t.Errorf("request error exposed sensitive endpoint or transport data: %q", err)
+			}
+		})
+	}
+}
+
+func TestSanitizedTransportErrorPreservesContextFailure(t *testing.T) {
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := []struct {
+		name         string
+		ctx          context.Context
+		transportErr error
+		want         error
+	}{
+		{
+			name:         "caller cancellation",
+			ctx:          cancelledCtx,
+			transportErr: errors.New("sensitive transport error"),
+			want:         context.Canceled,
+		},
+		{
+			name:         "client timeout",
+			ctx:          context.Background(),
+			transportErr: fmt.Errorf("sensitive transport error: %w", context.DeadlineExceeded),
+			want:         context.DeadlineExceeded,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := sanitizedTransportError(test.ctx, "perform request", test.transportErr)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("sanitizedTransportError() = %v, want %v", err, test.want)
+			}
+			if strings.Contains(err.Error(), "sensitive") {
+				t.Errorf("sanitizedTransportError() exposed transport data: %q", err)
+			}
+		})
+	}
+}
+
+func TestConnectSignalRHonorsWebSocketDialCancellation(t *testing.T) {
+	dialStarted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.Method {
+		case http.MethodOptions:
+			http.SetCookie(writer, &http.Cookie{Name: affinityCookieName, Value: "affinity-token"})
+			writer.WriteHeader(http.StatusMethodNotAllowed)
+		case http.MethodPost:
+			_, _ = writer.Write([]byte(`{
+				"connectionId":"public-id",
+				"connectionToken":"connection-token",
+				"negotiateVersion":1,
+				"availableTransports":[{"transport":"WebSockets","transferFormats":["Text"]}]
+			}`))
+		case http.MethodGet:
+			close(dialStarted)
+			<-request.Context().Done()
+		default:
+			writer.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	cfg := connectionTestConfig(t, server.URL+"/sensitive-path")
+	go func() {
+		_, err := connectSignalR(ctx, server.Client(), cfg)
+		result <- err
+	}()
+
+	select {
+	case <-dialStarted:
+		cancel()
+	case err := <-result:
+		cancel()
+		t.Fatalf("connectSignalR() returned before WebSocket dial: %v", err)
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("connectSignalR() did not reach WebSocket dial")
+	}
+
+	var err error
+	select {
+	case err = <-result:
+	case <-time.After(time.Second):
+		t.Fatal("connectSignalR() did not return after cancellation")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("connectSignalR() error = %v, want context canceled", err)
+	}
+	if strings.Contains(err.Error(), "sensitive-path") {
+		t.Errorf("connectSignalR() error exposed endpoint path: %q", err)
+	}
+}
+
+func TestBootstrapConnectionPreservesHTTPClientTimeout(t *testing.T) {
+	requestStarted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		close(requestStarted)
+		<-request.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+
+	client := server.Client()
+	client.Timeout = 25 * time.Millisecond
+	cfg := createDefaultConfig().(*Config)
+	cfg.Auth.TokenFile = writeTokenFile(t, "subscription-token")
+	cfg.NegotiateEndpoint = server.URL + "/sensitive-path"
+
+	_, err := bootstrapConnection(context.Background(), client, cfg)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("bootstrapConnection() error = %v, want deadline exceeded", err)
+	}
+	select {
+	case <-requestStarted:
+	default:
+		t.Fatal("bootstrapConnection() did not start HTTP request")
+	}
+	if strings.Contains(err.Error(), "sensitive-path") {
+		t.Errorf("bootstrapConnection() error exposed endpoint path: %q", err)
+	}
+}
+
 func TestConnectSignalRHonorsHandshakeContext(t *testing.T) {
 	server := newConnectionTestServer(t, func(*websocket.Conn) {
 		time.Sleep(250 * time.Millisecond)
@@ -336,6 +530,44 @@ func TestConnectSignalRHonorsHandshakeContext(t *testing.T) {
 	_, err := connectSignalR(ctx, server.Client(), cfg)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("connectSignalR() error = %v, want deadline exceeded", err)
+	}
+}
+
+func TestSignalRConnectionRejectsDuplicateSubscriptionCompletion(t *testing.T) {
+	server := newConnectionTestServer(t, func(connection *websocket.Conn) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		_, _, _ = connection.Read(ctx)
+		_ = connection.Write(ctx, websocket.MessageText, []byte("{}\x1e"))
+		_, _, _ = connection.Read(ctx)
+		_ = connection.Write(ctx, websocket.MessageText, []byte(
+			`{"type":3,"invocationId":"0","result":{}}`+"\x1e"+
+				`{"type":3,"invocationId":"0","result":{}}`+"\x1e",
+		))
+	})
+	connection, err := connectSignalR(context.Background(), server.Client(), connectionTestConfig(t, server.URL))
+	if err != nil {
+		t.Fatalf("connectSignalR() error = %v", err)
+	}
+	defer connection.close(context.Background())
+	if err := connection.subscribe(context.Background()); err != nil {
+		t.Fatalf("subscribe() error = %v", err)
+	}
+
+	consumed := 0
+	err = connection.read(context.Background(), func(_ context.Context, batch liveTimingBatch) error {
+		consumed++
+		if batch.source != liveTimingUpdateSourceSnapshot {
+			t.Errorf("batch source = %d, want snapshot", batch.source)
+		}
+		return nil
+	})
+	if !errors.Is(err, errInvalidLiveTimingData) {
+		t.Fatalf("read() error = %v, want invalid live timing data", err)
+	}
+	if consumed != 1 {
+		t.Errorf("consumed batches = %d, want 1", consumed)
 	}
 }
 
@@ -359,7 +591,7 @@ func TestSignalRConnectionRejectsMessageOverReadLimit(t *testing.T) {
 		t.Fatalf("subscribe() error = %v", err)
 	}
 
-	err = connection.read(context.Background(), func(context.Context, []liveTimingUpdate) error { return nil })
+	err = connection.read(context.Background(), func(context.Context, liveTimingBatch) error { return nil })
 	if !errors.Is(err, errInvalidLiveTimingData) {
 		t.Fatalf("read() error = %v, want invalid live timing data", err)
 	}
@@ -470,3 +702,23 @@ func connectionTestConfig(t *testing.T, serverURL string) *Config {
 	cfg.Auth.TokenFile = writeTokenFile(t, "subscription-token")
 	return cfg
 }
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (roundTrip roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return roundTrip(request)
+}
+
+type failingReadCloser struct {
+	err error
+}
+
+func (reader failingReadCloser) Read([]byte) (int, error) {
+	return 0, reader.err
+}
+
+func (failingReadCloser) Close() error {
+	return nil
+}
+
+var _ io.ReadCloser = failingReadCloser{}

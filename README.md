@@ -4,11 +4,13 @@
 
 A custom OpenTelemetry Collector distribution for Formula 1 telemetry. Designed as a demo companion to [axolot(e)l](https://github.com/CtrlSpice/otel-desktop-viewer).
 
-## Rewrite status
+## Active implementation
 
-The Go Collector rewrite is now the active implementation. Its baseline accepts OTLP traces, metrics, and logs, batches them, and writes them to the Collector's `debug` exporter. Formula 1 receivers and processors come next.
+The Go Collector distribution is the active implementation. Its baseline accepts OTLP traces, metrics, and logs, batches them, and writes them to the Collector's `debug` exporter. The compiled F1 Live Timing receiver authenticates, subscribes, reconnects, decodes, validates, and normalizes the live feed; state reduction and OTLP projection are the next behavior slices. A Go OpenF1 receiver does not exist yet.
 
-The TypeScript historical replay CLI remains in `src/` as a working reference until the Go implementation reaches feature parity. The signal model and detailed documentation below describe that prototype.
+The canonical design is the evolving [Bargeboard architecture](docs/architecture.md). It records accepted decisions, source limitations, pending candidates, implementation seams, and the required checks for future human and agent contributors.
+
+The TypeScript historical replay CLI remains in `src/` as a working reference until the Go implementation reaches feature parity. Its signal model below documents the prototype only and is not authoritative for new Go work.
 
 ## Go quick start
 
@@ -19,15 +21,37 @@ make check
 make run
 ```
 
-The default `config.yaml` listens for OTLP/gRPC on `localhost:4317` and OTLP/HTTP on `localhost:4318`. Run `make components` to inspect the components compiled into the distribution.
+The shipped `config.yaml` enables F1 Live Timing and listens for OTLP/gRPC on
+`localhost:4317` and OTLP/HTTP on `localhost:4318`. Run `make components` to
+inspect the components compiled into the distribution.
 
-## What the TypeScript prototype does
+### F1 Live Timing
+
+The Collector reads each user's own F1 TV `subscriptionToken` from
+`$HOME/.config/bargeboard/f1tv-token`. The repository configuration contains
+only that file reference, never a token. Create the file with owner-only
+permissions before running the Collector. After storing the token:
+
+```bash
+chmod 600 "$HOME/.config/bargeboard/f1tv-token"
+make run
+```
+
+The token file should be readable only by its owner. Never put a token directly
+in YAML, shell history, logs, issues, or commits. The current receiver connects,
+subscribes, validates, and normalizes the feed; F1 state reduction and OTLP
+emission remain under development.
+
+## Historical TypeScript prototype
 
 Fetches a historical F1 race from [OpenF1](https://openf1.org/) and emits it as OTLP traces, metrics, and logs to a configurable endpoint (defaults to `localhost:4317`). Spans are stamped with the actual historical race timestamps so backends with a time selector navigate to the real race window.
 
 OpenF1 was chosen over FastF1 because OpenF1 has full 2026 telemetry the day after each race.
 
-## Signals
+## Historical signal model
+
+> This section describes the non-canonical TypeScript prototype. See
+> [`docs/architecture.md`](docs/architecture.md) for accepted Go architecture.
 
 ### Traces
 
@@ -86,7 +110,7 @@ Per-lap drill-down lives on lap spans (each lap *is* a span), not on metric attr
 
 `RaceControl`, `Flag`, `Penalty`, `Investigation`, `Retirement`, `TyreChange`, `DefensiveMove` each emit a log record correlated to the currently-active span via trace context. Severity follows the kind (yellow = `WARN`, red / DSQ / retirement = `ERROR`, blue / no-action = `DEBUG`, etc.).
 
-## Resource model
+## Historical TypeScript resource model
 
 - **Session resource:** `service.name=race`, `service.namespace=f1`, `service.instance.id=<year>-<round>-<type>` (e.g. `2026-canada-race`), `service.version`, plus `f1.session.{year,round,type}`. Owns the session root span and **all metrics**.
 - **Driver resource:** `service.name=<team>`, `service.namespace=f1`, `service.instance.id=<code>`, `service.version`, plus `f1.driver.{code,full_name}`, `f1.car.number`. Teammates share `service.name` and differ on `service.instance.id`. Traces and logs only.
@@ -97,7 +121,7 @@ Querying examples:
 - `sum(f1.driver.blue_flags) by (f1.team)` → team-level aggregation via the `f1.team` attribute.
 - Same trace_id across all 22 drivers → "the race" is one queryable distributed trace.
 
-## CLI
+## Historical TypeScript CLI
 
 ```
 bargeboard --session 2026-canada [options]
@@ -118,7 +142,7 @@ bargeboard --session 2026-canada [options]
 
 `--season` is scaffolded but not implemented; raises an error if used.
 
-## Parquet cache
+## Historical TypeScript Parquet cache
 
 On the first run bargeboard fetches telemetry from OpenF1 (≈14 s for a full field). Subsequent runs for the same session load from a local Parquet cache at `~/.cache/bargeboard/<session_key>/`:
 
@@ -128,9 +152,11 @@ On the first run bargeboard fetches telemetry from OpenF1 (≈14 s for a full fi
 | `events.json` | All other events: laps, sectors, pits, flags, retirements, etc. |
 | `meta.json` | `raceStartT`, starting grid, cache version |
 
-The cache is never expired — race data doesn't change once the event is done. Use `--no-cache` to force a fresh fetch (e.g. if OpenF1 back-fills missing data after the fact). Driver-filtered runs (`--driver`) are not cached so a subsequent full-field run always fetches cleanly.
+The historical CLI never expires this cache automatically, so it may become stale after OpenF1 backfills or corrects an event. Use `--no-cache` to force a fresh fetch. Driver-filtered runs (`--driver`) are not cached so a subsequent full-field run always fetches cleanly.
 
 ## TypeScript quick start
+
+The historical CLI requires Node.js 22 or newer.
 
 ```bash
 npm install

@@ -1,4 +1,7 @@
 receivers:
+  f1livetiming:
+    auth:
+      token_file: ${env:HOME}/.config/bargeboard/f1tv-token
   otlp:
     protocols:
       grpc:
@@ -22,14 +25,14 @@ service:
       level: none
   pipelines:
     traces:
-      receivers: [otlp]
+      receivers: [f1livetiming, otlp]
       processors: [batch]
       exporters: [debug]
     metrics:
-      receivers: [otlp]
+      receivers: [f1livetiming, otlp]
       processors: [batch]
       exporters: [debug]
     logs:
-      receivers: [otlp]
+      receivers: [f1livetiming, otlp]
       processors: [batch]
       exporters: [debug]

@@ -11,6 +11,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"time"
+	"unicode/utf8"
 
 	"github.com/coder/websocket"
 )
@@ -49,8 +50,9 @@ type negotiateResponse struct {
 }
 
 type signalRConnection struct {
-	conn    *websocket.Conn
-	pending []byte
+	conn            *websocket.Conn
+	pending         []byte
+	requestedTopics []string
 }
 
 func connectSignalR(ctx context.Context, client *http.Client, cfg *Config) (*signalRConnection, error) {
@@ -110,7 +112,7 @@ func connectSignalR(ctx context.Context, client *http.Client, cfg *Config) (*sig
 			}
 			return nil, fmt.Errorf("SignalR WebSocket upgrade returned HTTP %d", response.StatusCode)
 		}
-		return nil, fmt.Errorf("SignalR WebSocket upgrade failed")
+		return nil, sanitizedTransportError(ctx, "SignalR WebSocket upgrade", err)
 	}
 	connection.SetReadLimit(maxWebSocketMessage)
 
@@ -134,19 +136,21 @@ func hasAffinityCookie(cookies []*http.Cookie) bool {
 }
 
 func (c *signalRConnection) subscribe(ctx context.Context) error {
-	message, err := encodeSubscribeInvocation(subscriptionTopics())
+	topics := subscriptionTopics()
+	message, err := encodeSubscribeInvocation(topics)
 	if err != nil {
 		return err
 	}
 	if err := c.conn.Write(ctx, websocket.MessageText, message); err != nil {
 		return fmt.Errorf("write F1 topic subscription: %w", err)
 	}
+	c.requestedTopics = append([]string(nil), topics...)
 	return nil
 }
 
 func (c *signalRConnection) read(
 	ctx context.Context,
-	consume func(context.Context, []liveTimingUpdate) error,
+	consume func(context.Context, liveTimingBatch) error,
 ) error {
 	buffered := c.pending
 	c.pending = nil
@@ -158,13 +162,16 @@ func (c *signalRConnection) read(
 		}
 		buffered = remaining
 		for _, record := range records {
-			updates, err := decodeHubRecord(record)
+			batch, err := decodeHubRecord(record, c.requestedTopics)
 			if err != nil {
 				return err
 			}
-			if len(updates) > 0 {
-				if err := consume(ctx, updates); err != nil {
-					return fmt.Errorf("consume F1 live timing updates: %w", err)
+			if batch != nil {
+				if batch.source == liveTimingUpdateSourceSnapshot {
+					c.requestedTopics = nil
+				}
+				if err := consume(ctx, *batch); err != nil {
+					return fmt.Errorf("consume F1 live timing batch: %w", err)
 				}
 			}
 		}
@@ -203,13 +210,13 @@ func negotiate(
 
 	response, err := client.Do(request)
 	if err != nil {
-		return negotiation{}, nil, fmt.Errorf("perform SignalR negotiation: %w", err)
+		return negotiation{}, nil, sanitizedTransportError(ctx, "perform SignalR negotiation", err)
 	}
 	defer response.Body.Close()
 
 	contents, err := io.ReadAll(io.LimitReader(response.Body, maxNegotiateResponseSize+1))
 	if err != nil {
-		return negotiation{}, nil, fmt.Errorf("read SignalR negotiation response: %w", err)
+		return negotiation{}, nil, sanitizedTransportError(ctx, "read SignalR negotiation response", err)
 	}
 	if len(contents) > maxNegotiateResponseSize {
 		return negotiation{}, nil, invalidLiveTimingData(
@@ -217,7 +224,7 @@ func negotiate(
 		)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return negotiation{}, nil, fmt.Errorf("SignalR negotiation returned %s", response.Status)
+		return negotiation{}, nil, fmt.Errorf("SignalR negotiation returned HTTP %d", response.StatusCode)
 	}
 
 	result, err := parseNegotiateResponse(contents)
@@ -225,6 +232,19 @@ func negotiate(
 		return negotiation{}, nil, err
 	}
 	return result, response.Cookies(), nil
+}
+
+func sanitizedTransportError(ctx context.Context, operation string, transportErr error) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%s: %w", operation, err)
+	}
+	if errors.Is(transportErr, context.Canceled) {
+		return fmt.Errorf("%s: %w", operation, context.Canceled)
+	}
+	if errors.Is(transportErr, context.DeadlineExceeded) {
+		return fmt.Errorf("%s: %w", operation, context.DeadlineExceeded)
+	}
+	return fmt.Errorf("%s failed", operation)
 }
 
 func negotiateEndpoint(raw string) (string, error) {
@@ -239,6 +259,9 @@ func negotiateEndpoint(raw string) (string, error) {
 }
 
 func parseNegotiateResponse(contents []byte) (negotiation, error) {
+	if !utf8.Valid(contents) {
+		return negotiation{}, invalidLiveTimingData("SignalR negotiation response is not UTF-8")
+	}
 	var response negotiateResponse
 	if err := json.Unmarshal(contents, &response); err != nil {
 		return negotiation{}, invalidLiveTimingData("decode SignalR negotiation response")
@@ -400,6 +423,9 @@ func splitFirstRecord(contents []byte) (record, remaining []byte, complete bool)
 }
 
 func parseHandshakeResponse(record []byte) error {
+	if !utf8.Valid(record) {
+		return invalidLiveTimingData("SignalR handshake response is not UTF-8")
+	}
 	var response map[string]json.RawMessage
 	if err := json.Unmarshal(record, &response); err != nil || response == nil {
 		return invalidLiveTimingData("decode SignalR handshake response")

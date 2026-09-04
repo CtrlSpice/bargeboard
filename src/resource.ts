@@ -10,7 +10,7 @@
  * the race span. Driver-scoped facts live on the driver resource.
  */
 
-import { Resource } from "@opentelemetry/resources";
+import { resourceFromAttributes, type Resource } from "@opentelemetry/resources";
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
 import type { DriverInfo, SessionInfo } from "./models.js";
 import { BARGEBOARD_VERSION } from "./emit/constants.js";
@@ -20,7 +20,7 @@ function instanceId(s: SessionInfo): string {
 }
 
 export function makeSessionResource(session: SessionInfo): Resource {
-  return new Resource({
+  return resourceFromAttributes({
     [ATTR_SERVICE_NAME]: "race",
     "service.namespace": "f1",
     "service.instance.id": instanceId(session),
@@ -32,7 +32,7 @@ export function makeSessionResource(session: SessionInfo): Resource {
 }
 
 export function makeDriverResource(driver: DriverInfo): Resource {
-  return new Resource({
+  return resourceFromAttributes({
     [ATTR_SERVICE_NAME]: driver.team,
     "service.namespace": "f1",
     "service.instance.id": driver.code,

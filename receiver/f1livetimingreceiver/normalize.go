@@ -29,6 +29,89 @@ type normalizedLiveTimingUpdate struct {
 	source    liveTimingUpdateSource
 }
 
+type normalizedLiveTimingBatch struct {
+	source          liveTimingUpdateSource
+	requestedTopics []string
+	presentTopics   []string
+	observationTime time.Time
+	updates         []normalizedLiveTimingUpdate
+}
+
+func normalizeLiveTimingBatch(
+	batch liveTimingBatch,
+	observationTime time.Time,
+) (normalizedLiveTimingBatch, error) {
+	if observationTime.IsZero() {
+		return normalizedLiveTimingBatch{}, invalidLiveTimingData("F1 live timing batch observation time is zero")
+	}
+
+	switch batch.source {
+	case liveTimingUpdateSourceFeed:
+		if len(batch.requestedTopics) != 0 || len(batch.presentTopics) != 0 || len(batch.updates) != 1 {
+			return normalizedLiveTimingBatch{}, invalidLiveTimingData("F1 feed batch shape is invalid")
+		}
+	case liveTimingUpdateSourceSnapshot:
+		if len(batch.requestedTopics) == 0 || len(batch.presentTopics) != len(batch.updates) {
+			return normalizedLiveTimingBatch{}, invalidLiveTimingData("F1 snapshot batch manifest is invalid")
+		}
+		for index, topic := range batch.presentTopics {
+			if topic == "" || topic != batch.updates[index].topic {
+				return normalizedLiveTimingBatch{}, invalidLiveTimingData("F1 snapshot batch manifest is invalid")
+			}
+		}
+	default:
+		return normalizedLiveTimingBatch{}, invalidLiveTimingData("F1 live timing batch source is unknown")
+	}
+
+	for _, update := range batch.updates {
+		if update.source != batch.source {
+			return normalizedLiveTimingBatch{}, invalidLiveTimingData("F1 live timing batch source is inconsistent")
+		}
+	}
+	updates, err := normalizeLiveTimingUpdates(batch.updates)
+	if err != nil {
+		return normalizedLiveTimingBatch{}, err
+	}
+	requestedTopics, err := normalizeLiveTimingTopics(batch.requestedTopics)
+	if err != nil {
+		return normalizedLiveTimingBatch{}, err
+	}
+	presentTopics, err := normalizeLiveTimingTopics(batch.presentTopics)
+	if err != nil {
+		return normalizedLiveTimingBatch{}, err
+	}
+	requestedTopicSet, _ := liveTimingTopicSet(requestedTopics)
+	for index, topic := range presentTopics {
+		if _, ok := requestedTopicSet[topic]; !ok || topic != updates[index].topic {
+			return normalizedLiveTimingBatch{}, invalidLiveTimingData("F1 normalized snapshot batch manifest is invalid")
+		}
+	}
+	return normalizedLiveTimingBatch{
+		source:          batch.source,
+		requestedTopics: requestedTopics,
+		presentTopics:   presentTopics,
+		observationTime: observationTime,
+		updates:         updates,
+	}, nil
+}
+
+func normalizeLiveTimingTopics(topics []string) ([]string, error) {
+	normalized := make([]string, 0, len(topics))
+	seen := make(map[string]struct{}, len(topics))
+	for _, topic := range topics {
+		topic, _, err := normalizeLiveTimingTopic(topic)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := seen[topic]; exists {
+			return nil, invalidLiveTimingData("F1 live timing topic aliases collide after normalization")
+		}
+		seen[topic] = struct{}{}
+		normalized = append(normalized, topic)
+	}
+	return normalized, nil
+}
+
 func normalizeLiveTimingUpdates(updates []liveTimingUpdate) ([]normalizedLiveTimingUpdate, error) {
 	normalized := make([]normalizedLiveTimingUpdate, 0, len(updates))
 	for index, update := range updates {
@@ -42,21 +125,17 @@ func normalizeLiveTimingUpdates(updates []liveTimingUpdate) ([]normalizedLiveTim
 }
 
 func normalizeLiveTimingUpdate(update liveTimingUpdate) (normalizedLiveTimingUpdate, error) {
-	if update.topic == "" {
-		return normalizedLiveTimingUpdate{}, invalidLiveTimingUpdate(update.topic, "topic is empty")
+	topic, compressed, err := normalizeLiveTimingTopic(update.topic)
+	if err != nil {
+		return normalizedLiveTimingUpdate{}, err
 	}
 	timestamp, err := normalizeLiveTimingTimestamp(update.source, update.timestamp)
 	if err != nil {
 		return normalizedLiveTimingUpdate{}, invalidLiveTimingUpdate(update.topic, err.Error())
 	}
 
-	topic := update.topic
 	payload := bytes.Clone(update.payload)
-	if strings.HasSuffix(topic, ".z") {
-		topic = strings.TrimSuffix(topic, ".z")
-		if topic == "" {
-			return normalizedLiveTimingUpdate{}, invalidLiveTimingUpdate(update.topic, "semantic topic is empty")
-		}
+	if compressed {
 		payload, err = decompressLiveTimingPayload(update.payload)
 		if err != nil {
 			return normalizedLiveTimingUpdate{}, invalidLiveTimingUpdate(update.topic, err.Error())
@@ -76,6 +155,20 @@ func normalizeLiveTimingUpdate(update liveTimingUpdate) (normalizedLiveTimingUpd
 		timestamp: timestamp,
 		source:    update.source,
 	}, nil
+}
+
+func normalizeLiveTimingTopic(topic string) (string, bool, error) {
+	if topic == "" {
+		return "", false, invalidLiveTimingUpdate(topic, "topic is empty")
+	}
+	if !strings.HasSuffix(topic, ".z") {
+		return topic, false, nil
+	}
+	topic = strings.TrimSuffix(topic, ".z")
+	if topic == "" {
+		return "", false, invalidLiveTimingUpdate(topic, "semantic topic is empty")
+	}
+	return topic, true, nil
 }
 
 func normalizeLiveTimingTimestamp(source liveTimingUpdateSource, raw string) (time.Time, error) {
