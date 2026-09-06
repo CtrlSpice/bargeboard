@@ -278,6 +278,20 @@ cannot provide replay-stable session identity. Projection requires synchronized
 `E`; new OpenF1 route establishment additionally requires synchronized
 `K_route`.
 
+The process-local asynchronous token is the pair `(generation, routing epoch)`.
+Generation zero means no accepted session. The first coherent descriptor installs
+generation one, and each accepted unseen `T` advances the generation. A routing
+epoch is generation-scoped: it starts at zero for an installed or replaced
+generation and advances once for each same-tuple key change, loss, or restoration.
+A receiver-global routing counter was rejected because the generation already
+invalidates all prior-generation work; keeping the epoch local makes its only
+meaning the route revision within that generation. Neither unsigned counter may
+wrap. If an accepted transition would advance a counter at its maximum, the
+reducer rejects that transition, retains all current state as recovery state,
+marks SessionInfo unsynchronized, and returns a bounded token-exhaustion
+disposition. Repeating the current tuple and route may still restore
+synchronization because it requires no token advance.
+
 ### Corrections And Replacement
 
 A complete coherent descriptor reduces as follows:
@@ -318,6 +332,14 @@ Retiring the 257th generation evicts the oldest tuple; no stronger replay claim
 is made after eviction or process restart. Because `E` and deterministic IDs
 derive from the logical tuple rather than source key, replay after that horizon
 reuses the same semantic identity instead of colliding with another session.
+
+A present descriptor with unresolved logical identity or a retained retired `T`
+does not apply its independently parsed route or schedule bundles. The reducer
+retains the accepted identity, route, schedule, generation, routing epoch, and
+retirement FIFO only as recovery state and marks SessionInfo unsynchronized. A
+later coherent descriptor is still a complete replacement of the applicable
+route and schedule bundles; retained values never become implicit field
+inheritance.
 
 An accepted new tuple replaces the generation atomically in this order:
 
@@ -418,13 +440,18 @@ The Go protocol and normalization seam carries successful no-result, null,
 empty-object, and partial subscription completions as explicit snapshot batches
 with the requested-versus-present manifest and one Collector observation time.
 Ignored hub records remain absent callbacks. The pure Go `SessionInfo` descriptor
-parser and classifier are implemented and fixture-backed for every Session
-Coverage row, lexical near misses, exact integer, local-date, calendar, and
-offset bounds, independent logical, routing, and schedule validity, and
-defensive `_kf` validation. They have no runtime wiring and cannot mutate state
-or project telemetry. The transactional SessionInfo reducer described above is
-not yet implemented; it and all omission-dependent topic projection remain
-disabled until that reducer lands.
+parser, classifier, and descriptor-state reducer are implemented. Parsing is
+fixture-backed for every Session Coverage row, lexical near misses, exact
+integer, local-date, calendar, and offset bounds, independent logical, routing,
+and schedule validity, and defensive `_kf` validation. The reducer covers
+initial installation, same-tuple refresh and route transitions, synchronization
+recovery, unseen-tuple replacement, retained-tuple rejection, and the exact
+256-tuple FIFO horizon. It returns value state and transition metadata only. It
+has no batch or runtime wiring and cannot clear other topic state, return effects
+or commands, emit diagnostics, or project telemetry. No diagnostic-frequency or
+latching policy is accepted by this slice. The transactional batch coordinator
+and all omission-dependent topic projection remain disabled until that
+coordinator lands.
 
 End-to-end reducer and projection verification still requires testing with no
 phase layer, `Started` root opening, `Finalised` closure, singular best-lap state,
@@ -4071,10 +4098,12 @@ Current implementation seams:
 | Connection and SignalR transport | `receiver/f1livetimingreceiver/connection.go` |
 | Wire record decoding | `receiver/f1livetimingreceiver/protocol.go` |
 | JSON and compressed normalization | `receiver/f1livetimingreceiver/normalize.go` |
+| Session descriptor parsing and classification | `receiver/f1livetimingreceiver/session_info.go` |
+| Pure SessionInfo descriptor-state reduction | `receiver/f1livetimingreceiver/session_info_reducer.go` |
 | Shared receiver lifecycle and consumer seam | `receiver/f1livetimingreceiver/receiver.go` |
 | Historical TypeScript reference | `src/` |
 
-Suggested future Go files such as `state.go` and `projection.go` are not
+Other suggested future Go files such as `state.go` and `projection.go` are not
 normative until their behavior slice begins.
 
 ## Security
