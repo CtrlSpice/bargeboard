@@ -417,21 +417,25 @@ already accepted state in the retained generation.
 The Go protocol and normalization seam carries successful no-result, null,
 empty-object, and partial subscription completions as explicit snapshot batches
 with the requested-versus-present manifest and one Collector observation time.
-Ignored hub records remain absent callbacks. The transactional SessionInfo
-reducer described above is not yet implemented; it and all omission-dependent
-topic projection remain disabled until that reducer lands.
+Ignored hub records remain absent callbacks. The pure Go `SessionInfo` descriptor
+parser and classifier are implemented and fixture-backed for every Session
+Coverage row, lexical near misses, exact integer, local-date, calendar, and
+offset bounds, independent logical, routing, and schedule validity, and
+defensive `_kf` validation. They have no runtime wiring and cannot mutate state
+or project telemetry. The transactional SessionInfo reducer described above is
+not yet implemented; it and all omission-dependent topic projection remain
+disabled until that reducer lands.
 
-Implementation requires compact public fixtures for every Session Coverage row
-and lexical near miss; testing with no phase layer, `Started` root opening,
-`Finalised` closure, singular best-lap state, and no race-like lap or gap signal;
-the Abu Dhabi 2021 Practice 1 `6594` to `7165` correction before and after signal
-creation; exact integer, local-date, calendar, and offset bounds; complete
-snapshot, ordinary-feed, and defensive `_kf`-feed replacements;
-missing fields, null, empty, embedded-status-only changes, and schedule clearing;
-initial, same-tuple, corrected-key, key-reversion, new-tuple with distinct and
-reused keys, and retired-tuple cases; 256 and 257 retired generations; reconnect
-omission, invalidity, and later restoration; `null`, empty, partial, and permuted
-snapshot batches; topic-local semantic failure; cross-topic staged coherence;
+End-to-end reducer and projection verification still requires testing with no
+phase layer, `Started` root opening, `Finalised` closure, singular best-lap state,
+and no race-like lap or gap signal; the Abu Dhabi 2021 Practice 1 `6594` to
+`7165` correction before and after signal creation; complete snapshot,
+ordinary-feed, and defensive `_kf`-feed replacements; missing fields, null,
+empty, embedded-status-only changes, and schedule clearing; initial, same-tuple,
+corrected-key, key-reversion, new-tuple with distinct and reused keys, and
+retired-tuple cases; 256 and 257 retired generations; reconnect omission,
+invalidity, and later restoration; `null`, empty, partial, and permuted snapshot
+batches; topic-local semantic failure; cross-topic staged coherence;
 pre-identity no-replay behavior; generation effect ordering; OpenF1 route
 invalidation and re-resolution; a cold terminal snapshot returning one gated
 `/sessions` dispatch command; exact stable OTLP attributes and deterministic IDs

@@ -1,0 +1,320 @@
+[
+  {
+    "name": "2021_preseason_practice_1",
+    "source": "https://livetiming.formula1.com/static/2021/2021-03-14_Pre-Season_Test/2021-03-12_Practice_1/SessionInfo.json",
+    "payload": {
+      "Meeting": {"Key": 1087, "Name": "Pre-Season Test", "Location": "Bahrain", "Country": {"Key": 36, "Code": "BRN", "Name": "Bahrain"}, "Circuit": {"Key": 63, "ShortName": "Sakhir"}},
+      "ArchiveStatus": {"Status": "Complete"},
+      "Key": 6394,
+      "Type": "Practice",
+      "Number": 1,
+      "Name": "Practice 1",
+      "StartDate": "2021-03-12T10:00:00",
+      "EndDate": "2021-03-12T19:00:00",
+      "GmtOffset": "03:00:00",
+      "Path": "2021/2021-03-14_Pre-Season_Test/2021-03-12_Practice_1/"
+    }
+  },
+  {
+    "name": "2022_preseason_practice_2",
+    "source": "https://livetiming.formula1.com/static/2022/2022-03-12_Pre-Season_Test/2022-03-11_Practice_2/SessionInfo.json",
+    "payload": {
+      "Meeting": {"Key": 1132, "Name": "Pre-Season Test", "OfficialName": "FORMULA 1 ARAMCO PRE-SEASON TESTING 2022", "Location": "Sakhir", "Country": {"Key": 36, "Code": "BRN", "Name": "Bahrain"}, "Circuit": {"Key": 63, "ShortName": "Sakhir"}},
+      "ArchiveStatus": {"Status": "Complete"},
+      "Key": 7175,
+      "Type": "Practice",
+      "Number": 2,
+      "Name": "Practice 2",
+      "StartDate": "2022-03-11T10:00:00",
+      "EndDate": "2022-03-11T19:00:00",
+      "GmtOffset": "03:00:00",
+      "Path": "2022/2022-03-12_Pre-Season_Test/2022-03-11_Practice_2/"
+    }
+  },
+  {
+    "name": "2022_preseason_practice_3",
+    "source": "https://livetiming.formula1.com/static/2022/2022-03-12_Pre-Season_Test/2022-03-12_Practice_3/SessionInfo.json",
+    "payload": {
+      "Meeting": {"Key": 1132, "Name": "Pre-Season Test", "OfficialName": "FORMULA 1 ARAMCO PRE-SEASON TESTING 2022", "Location": "Sakhir", "Country": {"Key": 36, "Code": "BRN", "Name": "Bahrain"}, "Circuit": {"Key": 63, "ShortName": "Sakhir"}},
+      "ArchiveStatus": {"Status": "Complete"},
+      "Key": 7176,
+      "Type": "Practice",
+      "Number": 3,
+      "Name": "Practice 3",
+      "StartDate": "2022-03-12T10:00:00",
+      "EndDate": "2022-03-12T19:00:00",
+      "GmtOffset": "03:00:00",
+      "Path": "2022/2022-03-12_Pre-Season_Test/2022-03-12_Practice_3/"
+    }
+  },
+  {
+    "name": "2023_preseason_practice_1",
+    "source": "https://livetiming.formula1.com/static/2023/2023-02-25_Pre-Season_Testing/2023-02-23_Practice_1/SessionInfo.json",
+    "payload": {
+      "Meeting": {"Key": 1140, "Name": "Pre-Season Testing", "OfficialName": "FORMULA 1 ARAMCO PRE-SEASON TESTING 2023", "Location": "Sakhir", "Country": {"Key": 36, "Code": "BRN", "Name": "Bahrain"}, "Circuit": {"Key": 63, "ShortName": "Sakhir"}},
+      "ArchiveStatus": {"Status": "Complete"},
+      "Key": 9222,
+      "Type": "Practice",
+      "Number": 1,
+      "Name": "Practice 1",
+      "StartDate": "2023-02-23T10:00:00",
+      "EndDate": "2023-02-23T19:30:00",
+      "GmtOffset": "03:00:00",
+      "Path": "2023/2023-02-25_Pre-Season_Testing/2023-02-23_Practice_1/"
+    }
+  },
+  {
+    "name": "2024_preseason_practice_2",
+    "source": "https://livetiming.formula1.com/static/2024/2024-02-23_Pre-Season_Testing/2024-02-22_Practice_2/SessionInfo.json",
+    "payload": {
+      "Meeting": {"Key": 1228, "Name": "Pre-Season Testing", "OfficialName": "FORMULA 1 ARAMCO PRE-SEASON TESTING 2024", "Location": "Sakhir", "Country": {"Key": 36, "Code": "BRN", "Name": "Bahrain"}, "Circuit": {"Key": 63, "ShortName": "Sakhir"}},
+      "ArchiveStatus": {"Status": "Complete"},
+      "Key": 9463,
+      "Type": "Practice",
+      "Number": 2,
+      "Name": "Practice 2",
+      "StartDate": "2024-02-22T10:00:00",
+      "EndDate": "2024-02-22T19:00:00",
+      "GmtOffset": "03:00:00",
+      "Path": "2024/2024-02-23_Pre-Season_Testing/2024-02-22_Practice_2/"
+    }
+  },
+  {
+    "name": "2024_preseason_practice_3",
+    "source": "https://livetiming.formula1.com/static/2024/2024-02-23_Pre-Season_Testing/2024-02-23_Practice_3/SessionInfo.json",
+    "payload": {
+      "Meeting": {"Key": 1228, "Name": "Pre-Season Testing", "OfficialName": "FORMULA 1 ARAMCO PRE-SEASON TESTING 2024", "Location": "Sakhir", "Country": {"Key": 36, "Code": "BRN", "Name": "Bahrain"}, "Circuit": {"Key": 63, "ShortName": "Sakhir"}},
+      "ArchiveStatus": {"Status": "Complete"},
+      "Key": 9464,
+      "Type": "Practice",
+      "Number": 3,
+      "Name": "Practice 3",
+      "StartDate": "2024-02-23T10:00:00",
+      "EndDate": "2024-02-23T19:00:00",
+      "GmtOffset": "03:00:00",
+      "Path": "2024/2024-02-23_Pre-Season_Testing/2024-02-23_Practice_3/"
+    }
+  },
+  {
+    "name": "2025_preseason_day_1",
+    "source": "https://livetiming.formula1.com/static/2025/2025-02-28_Pre-Season_Testing/2025-02-26_Day_1/SessionInfo.json",
+    "payload": {
+      "Meeting": {"Key": 1253, "Name": "Pre-Season Testing", "OfficialName": "FORMULA 1 ARAMCO PRE-SEASON TESTING 2025", "Location": "Sakhir", "Number": 1, "Country": {"Key": 36, "Code": "BRN", "Name": "Bahrain"}, "Circuit": {"Key": 63, "ShortName": "Sakhir"}},
+      "ArchiveStatus": {"Status": "Complete"},
+      "Key": 9683,
+      "Type": "Practice",
+      "Number": 1,
+      "Name": "Day 1",
+      "StartDate": "2025-02-26T10:00:00",
+      "EndDate": "2025-02-26T19:00:00",
+      "GmtOffset": "03:00:00",
+      "Path": "2025/2025-02-28_Pre-Season_Testing/2025-02-26_Day_1/"
+    }
+  },
+  {
+    "name": "2026_preseason_day_2",
+    "source": "https://livetiming.formula1.com/static/2026/2026-02-13_Pre-Season_Testing/2026-02-12_Day_2/SessionInfo.json",
+    "payload": {
+      "Meeting": {"Key": 1304, "Name": "Pre-Season Testing", "OfficialName": "FORMULA 1 ARAMCO PRE-SEASON TESTING 1 2026", "Location": "Bahrain", "Number": 1, "Country": {"Key": 36, "Code": "BRN", "Name": "Bahrain"}, "Circuit": {"Key": 63, "ShortName": "Sakhir"}},
+      "SessionStatus": "Finalised",
+      "ArchiveStatus": {"Status": "Complete"},
+      "Key": 11466,
+      "Type": "Practice",
+      "Number": 2,
+      "Name": "Day 2",
+      "StartDate": "2026-02-12T10:00:00",
+      "EndDate": "2026-02-12T19:00:00",
+      "GmtOffset": "03:00:00",
+      "Path": "2026/2026-02-13_Pre-Season_Testing/2026-02-12_Day_2/"
+    }
+  },
+  {
+    "name": "2026_preseason_day_3",
+    "source": "https://livetiming.formula1.com/static/2026/2026-02-13_Pre-Season_Testing/2026-02-13_Day_3/SessionInfo.json",
+    "payload": {
+      "Meeting": {"Key": 1304, "Name": "Pre-Season Testing", "OfficialName": "FORMULA 1 ARAMCO PRE-SEASON TESTING 1 2026", "Location": "Bahrain", "Number": 1, "Country": {"Key": 36, "Code": "BRN", "Name": "Bahrain"}, "Circuit": {"Key": 63, "ShortName": "Sakhir"}},
+      "SessionStatus": "Finalised",
+      "ArchiveStatus": {"Status": "Complete"},
+      "Key": 11467,
+      "Type": "Practice",
+      "Number": 3,
+      "Name": "Day 3",
+      "StartDate": "2026-02-13T10:00:00",
+      "EndDate": "2026-02-13T19:00:00",
+      "GmtOffset": "03:00:00",
+      "Path": "2026/2026-02-13_Pre-Season_Testing/2026-02-13_Day_3/"
+    }
+  },
+  {
+    "name": "2021_abu_dhabi_practice_1_stream",
+    "source": "https://livetiming.formula1.com/static/2021/2021-12-12_Abu_Dhabi_Grand_Prix/2021-12-10_Practice_1/SessionInfo.jsonStream",
+    "payload": {
+      "Meeting": {"Key": 1107, "Name": "Abu Dhabi Grand Prix", "Location": "Yas Island", "Country": {"Key": 21, "Code": "UAE", "Name": "United Arab Emirates"}, "Circuit": {"Key": 70, "ShortName": "Yas Marina Circuit"}},
+      "ArchiveStatus": {"Status": "Generating"},
+      "Key": 6594,
+      "Type": "Practice",
+      "Number": 1,
+      "Name": "Practice 1",
+      "StartDate": "2021-12-10T13:30:00",
+      "EndDate": "2021-12-10T14:30:00",
+      "GmtOffset": "04:00:00",
+      "Path": "2021/2021-12-12_Abu_Dhabi_Grand_Prix/2021-12-10_Practice_1/"
+    }
+  },
+  {
+    "name": "2021_abu_dhabi_practice_1_snapshot",
+    "source": "https://livetiming.formula1.com/static/2021/2021-12-12_Abu_Dhabi_Grand_Prix/2021-12-10_Practice_1/SessionInfo.json",
+    "payload": {
+      "Meeting": {"Key": 1107, "Name": "Abu Dhabi Grand Prix", "Location": "Yas Island", "Country": {"Key": 21, "Code": "UAE", "Name": "United Arab Emirates"}, "Circuit": {"Key": 70, "ShortName": "Yas Marina Circuit"}},
+      "ArchiveStatus": {"Status": "Complete"},
+      "Key": 7165,
+      "Type": "Practice",
+      "Number": 1,
+      "Name": "Practice 1",
+      "StartDate": "2021-12-10T13:30:00",
+      "EndDate": "2021-12-10T14:30:00",
+      "GmtOffset": "04:00:00",
+      "Path": "2021/2021-12-12_Abu_Dhabi_Grand_Prix/2021-12-10_Practice_1/"
+    }
+  },
+  {
+    "name": "2021_abu_dhabi_practice_2",
+    "source": "https://livetiming.formula1.com/static/2021/2021-12-12_Abu_Dhabi_Grand_Prix/2021-12-10_Practice_2/SessionInfo.json",
+    "payload": {
+      "Meeting": {"Key": 1107, "Name": "Abu Dhabi Grand Prix", "Location": "Yas Island", "Country": {"Key": 21, "Code": "UAE", "Name": "United Arab Emirates"}, "Circuit": {"Key": 70, "ShortName": "Yas Marina Circuit"}},
+      "ArchiveStatus": {"Status": "Complete"},
+      "Key": 6595,
+      "Type": "Practice",
+      "Number": 2,
+      "Name": "Practice 2",
+      "StartDate": "2021-12-10T17:00:00",
+      "EndDate": "2021-12-10T18:00:00",
+      "GmtOffset": "04:00:00",
+      "Path": "2021/2021-12-12_Abu_Dhabi_Grand_Prix/2021-12-10_Practice_2/"
+    }
+  },
+  {
+    "name": "2021_abu_dhabi_practice_3",
+    "source": "https://livetiming.formula1.com/static/2021/2021-12-12_Abu_Dhabi_Grand_Prix/2021-12-11_Practice_3/SessionInfo.json",
+    "payload": {
+      "Meeting": {"Key": 1107, "Name": "Abu Dhabi Grand Prix", "Location": "Yas Island", "Country": {"Key": 21, "Code": "UAE", "Name": "United Arab Emirates"}, "Circuit": {"Key": 70, "ShortName": "Yas Marina Circuit"}},
+      "ArchiveStatus": {"Status": "Complete"},
+      "Key": 6596,
+      "Type": "Practice",
+      "Number": 3,
+      "Name": "Practice 3",
+      "StartDate": "2021-12-11T14:00:00",
+      "EndDate": "2021-12-11T15:00:00",
+      "GmtOffset": "04:00:00",
+      "Path": "2021/2021-12-12_Abu_Dhabi_Grand_Prix/2021-12-11_Practice_3/"
+    }
+  },
+  {
+    "name": "2020_imola_practice",
+    "source": "https://livetiming.formula1.com/static/2020/2020-11-01_Emilia_Romagna_Grand_Prix/2020-10-31_Practice/SessionInfo.json",
+    "payload": {
+      "Meeting": {"Key": 1057, "Name": "Emilia Romagna Grand Prix", "Location": "Imola", "Country": {"Key": 13, "Code": "ITA", "Name": "Italy"}, "Circuit": {"Key": 6, "ShortName": "Imola"}},
+      "ArchiveStatus": {"Status": "Complete"},
+      "Key": 5905,
+      "Type": "Practice",
+      "Name": "Practice",
+      "StartDate": "2020-10-31T10:00:00",
+      "EndDate": "2020-10-31T11:30:00",
+      "GmtOffset": "01:00:00",
+      "Path": "2020/2020-11-01_Emilia_Romagna_Grand_Prix/2020-10-31_Practice/"
+    }
+  },
+  {
+    "name": "2021_abu_dhabi_qualifying",
+    "source": "https://livetiming.formula1.com/static/2021/2021-12-12_Abu_Dhabi_Grand_Prix/2021-12-11_Qualifying/SessionInfo.json",
+    "payload": {
+      "Meeting": {"Key": 1107, "Name": "Abu Dhabi Grand Prix", "Location": "Yas Island", "Country": {"Key": 21, "Code": "UAE", "Name": "United Arab Emirates"}, "Circuit": {"Key": 70, "ShortName": "Yas Marina Circuit"}},
+      "ArchiveStatus": {"Status": "Complete"},
+      "Key": 6597,
+      "Type": "Qualifying",
+      "Name": "Qualifying",
+      "StartDate": "2021-12-11T17:00:00",
+      "EndDate": "2021-12-11T18:00:00",
+      "GmtOffset": "04:00:00",
+      "Path": "2021/2021-12-12_Abu_Dhabi_Grand_Prix/2021-12-11_Qualifying/"
+    }
+  },
+  {
+    "name": "2023_azerbaijan_sprint_shootout",
+    "source": "https://livetiming.formula1.com/static/2023/2023-04-30_Azerbaijan_Grand_Prix/2023-04-29_Sprint_Shootout/SessionInfo.json",
+    "payload": {
+      "Meeting": {"Key": 1207, "Name": "Azerbaijan Grand Prix", "OfficialName": "FORMULA 1 AZERBAIJAN GRAND PRIX 2023", "Location": "Baku", "Country": {"Key": 30, "Code": "AZE", "Name": "Azerbaijan"}, "Circuit": {"Key": 144, "ShortName": "Baku"}},
+      "ArchiveStatus": {"Status": "Complete"},
+      "Key": 9278,
+      "Type": "Qualifying",
+      "Number": -1,
+      "Name": "Sprint Shootout",
+      "StartDate": "2023-04-29T12:30:00",
+      "EndDate": "2023-04-29T13:14:00",
+      "GmtOffset": "04:00:00",
+      "Path": "2023/2023-04-30_Azerbaijan_Grand_Prix/2023-04-29_Sprint_Shootout/"
+    }
+  },
+  {
+    "name": "2024_austria_sprint_qualifying",
+    "source": "https://livetiming.formula1.com/static/2024/2024-06-30_Austrian_Grand_Prix/2024-06-28_Sprint_Qualifying/SessionInfo.json",
+    "payload": {
+      "Meeting": {"Key": 1239, "Name": "Austrian Grand Prix", "OfficialName": "FORMULA 1 QATAR AIRWAYS AUSTRIAN GRAND PRIX 2024", "Location": "Spielberg", "Country": {"Key": 17, "Code": "AUT", "Name": "Austria"}, "Circuit": {"Key": 19, "ShortName": "Spielberg"}},
+      "ArchiveStatus": {"Status": "Complete"},
+      "Key": 9545,
+      "Type": "Qualifying",
+      "Name": "Sprint Qualifying",
+      "StartDate": "2024-06-28T16:30:00",
+      "EndDate": "2024-06-28T17:14:00",
+      "GmtOffset": "02:00:00",
+      "Path": "2024/2024-06-30_Austrian_Grand_Prix/2024-06-28_Sprint_Qualifying/"
+    }
+  },
+  {
+    "name": "2021_britain_sprint_qualifying",
+    "source": "https://livetiming.formula1.com/static/2021/2021-07-18_British_Grand_Prix/2021-07-17_Sprint_Qualifying/SessionInfo.json",
+    "payload": {
+      "Meeting": {"Key": 1072, "Name": "British Grand Prix", "Location": "Silverstone", "Country": {"Key": 2, "Code": "GBR", "Name": "Great Britain"}, "Circuit": {"Key": 2, "ShortName": "Silverstone"}},
+      "ArchiveStatus": {"Status": "Complete"},
+      "Key": 6425,
+      "Type": "Race",
+      "Number": -1,
+      "Name": "Sprint Qualifying",
+      "StartDate": "2021-07-17T16:30:00",
+      "EndDate": "2021-07-17T17:00:00",
+      "GmtOffset": "01:00:00",
+      "Path": "2021/2021-07-18_British_Grand_Prix/2021-07-17_Sprint_Qualifying/"
+    }
+  },
+  {
+    "name": "2023_azerbaijan_sprint",
+    "source": "https://livetiming.formula1.com/static/2023/2023-04-30_Azerbaijan_Grand_Prix/2023-04-29_Sprint/SessionInfo.json",
+    "payload": {
+      "Meeting": {"Key": 1207, "Name": "Azerbaijan Grand Prix", "OfficialName": "FORMULA 1 AZERBAIJAN GRAND PRIX 2023", "Location": "Baku", "Country": {"Key": 30, "Code": "AZE", "Name": "Azerbaijan"}, "Circuit": {"Key": 144, "ShortName": "Baku"}},
+      "ArchiveStatus": {"Status": "Complete"},
+      "Key": 9069,
+      "Type": "Race",
+      "Number": -1,
+      "Name": "Sprint",
+      "StartDate": "2023-04-29T17:30:00",
+      "EndDate": "2023-04-29T18:00:00",
+      "GmtOffset": "04:00:00",
+      "Path": "2023/2023-04-30_Azerbaijan_Grand_Prix/2023-04-29_Sprint/"
+    }
+  },
+  {
+    "name": "2021_abu_dhabi_race",
+    "source": "https://livetiming.formula1.com/static/2021/2021-12-12_Abu_Dhabi_Grand_Prix/2021-12-12_Race/SessionInfo.json",
+    "payload": {
+      "Meeting": {"Key": 1107, "Name": "Abu Dhabi Grand Prix", "Location": "Yas Island", "Country": {"Key": 21, "Code": "UAE", "Name": "United Arab Emirates"}, "Circuit": {"Key": 70, "ShortName": "Yas Marina Circuit"}},
+      "ArchiveStatus": {"Status": "Complete"},
+      "Key": 6601,
+      "Type": "Race",
+      "Name": "Race",
+      "StartDate": "2021-12-12T17:00:00",
+      "EndDate": "2021-12-12T19:00:00",
+      "GmtOffset": "04:00:00",
+      "Path": "2021/2021-12-12_Abu_Dhabi_Grand_Prix/2021-12-12_Race/"
+    }
+  }
+]
