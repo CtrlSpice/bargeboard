@@ -83,11 +83,7 @@ func reduceSessionInfo(
 	descriptor sessionInfoParseResult,
 ) sessionInfoReduction {
 	if !descriptor.identityAvailable {
-		state.synchronized = false
-		return sessionInfoReduction{
-			state:       state,
-			disposition: sessionInfoDispositionUnresolved,
-		}
+		return unsynchronizeSessionInfo(state)
 	}
 
 	incomingTuple := descriptor.identity.logicalTuple()
@@ -145,6 +141,14 @@ func reduceSessionInfo(
 	return sessionInfoReduction{
 		state:       state,
 		disposition: sessionInfoDispositionReplaced,
+	}
+}
+
+func unsynchronizeSessionInfo(state sessionInfoState) sessionInfoReduction {
+	state.synchronized = false
+	return sessionInfoReduction{
+		state:       state,
+		disposition: sessionInfoDispositionUnresolved,
 	}
 }
 

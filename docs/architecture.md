@@ -401,10 +401,12 @@ Snapshot state and effects MUST be invariant to JSON member order and decoder
 ordering. Feed invocations remain strict wire-order updates; they are never
 globally sorted by source time.
 
-A successful snapshot that omits `SessionInfo`, a present null or non-object
-value, an empty object, an unresolved logical bundle, or a retained stale tuple
-retains prior state only as non-projectable recovery state and marks session
-identity unsynchronized. Steps 3 through 5 do not run; every other present or
+A successful snapshot that requested and omits `SessionInfo`, a present null or
+non-object value, an empty object, an unresolved logical bundle, or a retained
+stale tuple retains prior state only as non-projectable recovery state and marks
+session identity unsynchronized. A snapshot that did not request `SessionInfo`
+has no authority over SessionInfo state and is no update. Steps 3 through 5 do
+not run after an authoritative unresolved outcome; every other present or
 omitted topic outcome in that batch is discarded without mutating a generation.
 None of these cases is termination or replacement. A later complete coherent
 object may restore the same tuple, apply a key correction, or establish a new
@@ -440,18 +442,21 @@ The Go protocol and normalization seam carries successful no-result, null,
 empty-object, and partial subscription completions as explicit snapshot batches
 with the requested-versus-present manifest and one Collector observation time.
 Ignored hub records remain absent callbacks. The pure Go `SessionInfo` descriptor
-parser, classifier, and descriptor-state reducer are implemented. Parsing is
-fixture-backed for every Session Coverage row, lexical near misses, exact
-integer, local-date, calendar, and offset bounds, independent logical, routing,
-and schedule validity, and defensive `_kf` validation. The reducer covers
-initial installation, same-tuple refresh and route transitions, synchronization
-recovery, unseen-tuple replacement, retained-tuple rejection, and the exact
-256-tuple FIFO horizon. It returns value state and transition metadata only. It
-has no batch or runtime wiring and cannot clear other topic state, return effects
-or commands, emit diagnostics, or project telemetry. No diagnostic-frequency or
-latching policy is accepted by this slice. The transactional batch coordinator
-and all omission-dependent topic projection remain disabled until that
-coordinator lands.
+parser, classifier, descriptor-state reducer, and normalized-batch adapter are
+implemented. Parsing is fixture-backed for every Session Coverage row, lexical
+near misses, exact integer, local-date, calendar, and offset bounds, independent
+logical, routing, and schedule validity, and defensive `_kf` validation. The
+reducer covers initial installation, same-tuple refresh and route transitions,
+synchronization recovery, unseen-tuple replacement, retained-tuple rejection,
+and the exact 256-tuple FIFO horizon. The batch adapter locates exact
+`SessionInfo` updates independent of snapshot order, distinguishes feed or
+unrequested-snapshot no-update from requested snapshot omission, and composes
+parsing with descriptor reduction. It returns value state and transition
+metadata only. It has no runtime wiring and cannot stage or clear other topic
+state, return effects or commands, emit diagnostics, or project telemetry. No
+diagnostic-frequency or latching policy is accepted by this slice. The full
+transactional coordinator and all cross-topic projection remain disabled until
+that coordinator lands.
 
 End-to-end reducer and projection verification still requires testing with no
 phase layer, `Started` root opening, `Finalised` closure, singular best-lap state,
@@ -4100,6 +4105,7 @@ Current implementation seams:
 | JSON and compressed normalization | `receiver/f1livetimingreceiver/normalize.go` |
 | Session descriptor parsing and classification | `receiver/f1livetimingreceiver/session_info.go` |
 | Pure SessionInfo descriptor-state reduction | `receiver/f1livetimingreceiver/session_info_reducer.go` |
+| Pure SessionInfo normalized-batch adapter | `receiver/f1livetimingreceiver/session_info_batch.go` |
 | Shared receiver lifecycle and consumer seam | `receiver/f1livetimingreceiver/receiver.go` |
 | Historical TypeScript reference | `src/` |
 
