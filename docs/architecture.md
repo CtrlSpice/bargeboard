@@ -458,6 +458,15 @@ diagnostic-frequency or latching policy is accepted by this slice. The full
 transactional coordinator and all cross-topic projection remain disabled until
 that coordinator lands.
 
+The pure aggregate identity gate is also implemented. It owns SessionInfo state
+inside aggregate value state, reduces SessionInfo before calculating whether the
+remaining session-scoped outcomes are eligible for future staging, and preserves
+the descriptor disposition and routing-transition metadata. Eligibility requires
+synchronized `E`; route and schedule availability do not decide it. The gate
+retains no normalized update or payload, so an ineligible batch cannot replay
+after recovery. It implements the admission decision after steps 1 and 2 above,
+not steps 3 through 5, and remains unwired from the receiver.
+
 End-to-end reducer and projection verification still requires testing with no
 phase layer, `Started` root opening, `Finalised` closure, singular best-lap state,
 and no race-like lap or gap signal; the Abu Dhabi 2021 Practice 1 `6594` to
@@ -3908,6 +3917,12 @@ instance SHOULD own one session state machine on its read goroutine.
 The functional core SHOULD expose deterministic transformations with no
 network, Collector consumer, logger, context, or wall-clock dependency.
 
+The current Go aggregate core implements only the SessionInfo-first identity
+gate. It returns aggregate value state and whether the remaining session-scoped
+outcomes are eligible for future staging. It does not retain ineligible updates
+or implement another topic, cross-topic reconciliation, effects, commands,
+diagnostics, projection, or runtime state ownership.
+
 Reducer requirements:
 
 - Subscription snapshots replace or initialize applicable topic state.
@@ -4106,10 +4121,11 @@ Current implementation seams:
 | Session descriptor parsing and classification | `receiver/f1livetimingreceiver/session_info.go` |
 | Pure SessionInfo descriptor-state reduction | `receiver/f1livetimingreceiver/session_info_reducer.go` |
 | Pure SessionInfo normalized-batch adapter | `receiver/f1livetimingreceiver/session_info_batch.go` |
+| Pure aggregate batch identity gate | `receiver/f1livetimingreceiver/state.go` |
 | Shared receiver lifecycle and consumer seam | `receiver/f1livetimingreceiver/receiver.go` |
 | Historical TypeScript reference | `src/` |
 
-Other suggested future Go files such as `state.go` and `projection.go` are not
+Other suggested future Go files such as `projection.go` are not
 normative until their behavior slice begins.
 
 ## Security
