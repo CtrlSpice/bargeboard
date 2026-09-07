@@ -140,6 +140,12 @@ bargeboard --session 2026-canada [options]
 | `--no-cache` | off | Skip local Parquet cache; always fetch from OpenF1 |
 | `-v / --verbose` | off | Debug logging |
 
+The TypeScript replay predates the accepted Go historical-replay timing
+contract. Its coarse tick can make accelerated metric windows pace-dependent,
+`--from` does not perform a timing-safe seek or warm-up, and repeated export can
+send another semantic copy of the race. Use it as a full-session historical
+prototype rather than as conformance evidence for the Go implementation.
+
 `--season` is scaffolded but not implemented; raises an error if used.
 
 ## Historical TypeScript Parquet cache

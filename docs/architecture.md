@@ -546,6 +546,143 @@ metric dimension. Metric datapoint attributes all participate in series
 identity, so metrics MUST NOT add `f1.time.quality`; each metric candidate
 instead fixes its accepted timestamp and derivation contract.
 
+### Historical Replay Timing
+
+**Status: FORMATION LAP**
+
+This section accepts the timing substrate for future Go historical replay. It
+does not promote a TypeScript signal mapping, grant a new source authority, or
+accept replay of a captured Live Timing transport stream. Every replay domain
+still requires its own GREEN source and signal contract.
+
+The first conforming mode consumes a fully materialized, immutable normalized
+input. Before replay starts, it freezes the per-domain source-authority plan,
+semantic configuration, normalized records, atomic source batch boundaries, and
+deterministic record ordinals. It also freezes one evidence-backed historical
+observation UTC origin and one non-negative, non-decreasing integer-nanosecond
+observation coordinate per atomic batch; ordinal resolves batches sharing one
+coordinate. Racing-affecting HTTP or other asynchronous source results MUST NOT
+race the virtual replay loop. Source acquisition, caching, transport framing,
+normalization validation, and rate limiting happen before the input freezes.
+Topic semantic validation and its failure effects remain in reduction as each
+frozen record is delivered. Exporter I/O cannot feed back into racing state.
+
+The accepted live OpenF1 result handoff is not historical replay input. Its
+polling, response-completion timestamp, and root-export race remain live-only.
+Historical OpenF1 result replay requires a separate source and signal contract;
+this timing substrate does not convert a prefetched response into one.
+
+Historical replay has three distinct clocks:
+
+| Clock | Meaning | Authority |
+|---|---|---|
+| Historical event time | Original UTC evidence under the timestamp precedence above | Source-owned racing signal timestamps, span boundaries, and metric-window assignment |
+| Replay observation clock | A historical UTC origin plus monotonic integer-nanosecond progress through the frozen input | Pacing coordinates, item 4 observation timestamps, and Collector-clock-owned racing timers |
+| Process clock | The current Collector wall and monotonic clocks | `ObservedTimestamp`, source and exporter I/O deadlines, and operational telemetry |
+
+The replay observation UTC is a fixed evidence-backed origin plus replay elapsed
+time; it never follows current process wall-clock jumps. A source timestamp may
+remain equal or move backward without moving replay observation progress
+backward. Input that cannot establish the required historical origin and
+monotonic observation coordinate cannot create an observation-time racing
+candidate.
+
+Original-time replay is the default and accepted mode. A pacing multiplier or
+unpaced dump changes only host waiting between record ordinals. It MUST NOT
+shift, compress, round, or otherwise rewrite historical event time. Given the
+same frozen input, including observation coordinates and ordinals, authority
+plan, and semantic configuration, replay pace MUST NOT change reducer outcomes,
+candidate identity, deterministic IDs, metric values or windows, racing
+timestamps, or semantic deduplication. Actual process-observation fields,
+operational telemetry, and downstream OTLP exporter batch boundaries MAY differ
+between runs. Source callback batches, snapshot atomicity, and record ordinals
+MUST NOT be changed by pacing or exporter batching.
+
+The replay shell injects the replay observation clock into the functional core.
+Clock ownership applies independently to an action's trigger and to the
+timestamp that action emits. A timer trigger owned by Collector monotonic time
+uses virtual replay monotonic progress even when its resulting datapoint uses a
+source-derived timestamp. For example, `ExtrapolatedClock` timer observations
+advance virtually while each accepted point retains its `A+n` source boundary.
+Applicable freshness, current-state heartbeat, and lifecycle-grace triggers use
+the same rule. Source-watermark-owned lap buffering, Delta-window finalization,
+terminal folding, and other source-driven triggers remain source-driven;
+elapsed replay time MUST NOT advance them. Network timeouts, source rate limits,
+retries, and exporter shutdown use the real process monotonic clock. Pure replay
+and projection tests MUST NOT sleep.
+
+The shell releases frozen records one atomic batch at a time in deterministic
+ordinal order, even when one host wake-up makes several records ready. Each
+domain applies its existing source-time, watermark, wire-order, and equal-time
+rules during reduction. Replay MUST NOT globally sort recorded Live Timing feed
+callbacks by source timestamp or interleave their atomic members. It also MUST
+NOT accumulate observations through a coarse pacing tick before giving their
+own timestamps to a source-time metric window.
+
+Boundary equality remains domain-owned. Tests for a touched rule MUST cover one
+nanosecond before, exactly at, and one nanosecond after its boundary. In
+particular, an observation at the end of a right-closed metric interval belongs
+to that interval, which finalizes only when its source watermark passes the end;
+a Collector-clock freshness deadline follows that domain's accepted expiry and
+update ordering. A virtual timer strictly before the next batch coordinate is
+reduced first; one strictly after remains pending. A domain without accepted
+timer-versus-source ordering at an equal coordinate, or without accepted
+behavior when several periodic deadlines are crossed, is not replay-eligible
+until those rules become GREEN. Replay scheduling adds no universal tie-breaker.
+
+For racing logs, `Timestamp` follows the accepted historical event or replay
+observation time while `ObservedTimestamp` uses actual process observation wall
+time. Metrics and traces retain historical timestamps. Operational receiver
+signals remain on process time and MUST NOT be backdated onto the racing
+timeline.
+
+Captured Live Timing replay remains **YELLOW**. A future capture contract must
+preserve a global callback ordinal, each callback's atomic wire order and
+delivery kind, snapshot requested-versus-present manifests, source timestamps,
+original observation UTC, and monotonic elapsed observation coordinate. File
+timestamps and current replay time are not substitutes. Static per-topic
+archives without global callback order cannot claim conforming transport replay.
+
+Partial replay also remains **YELLOW**, including start or end clipping,
+driver/topic filtering before reduction, incomplete captures, and shutdown at a
+synthetic replay horizon. A future Go replay MUST NOT expose those controls until
+the architecture defines warm-up state, suppressed versus retained effects,
+absolute cumulative baselines, pending semantic timers, and the final shutdown
+barrier. In particular, it MUST NOT drain omitted history into the first emitted
+tick. Shifted or speed-compressed "live now" timestamps are **YELLOW** and
+non-binding. Any such mode requires a separately named time, identity, and
+deduplication contract and MUST never be inferred from playback speed.
+
+Cross-run delivery semantics remain **YELLOW**. Before a Go historical replay
+can enable network export, the architecture MUST accept an explicit policy for
+repeating a session into the same destination. An unbounded replay-run value
+MUST NOT be added to metric attributes as an idempotency workaround. Dry-run and
+pure projection work may proceed without that policy.
+
+The historical TypeScript CLI predates this contract and remains a reference,
+not a conforming implementation. It builds endpoint-grouped events and globally
+sorts them by relative event time; its tick loop can place observations after a
+five-second boundary into the preceding metric flush at accelerated speeds; its
+`--from` path drains earlier queued events into the first tick rather than
+performing an accepted seek or warm-up; log event and observation timestamps are
+equal; and repeated network export has no declared delivery policy. These known
+limitations MUST NOT be copied into Go.
+
+Required replay verification uses the same frozen fixture, authority plan, and
+semantic configuration at slow, normal, accelerated, and unpaced delivery. It
+compares exact pure state, effects, candidates, identities, source ordinals,
+batch observation coordinates, and racing timestamps after excluding actual
+process-observation fields, operational telemetry, and downstream exporter
+batch partitioning. It also covers regressing and equal source times; boundary
+minus one nanosecond, exact boundary, and boundary plus one nanosecond; each
+enabled domain's timer-versus-source ties and crossed periodic deadlines;
+virtual Collector-clock triggers with source-derived output timestamps;
+source-watermark non-advancement; actual versus historical log times; and proof
+that semantic validation still occurs during reduction and no asynchronous
+source result enters after input freeze. Captured, partial, shifted, and repeated
+network replay require separate verification after their contracts become
+GREEN.
+
 ## Trace Model
 
 **Status: GREEN**
@@ -4208,6 +4345,8 @@ Before committing a behavior slice:
 | Pit activity as lap events | GREEN | No separate pit trace by default. |
 | DNF, DNS, and DSQ as span errors | GREEN | Failed participation is visible in trace error navigation. |
 | Unix-nanosecond OTLP timestamps | GREEN | Source precision is preserved without invention. |
+| Original-time historical replay | GREEN | Playback pace changes delivery only; racing chronology and semantic timers use the historical timeline. |
+| Captured, partial, shifted, and repeated replay | YELLOW | Capture order, seek, live-now mapping, and cross-run delivery require separate accepted contracts before Go export. |
 | One field telemetry distribution per session | GREEN | Teams and drivers do not split histogram series. |
 | Raw high-frequency telemetry Gauges | RED | They are noisy and duplicate better distributions and span summaries. |
 | Whole-field race trace | RED | Driver progression would become a crowded cross-field waterfall. |
