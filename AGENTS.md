@@ -21,17 +21,23 @@ These instructions supplement `/Users/moya/Workspace/AGENTS.md` for work in this
   commit completed verified changes, push the branch, open and update its pull
   request, mark it ready, squash-merge it after every landing gate passes, and
   fast-forward local `main`.
-- This authorization ends after the pull request merges and one `--ff-only`
-  synchronization of local `main`, when the pull request closes without merging,
-  when the behavior slice is superseded, or when the user revokes it. It does
-  not authorize release tags, releases, deployments, branch deletion,
-  force-pushes, history rewrites, ruleset bypasses, or new unapproved product or
-  architecture decisions.
+- Remote-mutation authorization is limited to that behavior slice and, once they
+  exist, its feature branch and pull request. It ends immediately when the pull
+  request merges or closes without merging, when the work is abandoned or
+  superseded, or when the user revokes it. After merge, only one immediate
+  `--ff-only` synchronization of local `main` remains authorized; if it fails,
+  stop and ask the user before doing anything else remotely.
+- This authorization does not include release tags, releases, deployments,
+  branch deletion, force-pushes, history rewrites, ruleset bypasses, or new
+  unapproved product or architecture decisions.
 - Agents may use existing authenticated Git and GitHub tooling non-interactively
   for the authorized operations. They must not read, export, print, transmit, or
   modify credential material.
-- Merging a pull request that itself triggers a release or deployment requires
-  explicit user approval for that release or deployment.
+- Any authorized operation that directly or indirectly triggers a release or
+  deployment, including a push, pull-request state or metadata change, or merge,
+  requires prior explicit user approval for that effect. Record the repository,
+  operation, target ref or environment, and exact candidate OIDs when applicable;
+  a change to any recorded value invalidates the approval.
 - Any change to this standing authorization or its test and independent-review
   gates requires explicit user approval and must land under the version from the
   pull request's merge base. A proposed policy change cannot authorize or weaken
@@ -67,9 +73,10 @@ These instructions supplement `/Users/moya/Workspace/AGENTS.md` for work in this
   see each other's findings before all isolated reviews finish, and must not
   mutate files, the index, refs, or remotes.
 - Give each reviewer the complete pull-request diff identified by exact base and
-  head commit OIDs, user intent, applicable architecture, and required tests. One
-  review must focus on correctness and architecture; another must adversarially
-  examine edge cases, failure policy, tests, security, and regressions.
+  head commit OIDs, user intent, applicable architecture, required tests, and the
+  exact intended squash subject and body. One review must focus on correctness
+  and architecture; another must adversarially examine edge cases, failure
+  policy, tests, security, and regressions.
 - Add a focused specialist review whenever a pull request changes timestamps,
   concurrency, protocols, credentials, cardinality, or another identified
   high-risk domain.
@@ -81,10 +88,11 @@ These instructions supplement `/Users/moya/Workspace/AGENTS.md` for work in this
   issue must be reported and tracked without silently expanding the pull request.
   Preference-only suggestions are not automatically valid and must not create
   unnecessary abstraction or scope.
-- Any head or base OID change invalidates prior reviews. Rerun at least two fresh
-  independent reviews, plus every required specialist review, against the final
-  diff. Resolve contradictory findings from evidence, architecture, and tests;
-  ask the user when a genuine product or architecture decision remains.
+- Any repository, target branch, head or base OID, or intended squash subject or
+  body change invalidates prior reviews. Rerun at least two fresh independent
+  reviews, plus every required specialist review, against the final candidate.
+  Resolve contradictory findings from evidence, architecture, and tests; ask the
+  user when a genuine product or architecture decision remains.
 - Final-round reviewers must not inspect pull-request discussion or any earlier
   review output. Record the repository, target branch, final reviewed base and
   head OIDs, review mandates and outcomes, finding resolutions, and exact
@@ -99,12 +107,22 @@ These instructions supplement `/Users/moya/Workspace/AGENTS.md` for work in this
   the branch without rewriting published history, rerun affected local checks and
   all final reviews, and record the new OIDs. Confirm no unintended worktree
   change or unresolved valid finding remains.
+- Keep the pull request draft until final checks and reviews pass. Before every
+  push to a branch with an open pull request, before marking it ready, and again
+  immediately before merging, confirm repository auto-merge is disabled and no
+  merge queue applies. Stop if either condition is not met; never enable
+  auto-merge, enter a merge queue, or use an administrative bypass.
 - Immediately before merge, verify the repository, target branch, base OID, and
   head OID still match the reviewed candidate. Merge with the reviewed head OID
-  guard, such as `gh pr merge <number> --squash --match-head-commit
-  <reviewed-head-OID>`, while strict server-side protection requires the branch
-  to remain current with `main`. Do not enable auto-merge or enter a merge queue
-  for an independently reviewed candidate.
+  and commit metadata, such as `gh pr merge <number> --repo <owner/repository>
+  --squash --match-head-commit <reviewed-head-OID> --subject
+  "<reviewed-one-sentence-subject>" --body ""`, while strict server-side
+  protection requires the branch to remain current with `main`.
+- GitHub's merge API atomically guards the head OID but has no corresponding
+  expected-target or expected-base parameter. Strict branch protection supplies
+  the base-freshness guard; the immediate target preflight assumes trusted
+  collaborators will not retarget the pull request during the merge request. If
+  that coordination assumption is not valid, require a user-performed merge.
 - Correctness, security, and architectural consistency outrank schedule, patch
   size, and the desire to merge. Never self-approve or bypass a repository rule.
 

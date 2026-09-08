@@ -36,6 +36,8 @@
 - Target branch:
 - Reviewed base OID:
 - Reviewed head OID:
+- Reviewed squash subject:
+- Reviewed squash body:
 - Correctness and architecture:
 - Adversarial behavior and tests:
 - Specialist review, or N/A with reason:
@@ -43,7 +45,7 @@
 
 ## Release Or Deployment
 
-<!-- State whether merging triggers a release or deployment. Record explicit user approval when it does. -->
+<!-- State whether any push, PR state/metadata change, or merge triggers a release or deployment. Record approval bound to that operation and effect when it does. -->
 
 ## Checklist
 
@@ -53,8 +55,12 @@
 - [ ] Architecture documentation changed with any semantic contract.
 - [ ] At least two fresh independent reviews examined the exact final base/head diff.
 - [ ] Every required specialist review is complete and recorded.
-- [ ] Every valid finding, including nits, is resolved.
+- [ ] Every valid in-scope finding, including nits, is resolved; unrelated findings are tracked below.
 - [ ] Required local verification and GitHub checks pass for the final merge candidate.
-- [ ] Repository, target branch, base OID, and head OID still match the reviewed candidate.
-- [ ] Merge-triggered release or deployment approval is recorded, or merging triggers neither.
+- [ ] Repository, target branch, base OID, head OID, and squash metadata still match the reviewed candidate.
+- [ ] Triggered release or deployment approval is recorded for every authorized operation, or none triggers either effect.
 - [ ] No credential, sensitive or unnecessary raw payload, or unrelated worktree change is included.
+
+## Unrelated Findings
+
+-
