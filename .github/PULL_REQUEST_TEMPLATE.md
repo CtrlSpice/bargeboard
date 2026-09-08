@@ -32,6 +32,8 @@
 
 <!-- Complete all isolated reviews before recording any result here. Write "Clean" when applicable. -->
 
+- Repository:
+- Target branch:
 - Reviewed base OID:
 - Reviewed head OID:
 - Correctness and architecture:
@@ -39,18 +41,20 @@
 - Specialist review, or N/A with reason:
 - Findings and resolutions:
 
-## Release Impact
+## Release Or Deployment
 
-<!-- State user-visible release impact, or write "None". -->
+<!-- State whether merging triggers a release or deployment. Record explicit user approval when it does. -->
 
 ## Checklist
 
 - [ ] The change is focused and contains only related work.
-- [ ] Every changed behavior has focused tests, or this is documentation-only.
+- [ ] Every changed behavior has focused tests, or the pull request explains why no executable test seam applies.
 - [ ] Documentation-only architecture work records future implementation verification.
 - [ ] Architecture documentation changed with any semantic contract.
 - [ ] At least two fresh independent reviews examined the exact final base/head diff.
 - [ ] Every required specialist review is complete and recorded.
 - [ ] Every valid finding, including nits, is resolved.
 - [ ] Required local verification and GitHub checks pass for the final merge candidate.
+- [ ] Repository, target branch, base OID, and head OID still match the reviewed candidate.
+- [ ] Merge-triggered release or deployment approval is recorded, or merging triggers neither.
 - [ ] No credential, sensitive or unnecessary raw payload, or unrelated worktree change is included.

@@ -31,6 +31,10 @@ These instructions supplement `/Users/moya/Workspace/AGENTS.md` for work in this
   modify credential material.
 - Merging a pull request that itself triggers a release or deployment requires
   explicit user approval for that release or deployment.
+- Any change to this standing authorization or its test and independent-review
+  gates requires explicit user approval and must land under the version from the
+  pull request's merge base. A proposed policy change cannot authorize or weaken
+  the conditions of its own landing.
 - Use one-sentence commit messages that describe the completed change.
 - Squash-merge pull requests so `main` receives one clean commit per feature.
 - Do not rewrite published branch history or force-push unless explicitly approved.
@@ -52,7 +56,8 @@ These instructions supplement `/Users/moya/Workspace/AGENTS.md` for work in this
 - If behavior is difficult to test deterministically, improve the seam before
   merging rather than relying on sleeps or broad integration tests.
 - Documentation-only architecture decisions must record the verification their
-  eventual implementation will require.
+  eventual implementation will require. Normative policy changes must explain
+  their non-executable validation when no focused automated seam exists.
 
 ## Independent Review Gate
 
@@ -79,17 +84,25 @@ These instructions supplement `/Users/moya/Workspace/AGENTS.md` for work in this
   independent reviews, plus every required specialist review, against the final
   diff. Resolve contradictory findings from evidence, architecture, and tests;
   ask the user when a genuine product or architecture decision remains.
-- Record the final reviewed base and head OIDs, review mandates and outcomes,
-  finding resolutions, and exact verification commands in the pull request. All
-  isolated reviews must finish before any finding is posted there. Review agents
-  do not replace required local checks or CI.
+- Final-round reviewers must not inspect pull-request discussion or any earlier
+  review output. Record the repository, target branch, final reviewed base and
+  head OIDs, review mandates and outcomes, finding resolutions, and exact
+  verification commands in the pull request. All isolated reviews must finish
+  before any finding is posted there. Review agents do not replace required local
+  checks or CI.
 - Before merge, require every configured required check for the exact final merge
   candidate to complete successfully. Superseded, skipped, neutral, and cancelled
-  runs do not satisfy a required check.
+  runs do not satisfy a required check. The canonical GitHub Actions `check` job
+  must pass even if repository settings fail to require it.
 - Inspect the complete diff against current `main`. If the base has moved, update
   the branch without rewriting published history, rerun affected local checks and
   all final reviews, and record the new OIDs. Confirm no unintended worktree
   change or unresolved valid finding remains.
+- Immediately before merge, verify the repository, target branch, base OID, and
+  head OID still match the reviewed candidate. Merge with the reviewed head OID
+  guard, such as `gh pr merge --match-head-commit`, while strict server-side
+  protection requires the branch to remain current with `main`. Do not enable
+  auto-merge or enter a merge queue for an independently reviewed candidate.
 - Correctness, security, and architectural consistency outrank schedule, patch
   size, and the desire to merge. Never self-approve or bypass a repository rule.
 
