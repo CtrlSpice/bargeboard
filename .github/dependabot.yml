@@ -1,0 +1,44 @@
+version: 2
+
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    rebase-strategy: "disabled"
+    groups:
+      opentelemetry-collector:
+        applies-to: "version-updates"
+        patterns:
+          - "go.opentelemetry.io/collector*"
+
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    rebase-strategy: "disabled"
+    groups:
+      opentelemetry:
+        applies-to: "version-updates"
+        patterns:
+          - "@opentelemetry/*"
+      typescript-tooling:
+        applies-to: "version-updates"
+        patterns:
+          - "@types/node"
+          - "tsx"
+          - "typescript"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    rebase-strategy: "disabled"
+    groups:
+      github-actions:
+        applies-to: "version-updates"
+        patterns:
+          - "*"
