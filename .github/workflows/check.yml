@@ -5,16 +5,22 @@ on:
   push:
     branches: [main]
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
-  group: check-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GOTOOLCHAIN: local
 
 jobs:
-  check:
-    runs-on: ubuntu-latest
+  quality:
+    name: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,15 +47,94 @@ jobs:
         run: make check
 
       - name: Check receiver races
-        run: go test -race -count=1 ./receiver/f1livetimingreceiver
+        run: go test -mod=readonly -race -count=1 -timeout=5m ./receiver/f1livetimingreceiver
 
       - name: Check TypeScript reference
         run: npm run typecheck
 
+      - name: Build TypeScript reference
+        run: npm run build
+
+      - name: Smoke test built TypeScript CLI
+        run: node dist/index.js --help
+
       - name: Check pull request diff
         if: github.event_name == 'pull_request'
-        run: git diff --check "${{ github.event.pull_request.base.sha }}...HEAD"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: git diff --check "$BASE_SHA...HEAD"
 
-      - name: Check pushed commit
+      - name: Check pushed range
         if: github.event_name == 'push'
-        run: git show --check --format= HEAD
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: git diff --check "$BEFORE_SHA..$HEAD_SHA"
+
+      - name: Check tracked files are unchanged
+        run: |
+          git diff --exit-code
+          git diff --cached --exit-code
+
+  release_build:
+    name: release build (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            goos: linux
+            goarch: amd64
+          - runner: ubuntu-24.04
+            goos: linux
+            goarch: arm64
+          - runner: macos-15
+            goos: darwin
+            goarch: amd64
+          - runner: macos-15
+            goos: darwin
+            goarch: arm64
+          - runner: windows-2025
+            goos: windows
+            goarch: amd64
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build distribution
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -mod=readonly -trimpath .
+
+  check:
+    name: check
+    needs:
+      - quality
+      - release_build
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require successful prerequisite jobs
+        env:
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          RELEASE_BUILD_RESULT: ${{ needs.release_build.result }}
+        run: |
+          if [ "$QUALITY_RESULT" != "success" ] || [ "$RELEASE_BUILD_RESULT" != "success" ]; then
+            printf 'quality=%s\nrelease_build=%s\n' "$QUALITY_RESULT" "$RELEASE_BUILD_RESULT"
+            exit 1
+          fi

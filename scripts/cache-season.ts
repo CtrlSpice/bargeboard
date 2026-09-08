@@ -12,11 +12,11 @@
  * --year      defaults to 2026.
  */
 
-import { loadDrivers, loadEvents, loadSessionInfo } from "../src/extract.js";
+import { loadDrivers, loadEvents } from "../src/extract.js";
 import { getSessions } from "../src/openf1.js";
 import { hasCachedSession } from "../src/cache.js";
 import { log } from "../src/util.js";
-import type { SessionInfo, DriverInfo } from "../src/models.js";
+import type { SessionInfo } from "../src/models.js";
 
 const args = process.argv.slice(2);
 const noCache = args.includes("--no-cache");
