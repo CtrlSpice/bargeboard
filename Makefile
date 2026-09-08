@@ -21,7 +21,10 @@ fmt:
 	$(GO) fmt ./...
 
 fmt-check:
-	@unformatted="$$(git ls-files -z -- '*.go' | xargs -0 $(GOFMT) -l)" || exit $$?; \
+	@files="$$(mktemp)" || exit $$?; \
+	trap 'rm -f "$$files"' EXIT HUP INT TERM; \
+	git ls-files --cached --others --exclude-standard -z -- '*.go' >"$$files" || exit $$?; \
+	unformatted="$$(xargs -0 $(GOFMT) -l -- <"$$files")" || exit $$?; \
 	if [ -n "$$unformatted" ]; then \
 		printf 'These files need gofmt:\n%s\n' "$$unformatted"; \
 		exit 1; \
