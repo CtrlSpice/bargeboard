@@ -48,8 +48,8 @@
 ## Checklist
 
 - [ ] The change is focused and contains only related work.
-- [ ] Every changed behavior has focused tests, or the pull request explains why no executable test seam applies.
-- [ ] Documentation-only architecture work records future implementation verification.
+- [ ] Every changed executable behavior has focused tests.
+- [ ] Documentation-only architecture or normative policy work records its future or non-executable validation.
 - [ ] Architecture documentation changed with any semantic contract.
 - [ ] At least two fresh independent reviews examined the exact final base/head diff.
 - [ ] Every required specialist review is complete and recorded.

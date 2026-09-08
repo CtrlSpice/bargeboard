@@ -22,10 +22,11 @@ These instructions supplement `/Users/moya/Workspace/AGENTS.md` for work in this
   request, mark it ready, squash-merge it after every landing gate passes, and
   fast-forward local `main`.
 - This authorization ends after the pull request merges and one `--ff-only`
-  synchronization of local `main`, or when the user revokes it. It does not
-  authorize release tags, releases, deployments, branch deletion, force-pushes,
-  history rewrites, ruleset bypasses, or new unapproved product or architecture
-  decisions.
+  synchronization of local `main`, when the pull request closes without merging,
+  when the behavior slice is superseded, or when the user revokes it. It does
+  not authorize release tags, releases, deployments, branch deletion,
+  force-pushes, history rewrites, ruleset bypasses, or new unapproved product or
+  architecture decisions.
 - Agents may use existing authenticated Git and GitHub tooling non-interactively
   for the authorized operations. They must not read, export, print, transmit, or
   modify credential material.
@@ -100,9 +101,10 @@ These instructions supplement `/Users/moya/Workspace/AGENTS.md` for work in this
   change or unresolved valid finding remains.
 - Immediately before merge, verify the repository, target branch, base OID, and
   head OID still match the reviewed candidate. Merge with the reviewed head OID
-  guard, such as `gh pr merge --match-head-commit`, while strict server-side
-  protection requires the branch to remain current with `main`. Do not enable
-  auto-merge or enter a merge queue for an independently reviewed candidate.
+  guard, such as `gh pr merge <number> --squash --match-head-commit
+  <reviewed-head-OID>`, while strict server-side protection requires the branch
+  to remain current with `main`. Do not enable auto-merge or enter a merge queue
+  for an independently reviewed candidate.
 - Correctness, security, and architectural consistency outrank schedule, patch
   size, and the desire to merge. Never self-approve or bypass a repository rule.
 
