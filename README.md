@@ -25,6 +25,50 @@ The shipped `config.yaml` enables F1 Live Timing and listens for OTLP/gRPC on
 `localhost:4317` and OTLP/HTTP on `localhost:4318`. Run `make components` to
 inspect the components compiled into the distribution.
 
+## Releases
+
+GitHub releases provide native `bargeboard` archives for Linux and macOS on
+amd64 and arm64, and for Windows on amd64. Each archive includes the binary,
+`config.yaml`, this README, and the Apache 2.0 license. The release also includes
+SHA-256 checksums and an SPDX SBOM for every archive.
+
+After downloading all assets for a release, verify them before running the
+binary:
+
+```bash
+tag=v1.2.3
+gh release verify "$tag" --repo CtrlSpice/bargeboard
+for asset in checksums.txt bargeboard_*; do
+  gh release verify-asset "$tag" "$asset" --repo CtrlSpice/bargeboard
+done
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum --check checksums.txt
+else
+  shasum -a 256 --check checksums.txt
+fi
+```
+
+The release workflow accepts only a signed annotated SemVer tag such as
+`v1.2.3`. The tag must point to the current `main` commit, that commit must have
+passed the protected `check` workflow, and the configured release controls must
+still match repository policy. A required reviewer then approves the protected
+`release` environment. GoReleaser creates a draft, the workflow verifies its
+assets and records attestations, and only then does it publish the immutable
+release.
+
+Maintainers can validate the external controls with the release control token
+before creating a tag:
+
+```bash
+GITHUB_REPOSITORY=CtrlSpice/bargeboard bash scripts/verify-release-controls.sh
+```
+
+The protected environment supplies `GORELEASER_KEY` and a repository-scoped
+`RELEASE_CONTROL_TOKEN`. GitHub only discloses ruleset bypass actors to callers
+with ruleset write access, so that token needs repository Administration write
+permission even though the workflow uses it only for `GET` requests. Keep both
+secrets in the `release` environment, not at repository scope.
+
 ### F1 Live Timing
 
 The Collector reads each user's own F1 TV `subscriptionToken` from
@@ -35,6 +79,19 @@ permissions before running the Collector. After storing the token:
 ```bash
 chmod 600 "$HOME/.config/bargeboard/f1tv-token"
 make run
+```
+
+The packaged Windows configuration uses the same `HOME`-relative path.
+PowerShell does not normally export its `$HOME` value as an environment
+variable, so set it for the Collector process and create the token file in the
+same profile before starting `bargeboard.exe`:
+
+```powershell
+$tokenDirectory = Join-Path $HOME ".config\bargeboard"
+New-Item -ItemType Directory -Force $tokenDirectory | Out-Null
+notepad (Join-Path $tokenDirectory "f1tv-token")
+$env:HOME = $HOME
+.\bargeboard.exe --config config.yaml
 ```
 
 The token file should be readable only by its owner. Never put a token directly
@@ -197,3 +254,7 @@ The Python prototype lives at the `last-python` git tag if you want to compare.
 
 - [OpenF1](https://openf1.org/) for free public access to historical F1 timing + telemetry data from 2023 onwards.
 - [@anthropic-ai/claude-code](https://docs.claude.com/claude-code) for being the world's most patient pair-programmer through this rewrite.
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).
