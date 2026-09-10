@@ -56,7 +56,16 @@ still match repository policy. A required reviewer then approves the protected
 assets and records attestations, and only then does it publish the immutable
 release. CI authenticates the official Go 1.26.8, Syft, GoReleaser Pro, and
 actionlint archives against SHA-256 digests pinned in the repository before
-extracting or executing them.
+extracting or executing them. Tags are limited to 131 ASCII characters so every
+wrapped archive path has one canonical USTAR representation.
+
+The final verified read of `main` immediately before publication is the release
+decision point. A later branch update does not invalidate that decision. A
+failed run before publication can leave an unpublished draft that maintainers
+must inspect and remove before retrying. If a publication request fails, the
+workflow accepts only a positively reconciled valid immutable release and
+otherwise preserves the release for manual reconciliation because deleting an
+immutable release permanently prevents reuse of its tag name.
 
 Maintainers can validate the external controls with the release control token
 before creating a tag:

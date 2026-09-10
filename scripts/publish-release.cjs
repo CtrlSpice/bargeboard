@@ -94,7 +94,38 @@ function verifyPublishedRelease(release, tag) {
   }
 }
 
-async function publishRelease({ github, owner, repo, tag, releaseCommit, releaseDir }) {
+function hasCompletePublicationEvidence(release) {
+  return (
+    release !== null &&
+    typeof release === "object" &&
+    typeof release.tag_name === "string" &&
+    typeof release.draft === "boolean" &&
+    (release.published_at === null || typeof release.published_at === "string") &&
+    typeof release.prerelease === "boolean" &&
+    typeof release.immutable === "boolean" &&
+    typeof release.html_url === "string" &&
+    release.html_url.length > 0 &&
+    Array.isArray(release.assets) &&
+    release.assets.every(
+      (asset) =>
+        asset !== null &&
+        typeof asset === "object" &&
+        typeof asset.name === "string" &&
+        typeof asset.state === "string" &&
+        typeof asset.digest === "string" &&
+        typeof asset.size === "number",
+    )
+  );
+}
+
+async function publishRelease({
+  github,
+  owner,
+  repo,
+  tag,
+  releaseCommit,
+  releaseDir,
+}) {
   const mainRef = await github.rest.git.getRef({ owner, repo, ref: "heads/main" });
   if (mainRef.data.object.sha !== releaseCommit) {
     throw new Error(
@@ -133,7 +164,6 @@ async function publishRelease({ github, owner, repo, tag, releaseCommit, release
   }
 
   let publishRequestError;
-  let reconciledDraftError;
   let published;
   try {
     published = await github.request("PATCH /repos/{owner}/{repo}/releases/{release_id}", {
@@ -152,61 +182,64 @@ async function publishRelease({ github, owner, repo, tag, releaseCommit, release
         release_id: release.id,
       });
     } catch (reconciliationError) {
+      throw new AggregateError(
+        [publishRequestError, reconciliationError],
+        `release ${tag} publication result is unknown and requires manual reconciliation`,
+      );
+    }
+  }
+
+  if (!hasCompletePublicationEvidence(published.data)) {
+    const incompleteEvidence = new Error(
+      `release ${tag} publication response did not contain complete immutable state`,
+    );
+    if (!publishRequestError) {
       try {
-        await github.rest.repos.deleteRelease({ owner, repo, release_id: release.id });
-      } catch (cleanupError) {
+        published = await github.rest.repos.getRelease({
+          owner,
+          repo,
+          release_id: release.id,
+        });
+      } catch (reconciliationError) {
         throw new AggregateError(
-          [publishRequestError, reconciliationError, cleanupError],
-          `release ${tag} publication result is unknown and could not be removed`,
+          [incompleteEvidence, reconciliationError],
+          `release ${tag} publication evidence is incomplete and requires manual reconciliation`,
+        );
+      }
+    }
+    if (!hasCompletePublicationEvidence(published.data)) {
+      if (publishRequestError) {
+        throw new AggregateError(
+          [publishRequestError, incompleteEvidence],
+          `release ${tag} publication request failed and the reconciled release was preserved`,
         );
       }
       throw new AggregateError(
-        [publishRequestError, reconciliationError],
-        `release ${tag} publication result was unknown and the release was removed`,
+        [incompleteEvidence],
+        `release ${tag} publication evidence is incomplete and the release was preserved`,
       );
-    }
-
-    if (published.data.draft === true) {
-      try {
-        selectDraft([published.data], tag);
-        verifyAssets(published.data.assets, expected);
-      } catch (stateError) {
-        reconciledDraftError = stateError;
-      }
-      if (!reconciledDraftError) {
-        reconciledDraftError = new Error(
-          `release ${tag} remained a draft after the publication request failed`,
-        );
-      }
     }
   }
 
   try {
-    if (reconciledDraftError) throw reconciledDraftError;
     if (published.data.immutable !== true) {
       throw new Error(`published release is not immutable: ${published.data.html_url}`);
     }
     verifyPublishedRelease(published.data, tag);
     verifyAssets(published.data.assets, expected);
-    const publishedMainRef = await github.rest.git.getRef({ owner, repo, ref: "heads/main" });
-    if (publishedMainRef.data.object.sha !== releaseCommit) {
-      throw new Error(
-        `main moved from ${releaseCommit} to ${publishedMainRef.data.object.sha} during publication`,
+  } catch (publicationError) {
+    if (publishRequestError) {
+      throw new AggregateError(
+        [publishRequestError, publicationError],
+        `release ${tag} publication request failed and the reconciled release was preserved`,
       );
     }
-  } catch (publicationError) {
     try {
       await github.rest.repos.deleteRelease({ owner, repo, release_id: release.id });
     } catch (cleanupError) {
       throw new AggregateError(
         [publishRequestError, publicationError, cleanupError].filter(Boolean),
         `release ${tag} failed validation and could not be removed`,
-      );
-    }
-    if (publishRequestError) {
-      throw new AggregateError(
-        [publishRequestError, publicationError],
-        `release ${tag} request failed and the published state was invalid`,
       );
     }
     throw publicationError;

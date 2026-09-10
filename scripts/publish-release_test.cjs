@@ -261,11 +261,102 @@ test("detects changed assets in the publication response", async (t) => {
   ]);
 });
 
-test("removes a release when main moves during publication", async (t) => {
-  const { calls, github, releaseDir } = releaseFixture(t);
-  let refReads = 0;
-  github.rest.git.getRef = async () => ({
-    data: { object: { sha: ++refReads < 3 ? commit : "b".repeat(40) } },
+test("preserves incomplete successful publication evidence", async (t) => {
+  const mutations = [
+    (published) => {
+      delete published.immutable;
+    },
+    (published) => {
+      delete published.assets;
+    },
+    (published) => {
+      delete published.html_url;
+    },
+    (published) => {
+      published.assets[0] = { ...published.assets[0], digest: null };
+    },
+  ];
+
+  for (const mutate of mutations) {
+    const { assets, calls, github, release, releaseDir } = releaseFixture(t);
+    const incomplete = {
+      ...release,
+      assets: [...assets],
+      draft: false,
+      immutable: true,
+      published_at: "2026-09-09T00:00:00Z",
+      html_url: "https://example.test/release",
+    };
+    mutate(incomplete);
+    let releaseReads = 0;
+    github.rest.repos.getRelease = async () => ({
+      data: ++releaseReads === 1 ? { ...release, assets } : incomplete,
+    });
+    github.request = async () => ({ data: incomplete });
+
+    await assert.rejects(
+      publishRelease({
+        github,
+        owner: "CtrlSpice",
+        repo: "bargeboard",
+        tag,
+        releaseCommit: commit,
+        releaseDir,
+      }),
+      /publication evidence is incomplete and the release was preserved/,
+    );
+    assert.deepEqual(calls.deleted, []);
+  }
+});
+
+test("accepts valid reconciliation after an incomplete successful response", async (t) => {
+  const { assets, calls, github, release, releaseDir } = releaseFixture(t);
+  const published = {
+    ...release,
+    assets,
+    draft: false,
+    immutable: true,
+    published_at: "2026-09-09T00:00:00Z",
+    html_url: "https://example.test/reconciled",
+  };
+  let releaseReads = 0;
+  github.rest.repos.getRelease = async () => ({
+    data: ++releaseReads === 1 ? { ...release, assets } : published,
+  });
+  github.request = async () => {
+    const incomplete = { ...published };
+    delete incomplete.immutable;
+    return { data: incomplete };
+  };
+
+  const url = await publishRelease({
+    github,
+    owner: "CtrlSpice",
+    repo: "bargeboard",
+    tag,
+    releaseCommit: commit,
+    releaseDir,
+  });
+
+  assert.equal(url, "https://example.test/reconciled");
+  assert.deepEqual(calls.deleted, []);
+});
+
+test("preserves an incomplete successful response when reconciliation fails", async (t) => {
+  const { assets, calls, github, release, releaseDir } = releaseFixture(t);
+  let releaseReads = 0;
+  github.rest.repos.getRelease = async () => {
+    if (++releaseReads === 1) return { data: { ...release, assets } };
+    throw new Error("reconciliation failed");
+  };
+  github.request = async () => ({
+    data: {
+      ...release,
+      assets,
+      draft: false,
+      published_at: "2026-09-09T00:00:00Z",
+      html_url: "https://example.test/incomplete",
+    },
   });
 
   await assert.rejects(
@@ -277,22 +368,54 @@ test("removes a release when main moves during publication", async (t) => {
       releaseCommit: commit,
       releaseDir,
     }),
-    /during publication/,
+    (error) => {
+      assert(error instanceof AggregateError);
+      assert.match(error.message, /evidence is incomplete and requires manual reconciliation/);
+      assert.deepEqual(
+        error.errors.map((cause) => cause.message),
+        [
+          "release v1.2.3 publication response did not contain complete immutable state",
+          "reconciliation failed",
+        ],
+      );
+      return true;
+    },
   );
+  assert.deepEqual(calls.deleted, []);
+});
+
+test("uses the final prepublication main read as the linearization point", async (t) => {
+  const { calls, github, releaseDir } = releaseFixture(t);
+  let refReads = 0;
+  github.rest.git.getRef = async () => ({
+    data: { object: { sha: ++refReads < 3 ? commit : "b".repeat(40) } },
+  });
+
+  const url = await publishRelease({
+    github,
+    owner: "CtrlSpice",
+    repo: "bargeboard",
+    tag,
+    releaseCommit: commit,
+    releaseDir,
+  });
+  assert.equal(url, "https://example.test/release");
+  assert.equal(refReads, 2);
   assert.equal(calls.published.length, 1);
-  assert.deepEqual(calls.deleted, [
-    { owner: "CtrlSpice", repo: "bargeboard", release_id: 7 },
-  ]);
+  assert.deepEqual(calls.deleted, []);
 });
 
 test("removes a release published without immutability", async (t) => {
-  const { calls, github, releaseDir } = releaseFixture(t);
+  const { calls, github, release, releaseDir } = releaseFixture(t);
   github.request = async (_route, input) => {
     calls.published.push(input);
     return {
       data: {
+        ...release,
         assets: [],
+        draft: false,
         immutable: false,
+        published_at: "2026-09-09T00:00:00Z",
         html_url: "https://example.test/mutable",
       },
     };
@@ -346,7 +469,7 @@ test("accepts a valid immutable release after a lost publication response", asyn
   assert.deepEqual(calls.deleted, []);
 });
 
-test("removes an unchanged draft after a failed publication request", async (t) => {
+test("preserves an unchanged draft after an indeterminate publication request", async (t) => {
   const { calls, github, releaseDir } = releaseFixture(t);
   github.request = async () => {
     throw new Error("publication failed");
@@ -361,14 +484,12 @@ test("removes an unchanged draft after a failed publication request", async (t) 
       releaseCommit: commit,
       releaseDir,
     }),
-    /request failed and the published state was invalid/,
+    /publication request failed and the reconciled release was preserved/,
   );
-  assert.deepEqual(calls.deleted, [
-    { owner: "CtrlSpice", repo: "bargeboard", release_id: 7 },
-  ]);
+  assert.deepEqual(calls.deleted, []);
 });
 
-test("removes a changed draft after a failed publication request", async (t) => {
+test("preserves a changed draft after an indeterminate publication request", async (t) => {
   const { assets, calls, github, release, releaseDir } = releaseFixture(t);
   let releaseReads = 0;
   github.rest.repos.getRelease = async () => ({
@@ -393,14 +514,12 @@ test("removes a changed draft after a failed publication request", async (t) => 
       releaseCommit: commit,
       releaseDir,
     }),
-    /request failed and the published state was invalid/,
+    /publication request failed and the reconciled release was preserved/,
   );
-  assert.deepEqual(calls.deleted, [
-    { owner: "CtrlSpice", repo: "bargeboard", release_id: 7 },
-  ]);
+  assert.deepEqual(calls.deleted, []);
 });
 
-test("removes a release when publication cannot be reconciled", async (t) => {
+test("preserves a release when publication cannot be reconciled", async (t) => {
   const { assets, calls, github, release, releaseDir } = releaseFixture(t);
   let releaseReads = 0;
   github.rest.repos.getRelease = async () => {
@@ -422,7 +541,7 @@ test("removes a release when publication cannot be reconciled", async (t) => {
     }),
     (error) => {
       assert(error instanceof AggregateError);
-      assert.match(error.message, /result was unknown and the release was removed/);
+      assert.match(error.message, /result is unknown and requires manual reconciliation/);
       assert.deepEqual(
         error.errors.map((cause) => cause.message),
         ["response lost", "reconciliation failed"],
@@ -430,52 +549,18 @@ test("removes a release when publication cannot be reconciled", async (t) => {
       return true;
     },
   );
-  assert.deepEqual(calls.deleted, [
-    { owner: "CtrlSpice", repo: "bargeboard", release_id: 7 },
-  ]);
-});
-
-test("reports unknown publication and cleanup failures together", async (t) => {
-  const { assets, github, release, releaseDir } = releaseFixture(t);
-  let releaseReads = 0;
-  github.rest.repos.getRelease = async () => {
-    if (++releaseReads === 1) return { data: { ...release, assets } };
-    throw new Error("reconciliation failed");
-  };
-  github.request = async () => {
-    throw new Error("response lost");
-  };
-  github.rest.repos.deleteRelease = async () => {
-    throw new Error("cleanup failed");
-  };
-
-  await assert.rejects(
-    publishRelease({
-      github,
-      owner: "CtrlSpice",
-      repo: "bargeboard",
-      tag,
-      releaseCommit: commit,
-      releaseDir,
-    }),
-    (error) => {
-      assert(error instanceof AggregateError);
-      assert.match(error.message, /result is unknown and could not be removed/);
-      assert.deepEqual(
-        error.errors.map((cause) => cause.message),
-        ["response lost", "reconciliation failed", "cleanup failed"],
-      );
-      return true;
-    },
-  );
+  assert.deepEqual(calls.deleted, []);
 });
 
 test("reports publication and cleanup failures together", async (t) => {
-  const { github, releaseDir } = releaseFixture(t);
+  const { github, release, releaseDir } = releaseFixture(t);
   github.request = async () => ({
     data: {
+      ...release,
       assets: [],
+      draft: false,
       immutable: false,
+      published_at: "2026-09-09T00:00:00Z",
       html_url: "https://example.test/mutable",
     },
   });
