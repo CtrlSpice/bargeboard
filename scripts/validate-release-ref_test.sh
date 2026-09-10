@@ -93,6 +93,9 @@ accept v1.0.0-x.7.z.92
 accept v1.0.0-x-y-z.--
 accept v1.0.0+build.1
 accept v1.0.0-beta+exp.sha.5114f85
+max_prerelease="$(printf 'a%.0s' {1..124})"
+readonly max_prerelease
+accept "v1.2.3-$max_prerelease"
 
 reject_tag 1.2.3
 reject_tag v1.2
@@ -107,6 +110,7 @@ reject_tag v1.2.3+build..1
 reject_tag v1.2.3_alpha
 reject_tag v1.2.3.4
 reject_tag v1.2.3/other
+reject_tag "v1.2.3-${max_prerelease}a"
 
 if fixture v1.2.3 | bash "$validator" v1.2.3 cccccccccccccccccccccccccccccccccccccccc >/dev/null 2>&1; then
   printf 'expected a release tag away from current main to fail\n' >&2

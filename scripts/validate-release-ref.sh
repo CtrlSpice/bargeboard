@@ -10,6 +10,10 @@ if [[ ! "$tag" =~ $semver ]]; then
   printf 'release tag is not strict SemVer with a v prefix: %s\n' "$tag" >&2
   exit 1
 fi
+if (( ${#tag} > 131 )); then
+  printf 'release tag is too long for the canonical archive layout: %s\n' "$tag" >&2
+  exit 1
+fi
 if [[ ! "$main_commit" =~ ^[0-9a-f]{40}$ ]]; then
   printf 'current main is not a full commit OID: %s\n' "$main_commit" >&2
   exit 1

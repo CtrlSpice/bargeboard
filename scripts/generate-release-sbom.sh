@@ -4,6 +4,7 @@ set -euo pipefail
 readonly artifact="${1:?usage: generate-release-sbom.sh ARTIFACT DOCUMENT}"
 readonly document="${2:?usage: generate-release-sbom.sh ARTIFACT DOCUMENT}"
 readonly project_package=github.com/CtrlSpice/bargeboard
+readonly other_relationship_comment="evident-by: indicates the package's existence is evident by the given file"
 
 if [[ ! -f "$artifact" ]]; then
   printf 'SBOM artifact does not exist: %s\n' "$artifact" >&2
@@ -68,27 +69,32 @@ fi
 jq \
   --arg namespace "$document_namespace" \
   --arg created "$created" \
+  --arg artifact "$artifact_name" \
   --arg package "$project_package" \
+  --arg other_relationship_comment "$other_relationship_comment" \
   --arg module_version "$module_version" '
     .documentNamespace = $namespace |
     .creationInfo.created = $created |
+    del(.relationships[].comment) |
+    (.relationships[] | select(.relationshipType == "OTHER") | .comment) =
+      $other_relationship_comment |
+    (.packages[] | select(.name == $artifact) | .primaryPackagePurpose) = "ARCHIVE" |
     (.packages[] | select(.name == $package)) |= (
       .versionInfo = $module_version |
       .licenseConcluded = "Apache-2.0" |
       .licenseDeclared = "Apache-2.0"
     ) |
+    (.packages[] | select(.name == "stdlib")) |= del(.externalRefs) |
     (.packages[] | select(
       .name != "stdlib" and
       any(.externalRefs[]?; .referenceType == "purl")
     )) |= (
-      .externalRefs = (
-        [.externalRefs[]? | select(.referenceType != "purl")] + [{
-          referenceCategory: "PACKAGE-MANAGER",
-          referenceType: "purl",
-          referenceLocator: (
-            "pkg:golang/" + (.name | ascii_downcase) + "@" + (.versionInfo | @uri)
-          )
-        }]
-      )
+      .externalRefs = [{
+        referenceCategory: "PACKAGE-MANAGER",
+        referenceType: "purl",
+        referenceLocator: (
+          "pkg:golang/" + (.name | ascii_downcase) + "@" + (.versionInfo | @uri)
+        )
+      }]
     )
   ' "$temporary_document" >"$document"

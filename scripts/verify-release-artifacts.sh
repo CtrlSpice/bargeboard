@@ -7,6 +7,7 @@ readonly metadata="$dist/metadata.json"
 readonly artifacts="$dist/artifacts.json"
 readonly checksums="$dist/checksums.txt"
 readonly project_package=github.com/CtrlSpice/bargeboard
+readonly other_relationship_comment="evident-by: indicates the package's existence is evident by the given file"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly script_dir
 
@@ -19,6 +20,10 @@ done
 
 version="$(jq -er '.version | select(type == "string" and length > 0)' "$metadata")"
 readonly version
+if [[ ! "$version" =~ ^[0-9A-Za-z][0-9A-Za-z.+-]*$ || ${#version} -gt 130 ]]; then
+  printf 'release metadata contains an unsafe version: %s\n' "$version" >&2
+  exit 1
+fi
 commit_epoch="$(git show -s --format=%ct HEAD)"
 readonly commit_epoch
 created="$(jq -nr --argjson epoch "$commit_epoch" '$epoch | todateiso8601')"
@@ -36,6 +41,20 @@ readonly archives=(
 expected_subjects=()
 for archive in "${archives[@]}"; do
   expected_subjects+=("$archive" "$archive.sbom.spdx.json")
+done
+
+for archive in "${archives[@]}"; do
+  if [[ "$archive" == *.zip ]]; then
+    root="${archive%.zip}"
+    binary=bargeboard.exe
+  else
+    root="${archive%.tar.gz}"
+    binary=bargeboard
+  fi
+  if ! go run "$script_dir/release_archive.go" "$dist/$archive" "$root" "$binary" "$commit_epoch"; then
+    printf 'archive metadata does not match release policy: %s\n' "$archive" >&2
+    exit 1
+  fi
 done
 
 checksum_subjects=()
@@ -156,6 +175,13 @@ for archive in "${archives[@]}"; do
       exit 1
       ;;
   esac
+  if [[ "$archive" == *.zip ]]; then
+    root="${archive%.zip}"
+    binary=bargeboard.exe
+  else
+    root="${archive%.tar.gz}"
+    binary=bargeboard
+  fi
 
   if ! jq -e --arg name "$archive" --arg target "$expected_target" '
     ([.[] | select(
@@ -187,7 +213,65 @@ for archive in "${archives[@]}"; do
     --arg created "$created" \
     --arg package "$project_package" \
     --arg archive_version "sha256:$archive_digest" \
-    --arg go_version "$expected_go_version" '
+    --arg go_version "$expected_go_version" \
+    --arg other_relationship_comment "$other_relationship_comment" \
+    --arg source "$root/$binary" '
+    (keys | sort) == [
+      "SPDXID", "creationInfo", "dataLicense", "documentNamespace", "files",
+      "name", "packages", "relationships", "spdxVersion"
+    ] and
+    (.creationInfo | keys | sort) == ["created", "creators", "licenseListVersion"] and
+    all(.packages[];
+      ([
+        "SPDXID", "copyrightText", "downloadLocation", "filesAnalyzed",
+        "licenseConcluded", "licenseDeclared", "name", "supplier", "versionInfo"
+      ] - keys | length) == 0 and
+      (keys - [
+        "SPDXID", "checksums", "copyrightText", "downloadLocation", "externalRefs",
+        "filesAnalyzed", "licenseConcluded", "licenseDeclared", "name",
+        "primaryPackagePurpose", "sourceInfo", "supplier", "versionInfo"
+      ] | length) == 0 and
+      ((has("primaryPackagePurpose") | not) or .primaryPackagePurpose == "ARCHIVE") and
+      ((has("sourceInfo") | not) or (.sourceInfo | type) == "string") and
+      ((has("checksums") | not) or (
+        (.checksums | type) == "array" and
+        all(.checksums[];
+          (keys | sort) == ["algorithm", "checksumValue"] and
+          .algorithm == "SHA256" and
+          (.checksumValue | test("^[0-9a-f]{64}$"))
+        )
+      )) and
+      ((has("externalRefs") | not) or (
+        (.externalRefs | type) == "array" and
+        all(.externalRefs[];
+          (keys | sort) == ["referenceCategory", "referenceLocator", "referenceType"] and
+          .referenceCategory == "PACKAGE-MANAGER" and
+          .referenceType == "purl" and
+          (.referenceLocator | type) == "string" and (.referenceLocator | length) > 0
+        )
+      ))
+    ) and
+    all(.files[];
+      (keys | sort) == [
+        "SPDXID", "checksums", "copyrightText", "fileName", "fileTypes",
+        "licenseConcluded", "licenseInfoInFiles"
+      ] and
+      (.SPDXID | type) == "string" and
+      (.SPDXID | test("^SPDXRef-[A-Za-z0-9.-]+$")) and
+      all(.checksums[];
+        (keys | sort) == ["algorithm", "checksumValue"] and
+        (.algorithm == "SHA1" or .algorithm == "SHA256") and
+        (.checksumValue | test("^[0-9a-f]+$"))
+      )
+    ) and
+    all(.relationships[];
+      if .relationshipType == "OTHER" then
+        (keys | sort) == ["comment", "relatedSpdxElement", "relationshipType", "spdxElementId"] and
+        .comment == $other_relationship_comment
+      else
+        (keys | sort) == ["relatedSpdxElement", "relationshipType", "spdxElementId"]
+      end
+    ) and
     .spdxVersion == "SPDX-2.3" and
     .SPDXID == "SPDXRef-DOCUMENT" and
     .dataLicense == "CC0-1.0" and
@@ -205,7 +289,8 @@ for archive in "${archives[@]}"; do
     (.relationships | type) == "array" and
     all(.packages[];
       (.name | type) == "string" and (.name | length) > 0 and
-      (.SPDXID | type) == "string" and (.SPDXID | startswith("SPDXRef-")) and
+      (.SPDXID | type) == "string" and
+      (.SPDXID | test("^SPDXRef-[A-Za-z0-9.-]+$")) and
       (.versionInfo | type) == "string" and (.versionInfo | length) > 0 and
       .supplier == "NOASSERTION" and
       .downloadLocation == "NOASSERTION" and
@@ -216,26 +301,39 @@ for archive in "${archives[@]}"; do
     ) and
     ([.packages[] | select(
       .name == $package and
+      (keys | sort) == [
+        "SPDXID", "copyrightText", "downloadLocation", "externalRefs",
+        "filesAnalyzed", "licenseConcluded", "licenseDeclared", "name",
+        "sourceInfo", "supplier", "versionInfo"
+      ] and
       .licenseConcluded == "Apache-2.0" and
       .licenseDeclared == "Apache-2.0"
     )] | length) == 1 and
     ([.packages[] | select(
       .name == $name and
+      (keys | sort) == [
+        "SPDXID", "checksums", "copyrightText", "downloadLocation",
+        "filesAnalyzed", "licenseConcluded", "licenseDeclared", "name",
+        "primaryPackagePurpose", "supplier", "versionInfo"
+      ] and
       .versionInfo == $archive_version and
-      .primaryPackagePurpose == "FILE" and
-      .checksums == [{algorithm: "SHA256", checksumValue: ($archive_version | ltrimstr("sha256:"))}]
+      .primaryPackagePurpose == "ARCHIVE" and
+      .checksums == [{algorithm: "SHA256", checksumValue: ($archive_version | ltrimstr("sha256:"))}] and
+      .licenseConcluded == "NOASSERTION" and
+      .licenseDeclared == "NOASSERTION"
     )] | length) == 1 and
     ([.packages[] | select(
       .name == "stdlib" and
+      (keys | sort) == [
+        "SPDXID", "copyrightText", "downloadLocation", "filesAnalyzed",
+        "licenseConcluded", "licenseDeclared", "name", "sourceInfo", "supplier",
+        "versionInfo"
+      ] and
       .versionInfo == $go_version and
       .checksums == null and
+      .sourceInfo == ("acquired package info from go module information: " + $source) and
       .licenseConcluded == "NOASSERTION" and
-      .licenseDeclared == "BSD-3-Clause" and
-      ([.externalRefs[]? | select(.referenceType == "purl")]) == [{
-        referenceCategory: "PACKAGE-MANAGER",
-        referenceType: "purl",
-        referenceLocator: ("pkg:golang/stdlib@" + ($go_version | ltrimstr("go")))
-      }]
+      .licenseDeclared == "BSD-3-Clause"
     )] | length) == 1 and
     (["SPDXRef-DOCUMENT"] + [.packages[].SPDXID] + [.files[].SPDXID]) as $ids |
     ($ids | length) == ($ids | unique | length) and
@@ -253,12 +351,8 @@ for archive in "${archives[@]}"; do
   fi
 
   if [[ "$archive" == *.zip ]]; then
-    root="${archive%.zip}"
-    binary=bargeboard.exe
     actual_entries="$(unzip -Z1 "$dist/$archive" | LC_ALL=C sort)"
   else
-    root="${archive%.tar.gz}"
-    binary=bargeboard
     actual_entries="$(tar -tzf "$dist/$archive" | LC_ALL=C sort)"
   fi
   expected_entries="$(printf '%s\n' \
@@ -268,10 +362,6 @@ for archive in "${archives[@]}"; do
     "$root/$binary" | LC_ALL=C sort)"
   if [[ "$actual_entries" != "$expected_entries" ]]; then
     printf 'archive has an unexpected payload: %s\n' "$archive" >&2
-    exit 1
-  fi
-  if ! go run "$script_dir/release_archive.go" "$dist/$archive" "$root" "$binary" "$commit_epoch"; then
-    printf 'archive metadata does not match release policy: %s\n' "$archive" >&2
     exit 1
   fi
   if [[ "$archive" == *.zip ]]; then
@@ -310,8 +400,25 @@ for archive in "${archives[@]}"; do
     printf 'archive binary metadata does not match release policy: %s\n' "$archive" >&2
     exit 1
   fi
-  if ! LC_ALL=C strings "$binary_path" | LC_ALL=C grep -Fx -- "$version" >/dev/null; then
-    printf 'archive binary does not contain release version: %s\n' "$archive" >&2
+
+  reference_target_binary="$payload_dir/reference-$expected_target"
+  (
+    cd "$repository_root"
+    env \
+      CGO_ENABLED=0 \
+      GOOS="$expected_goos" \
+      GOARCH="$expected_goarch" \
+      "$expected_tuning_key=$expected_tuning" \
+      go build \
+        -buildvcs=true \
+        -mod=readonly \
+        -trimpath \
+        -ldflags "-s -w -X main.version=$version" \
+        -o "$reference_target_binary" \
+        .
+  )
+  if ! cmp -s "$binary_path" "$reference_target_binary"; then
+    printf 'archive binary does not match reproducible reference build: %s\n' "$archive" >&2
     exit 1
   fi
 
@@ -330,6 +437,7 @@ for archive in "${archives[@]}"; do
     --arg sha1 "$binary_sha1" \
     --arg sha256 "$binary_sha256" '
       .files[0].fileName == $file and
+      (.files[0].SPDXID | test("^SPDXRef-[A-Za-z0-9.-]+$")) and
       .files[0].fileTypes == ["APPLICATION", "BINARY"] and
       ([.files[0].checksums[] | [.algorithm, .checksumValue]] | sort) == ([
         ["SHA1", $sha1],
@@ -427,6 +535,11 @@ for archive in "${archives[@]}"; do
       --arg source "$root/$binary" '
         ([.packages[] | select(
           .name == $package and
+          (keys | sort) == [
+            "SPDXID", "checksums", "copyrightText", "downloadLocation",
+            "externalRefs", "filesAnalyzed", "licenseConcluded",
+            "licenseDeclared", "name", "sourceInfo", "supplier", "versionInfo"
+          ] and
           .versionInfo == $version and
           .sourceInfo == ("acquired package info from go module information: " + $source) and
           .checksums == [{algorithm: "SHA256", checksumValue: $checksum}] and

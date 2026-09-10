@@ -67,6 +67,77 @@ cp -R "$source_dist" "$work/dist-invalid-sbom"
 mutate_sbom "$work/dist-invalid-sbom" '.spdxVersion = "SPDX-0.0"'
 expect_failure 'SPDX structure' 'invalid release SPDX document' "$work/dist-invalid-sbom"
 
+cp -R "$source_dist" "$work/dist-unknown-spdx-field"
+mutate_sbom "$work/dist-unknown-spdx-field" '.unexpected = "field"'
+expect_failure 'closed SPDX profile' 'invalid release SPDX document' "$work/dist-unknown-spdx-field"
+
+cp -R "$source_dist" "$work/dist-invalid-package-purpose"
+mutate_sbom "$work/dist-invalid-package-purpose" '
+  (.packages[] | select(.name == "google.golang.org/grpc") | .primaryPackagePurpose) =
+    "NOT-A-PURPOSE"
+'
+expect_failure 'SPDX package purpose' 'invalid release SPDX document' "$work/dist-invalid-package-purpose"
+
+cp -R "$source_dist" "$work/dist-false-external-reference"
+mutate_sbom "$work/dist-false-external-reference" '
+  (.packages[] | select(.name == "google.golang.org/grpc") | .externalRefs) += [{
+    referenceCategory: "SECURITY",
+    referenceType: "cpe23Type",
+    referenceLocator: "cpe:2.3:a:unrelated:package:1.0.0:*:*:*:*:*:*:*"
+  }]
+'
+expect_failure 'unverified SPDX external reference' 'invalid release SPDX document' "$work/dist-false-external-reference"
+
+cp -R "$source_dist" "$work/dist-invalid-archive-license"
+mutate_sbom "$work/dist-invalid-archive-license" '
+  (.packages[] | select(.primaryPackagePurpose == "ARCHIVE") | .licenseDeclared) =
+    "NOT-A-LICENSE"
+'
+expect_failure 'SPDX archive license' 'invalid release SPDX document' "$work/dist-invalid-archive-license"
+
+cp -R "$source_dist" "$work/dist-archive-purl"
+mutate_sbom "$work/dist-archive-purl" '
+  (.packages[] | select(.primaryPackagePurpose == "ARCHIVE") | .externalRefs) = [{
+    referenceCategory: "PACKAGE-MANAGER",
+    referenceType: "purl",
+    referenceLocator: "not-a-purl"
+  }]
+'
+expect_failure 'SPDX archive package shape' 'invalid release SPDX document' "$work/dist-archive-purl"
+
+cp -R "$source_dist" "$work/dist-dependency-purpose"
+mutate_sbom "$work/dist-dependency-purpose" '
+  (.packages[] | select(.name == "google.golang.org/grpc") | .primaryPackagePurpose) = "ARCHIVE"
+'
+expect_failure \
+  'SPDX dependency package shape' \
+  'SBOM dependency does not match authenticated Go module metadata' \
+  "$work/dist-dependency-purpose"
+
+cp -R "$source_dist" "$work/dist-invalid-spdx-id"
+mutate_sbom "$work/dist-invalid-spdx-id" '
+  .files[0].SPDXID as $original |
+  .files[0].SPDXID = "SPDXRef-invalid id" |
+  .relationships |= map(
+    if .spdxElementId == $original then .spdxElementId = "SPDXRef-invalid id"
+    elif .relatedSpdxElement == $original then .relatedSpdxElement = "SPDXRef-invalid id"
+    else . end
+  )
+'
+expect_failure 'SPDX element ID grammar' 'invalid release SPDX document' "$work/dist-invalid-spdx-id"
+
+cp -R "$source_dist" "$work/dist-relationship-comment"
+mutate_sbom "$work/dist-relationship-comment" '
+  (.relationships[] | select(.relationshipType == "OTHER") | .comment) = "unverified claim"
+'
+expect_failure 'SPDX relationship meaning' 'invalid release SPDX document' "$work/dist-relationship-comment"
+
+cp -R "$source_dist" "$work/dist-stdlib-source"
+mutate_sbom "$work/dist-stdlib-source" '
+  (.packages[] | select(.name == "stdlib") | .sourceInfo) = "unrelated source"
+'
+expect_failure 'SPDX stdlib source' 'invalid release SPDX document' "$work/dist-stdlib-source"
+
 cp -R "$source_dist" "$work/dist-wrong-sbom-version"
 mutate_sbom "$work/dist-wrong-sbom-version" \
   '(.packages[] | select(.name == "github.com/CtrlSpice/bargeboard") | .versionInfo) = "9.9.9"'
@@ -172,11 +243,11 @@ expect_failure \
 
 cp -R "$source_dist" "$work/dist-extra-relationship"
 mutate_sbom "$work/dist-extra-relationship" '
-  ([.packages[] | select(.primaryPackagePurpose == "FILE")][0].SPDXID) as $root |
+  ([.packages[] | select(.primaryPackagePurpose == "ARCHIVE")][0].SPDXID) as $root |
   .relationships += [{
-    spdxElementId: $root,
-    relationshipType: "OTHER",
-    relatedSpdxElement: .files[0].SPDXID
+    spdxElementId: "SPDXRef-DOCUMENT",
+    relationshipType: "DESCRIBES",
+    relatedSpdxElement: $root
   }]
 '
 expect_failure \
@@ -194,11 +265,20 @@ expect_failure \
   'SBOM binary file does not match archive payload' \
   "$work/dist-wrong-file-checksum"
 
+cp -R "$source_dist" "$work/dist-invalid-checksum"
+awk 'NR == 1 { print sprintf("%064d", 0) "  " $2; next } { print }' \
+  "$work/dist-invalid-checksum/checksums.txt" >"$work/checksums.txt"
+mv "$work/checksums.txt" "$work/dist-invalid-checksum/checksums.txt"
+expect_failure 'archive checksum' 'FAILED' "$work/dist-invalid-checksum"
+
 cp -R "$source_dist" "$work/dist-tampered-archive"
 source_archives=("$source_dist"/*.tar.gz)
 archive="$work/dist-tampered-archive/${source_archives[0]##*/}"
 printf 'tampered\n' >>"$archive"
-expect_failure 'archive checksum' 'FAILED' "$work/dist-tampered-archive"
+expect_failure \
+  'archive envelope preflight' \
+  'archive metadata does not match release policy' \
+  "$work/dist-tampered-archive"
 
 mkdir "$work/source"
 cp LICENSE README.md config.yaml "$work/source/"
@@ -211,12 +291,19 @@ jq 'map(if .type == "Archive" and .target == "linux_amd64_v1" then .target = "li
 mv "$work/artifacts.json" "$work/dist-invalid-metadata/artifacts.json"
 expect_failure 'artifact metadata correlation' 'archive targets do not match the supported release matrix' "$work/dist-invalid-metadata"
 
-mkdir "$work/no-version-bin"
-printf '#!/usr/bin/env bash\nprintf "v0.0.0\\n"\n' >"$work/no-version-bin/strings"
-chmod +x "$work/no-version-bin/strings"
-PATH="$work/no-version-bin:$PATH" expect_failure \
-  'embedded release version' \
-  'archive binary does not contain release version' \
+mkdir "$work/mismatched-reference-bin"
+real_cmp="$(command -v cmp)"
+cat >"$work/mismatched-reference-bin/cmp" <<EOF
+#!/usr/bin/env bash
+if [[ "\${*: -1}" == */reference-* ]]; then
+  exit 1
+fi
+exec "$real_cmp" "\$@"
+EOF
+chmod +x "$work/mismatched-reference-bin/cmp"
+PATH="$work/mismatched-reference-bin:$PATH" expect_failure \
+  'target binary reference equality' \
+  'archive binary does not match reproducible reference build' \
   "$source_dist"
 
 bash "$verifier" "$source_dist"
