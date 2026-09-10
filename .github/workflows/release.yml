@@ -114,11 +114,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+          RELEASE_TAG: ${{ github.ref_name }}
         shell: bash
         run: |
           set -euo pipefail
           : "${GORELEASER_KEY:?GORELEASER_KEY is not configured in the release environment}"
-          goreleaser release --clean
+          bash scripts/build-release.sh "$RELEASE_TAG"
 
       - name: Verify release artifacts
         env:

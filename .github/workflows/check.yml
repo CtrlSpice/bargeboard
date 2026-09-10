@@ -170,6 +170,7 @@ jobs:
 
       - name: Test release-ref validation
         run: |
+          bash scripts/build-release_test.sh
           bash scripts/go-toolchain_test.sh
           bash scripts/verify-sha256_test.sh
           bash scripts/validate-release-ref_test.sh
@@ -193,11 +194,26 @@ jobs:
           set -euo pipefail
           {
             printf 'digests<<EOF\n'
-            sha256sum build/release/*.tar.gz build/release/*.zip build/release/*.sbom.spdx.json
+            sha256sum \
+              build/release/*.tar.gz \
+              build/release/*.zip \
+              build/release/*.sbom.spdx.json \
+              build/release/checksums.txt
             printf 'EOF\n'
           } >>"$GITHUB_OUTPUT"
 
+      - name: Clone independent reproducibility source
+        env:
+          REPRODUCIBILITY_ROOT: ${{ runner.temp }}/bargeboard-repro-source
+        run: |
+          git clone --no-hardlinks "$GITHUB_WORKSPACE" "$REPRODUCIBILITY_ROOT"
+          git -C "$REPRODUCIBILITY_ROOT" checkout --detach "$GITHUB_SHA"
+
       - name: Rebuild release snapshot
+        env:
+          GOCACHE: ${{ runner.temp }}/bargeboard-repro-go-build
+          GOMODCACHE: ${{ runner.temp }}/bargeboard-repro-go-mod
+        working-directory: ${{ runner.temp }}/bargeboard-repro-source
         run: |
           touch -t 200001010000 LICENSE README.md config.yaml
           goreleaser release --snapshot --clean --skip=publish
@@ -206,9 +222,14 @@ jobs:
         env:
           FIRST_BUILD_DIGESTS: ${{ steps.first_build.outputs.digests }}
         shell: bash
+        working-directory: ${{ runner.temp }}/bargeboard-repro-source
         run: |
           set -euo pipefail
-          current="$(sha256sum build/release/*.tar.gz build/release/*.zip build/release/*.sbom.spdx.json)"
+          current="$(sha256sum \
+            build/release/*.tar.gz \
+            build/release/*.zip \
+            build/release/*.sbom.spdx.json \
+            build/release/checksums.txt)"
           test "$current" = "$FIRST_BUILD_DIGESTS"
 
       - name: Test release artifacts
