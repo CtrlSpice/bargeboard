@@ -100,6 +100,19 @@ fi
 payload_dir="$(mktemp -d)"
 readonly payload_dir
 trap 'rm -rf "$payload_dir"' EXIT
+repository_root="$(git rev-parse --show-toplevel)"
+readonly repository_root
+reference_binary="$payload_dir/reference-bargeboard"
+(
+  cd "$repository_root"
+  CGO_ENABLED=0 go build -buildvcs=true -mod=readonly -trimpath -o "$reference_binary" .
+)
+expected_module_version="$(go version -m -json "$reference_binary" | jq -er \
+  --arg package "$project_package" '
+    select(.Path == $package and .Main.Path == $package) |
+    .Main.Version | select(type == "string" and length > 0)
+  ')"
+readonly expected_module_version
 
 for archive in "${archives[@]}"; do
   case "$archive" in
@@ -172,21 +185,64 @@ for archive in "${archives[@]}"; do
     --arg name "$archive" \
     --arg namespace "$namespace" \
     --arg created "$created" \
-    --arg package "$project_package" '
+    --arg package "$project_package" \
+    --arg archive_version "sha256:$archive_digest" \
+    --arg go_version "$expected_go_version" '
     .spdxVersion == "SPDX-2.3" and
+    .SPDXID == "SPDXRef-DOCUMENT" and
     .dataLicense == "CC0-1.0" and
     .name == $name and
     .documentNamespace == $namespace and
     .creationInfo.created == $created and
+    .creationInfo.licenseListVersion == "3.28" and
+    .creationInfo.creators == [
+      "Organization: Anchore, Inc",
+      "Tool: syft-1.51.1"
+    ] and
     (.packages | type) == "array" and
-    (.packages | length) > 0 and
+    (.files | type) == "array" and
+    (.files | length) == 1 and
+    (.relationships | type) == "array" and
+    all(.packages[];
+      (.name | type) == "string" and (.name | length) > 0 and
+      (.SPDXID | type) == "string" and (.SPDXID | startswith("SPDXRef-")) and
+      (.versionInfo | type) == "string" and (.versionInfo | length) > 0 and
+      .supplier == "NOASSERTION" and
+      .downloadLocation == "NOASSERTION" and
+      .filesAnalyzed == false and
+      (.licenseConcluded | type) == "string" and (.licenseConcluded | length) > 0 and
+      (.licenseDeclared | type) == "string" and (.licenseDeclared | length) > 0 and
+      .copyrightText == "NOASSERTION"
+    ) and
     ([.packages[] | select(
       .name == $package and
       .licenseConcluded == "Apache-2.0" and
       .licenseDeclared == "Apache-2.0"
     )] | length) == 1 and
-    any(.packages[]; .name == "google.golang.org/grpc") and
-    (.files | type) == "array"
+    ([.packages[] | select(
+      .name == $name and
+      .versionInfo == $archive_version and
+      .primaryPackagePurpose == "FILE" and
+      .checksums == [{algorithm: "SHA256", checksumValue: ($archive_version | ltrimstr("sha256:"))}]
+    )] | length) == 1 and
+    ([.packages[] | select(
+      .name == "stdlib" and
+      .versionInfo == $go_version and
+      .checksums == null and
+      .licenseConcluded == "NOASSERTION" and
+      .licenseDeclared == "BSD-3-Clause" and
+      ([.externalRefs[]? | select(.referenceType == "purl")]) == [{
+        referenceCategory: "PACKAGE-MANAGER",
+        referenceType: "purl",
+        referenceLocator: ("pkg:golang/stdlib@" + ($go_version | ltrimstr("go")))
+      }]
+    )] | length) == 1 and
+    (["SPDXRef-DOCUMENT"] + [.packages[].SPDXID] + [.files[].SPDXID]) as $ids |
+    ($ids | length) == ($ids | unique | length) and
+    all(.relationships[];
+      (.spdxElementId as $from | $ids | index($from)) != null and
+      (.relatedSpdxElement as $to | $ids | index($to)) != null
+    )
   ' "$sbom" >/dev/null; then
     printf 'invalid release SPDX document: %s\n' "$sbom" >&2
     exit 1
@@ -200,12 +256,10 @@ for archive in "${archives[@]}"; do
     root="${archive%.zip}"
     binary=bargeboard.exe
     actual_entries="$(unzip -Z1 "$dist/$archive" | LC_ALL=C sort)"
-    unzip -q "$dist/$archive" -d "$payload_dir"
   else
     root="${archive%.tar.gz}"
     binary=bargeboard
     actual_entries="$(tar -tzf "$dist/$archive" | LC_ALL=C sort)"
-    tar -xzf "$dist/$archive" -C "$payload_dir"
   fi
   expected_entries="$(printf '%s\n' \
     "$root/LICENSE" \
@@ -215,6 +269,15 @@ for archive in "${archives[@]}"; do
   if [[ "$actual_entries" != "$expected_entries" ]]; then
     printf 'archive has an unexpected payload: %s\n' "$archive" >&2
     exit 1
+  fi
+  if ! go run "$script_dir/release_archive.go" "$dist/$archive" "$root" "$binary" "$commit_epoch"; then
+    printf 'archive metadata does not match release policy: %s\n' "$archive" >&2
+    exit 1
+  fi
+  if [[ "$archive" == *.zip ]]; then
+    unzip -q "$dist/$archive" -d "$payload_dir"
+  else
+    tar -xzf "$dist/$archive" -C "$payload_dir"
   fi
   for tracked_file in LICENSE README.md config.yaml; do
     if [[ "$archive" == *.zip ]]; then
@@ -241,12 +304,174 @@ for archive in "${archives[@]}"; do
     "$expected_tuning_key" \
     "$expected_tuning" \
     "$expected_commit" \
-    "$expected_vcs_modified"; then
+    "$expected_vcs_modified" \
+    "$created" \
+    "$expected_module_version"; then
     printf 'archive binary metadata does not match release policy: %s\n' "$archive" >&2
     exit 1
   fi
   if ! LC_ALL=C strings "$binary_path" | LC_ALL=C grep -Fx -- "$version" >/dev/null; then
     printf 'archive binary does not contain release version: %s\n' "$archive" >&2
+    exit 1
+  fi
+
+  if command -v sha1sum >/dev/null 2>&1; then
+    binary_sha1="$(sha1sum "$binary_path" | cut -d ' ' -f 1)"
+  else
+    binary_sha1="$(shasum -a 1 "$binary_path" | cut -d ' ' -f 1)"
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    binary_sha256="$(sha256sum "$binary_path" | cut -d ' ' -f 1)"
+  else
+    binary_sha256="$(shasum -a 256 "$binary_path" | cut -d ' ' -f 1)"
+  fi
+  if ! jq -e \
+    --arg file "$root/$binary" \
+    --arg sha1 "$binary_sha1" \
+    --arg sha256 "$binary_sha256" '
+      .files[0].fileName == $file and
+      .files[0].fileTypes == ["APPLICATION", "BINARY"] and
+      ([.files[0].checksums[] | [.algorithm, .checksumValue]] | sort) == ([
+        ["SHA1", $sha1],
+        ["SHA256", $sha256]
+      ] | sort) and
+      .files[0].licenseConcluded == "NOASSERTION" and
+      .files[0].licenseInfoInFiles == ["NOASSERTION"] and
+      .files[0].copyrightText == "NOASSERTION"
+    ' "$sbom" >/dev/null; then
+    printf 'SBOM binary file does not match archive payload: %s\n' "$sbom" >&2
+    exit 1
+  fi
+
+  module_version="$(jq -er --arg package "$project_package" '
+    select(.Path == $package and .Main.Path == $package) |
+    .Main.Version | select(type == "string" and length > 0)
+  ' <<<"$build_info")"
+  project_purl="$(jq -nr \
+    --arg package "$project_package" \
+    --arg version "$module_version" '
+      "pkg:golang/" + ($package | ascii_downcase) + "@" + ($version | @uri)
+    ')"
+  if ! jq -e \
+    --arg package "$project_package" \
+    --arg version "$module_version" \
+    --arg purl "$project_purl" \
+    --arg source "$root/$binary" '
+      ([.packages[] | select(
+        .name == $package and
+        .versionInfo == $version and
+        .checksums == null and
+        .sourceInfo == ("acquired package info from go module information: " + $source) and
+        ([.externalRefs[]? | select(.referenceType == "purl")]) == [{
+          referenceCategory: "PACKAGE-MANAGER",
+          referenceType: "purl",
+          referenceLocator: $purl
+        }]
+      )] | length) == 1
+    ' "$sbom" >/dev/null; then
+    printf 'SBOM project package does not match binary module identity: %s\n' "$sbom" >&2
+    exit 1
+  fi
+
+  expected_packages="$(jq -r \
+    --arg archive "$archive" \
+    --arg archive_version "sha256:$archive_digest" \
+    --arg package "$project_package" \
+    --arg module_version "$module_version" \
+    --arg go_version "$expected_go_version" '
+      ([
+        [$archive, $archive_version],
+        [$package, $module_version],
+        ["stdlib", $go_version]
+      ] + [.Deps[] | [(.Replace.Path // .Path), (.Replace.Version // .Version // "")]])
+      | sort_by(.[0], .[1])
+      | .[]
+      | @tsv
+    ' <<<"$build_info")"
+  actual_packages="$(jq -r '
+    [.packages[] | [.name, (.versionInfo // "")]]
+    | sort_by(.[0], .[1])
+    | .[]
+    | @tsv
+  ' "$sbom")"
+  if [[ "$actual_packages" != "$expected_packages" ]]; then
+    printf 'SBOM package inventory does not match binary build info: %s\n' "$sbom" >&2
+    exit 1
+  fi
+
+  while IFS=$'\t' read -r dependency_name dependency_version dependency_sum; do
+    if [[ ! "$dependency_sum" =~ ^h1:[A-Za-z0-9+/]{43}=$ ]]; then
+      printf 'binary dependency lacks an authenticated Go module sum: %s\n' "$dependency_name" >&2
+      exit 1
+    fi
+    dependency_checksum="$(
+      printf '%s' "${dependency_sum#h1:}" |
+        openssl base64 -d -A |
+        od -An -v -tx1 |
+        tr -d ' \n'
+    )"
+    if [[ ! "$dependency_checksum" =~ ^[0-9a-f]{64}$ ]]; then
+      printf 'invalid Go module sum for binary dependency: %s\n' "$dependency_name" >&2
+      exit 1
+    fi
+    dependency_purl="$(jq -nr \
+      --arg package "$dependency_name" \
+      --arg version "$dependency_version" '
+        "pkg:golang/" + ($package | ascii_downcase) + "@" + ($version | @uri)
+      ')"
+    if ! jq -e \
+      --arg package "$dependency_name" \
+      --arg version "$dependency_version" \
+      --arg checksum "$dependency_checksum" \
+      --arg purl "$dependency_purl" \
+      --arg source "$root/$binary" '
+        ([.packages[] | select(
+          .name == $package and
+          .versionInfo == $version and
+          .sourceInfo == ("acquired package info from go module information: " + $source) and
+          .checksums == [{algorithm: "SHA256", checksumValue: $checksum}] and
+          .licenseConcluded == "NOASSERTION" and
+          .licenseDeclared == "NOASSERTION" and
+          ([.externalRefs[]? | select(.referenceType == "purl")]) == [{
+            referenceCategory: "PACKAGE-MANAGER",
+            referenceType: "purl",
+            referenceLocator: $purl
+          }]
+        )] | length) == 1
+      ' "$sbom" >/dev/null; then
+      printf 'SBOM dependency does not match authenticated Go module metadata: %s\n' "$dependency_name" >&2
+      exit 1
+    fi
+  done < <(jq -r '
+    .Deps[] |
+    [
+      (.Replace.Path // .Path),
+      (.Replace.Version // .Version // ""),
+      (.Replace.Sum // .Sum // "")
+    ] | @tsv
+  ' <<<"$build_info")
+
+  if ! jq -e --arg archive "$archive" --arg package "$project_package" '
+    ([.packages[] | select(.name == $archive)] | .[0].SPDXID) as $root |
+    ([.packages[] | select(.name == $package)] | .[0].SPDXID) as $project |
+    .files[0].SPDXID as $binary |
+    ([.packages[] | select(.SPDXID != $root) | .SPDXID] | sort) as $contained |
+    ([.packages[] | select(.SPDXID != $root and .SPDXID != $project) | .SPDXID] | sort) as $dependencies |
+    ([
+      ["SPDXRef-DOCUMENT", "DESCRIBES", $root]
+    ] +
+      ($contained | map([$root, "CONTAINS", .])) +
+      ($dependencies | map([., "DEPENDENCY_OF", $project])) +
+      ($contained | map([., "OTHER", $binary])) |
+      sort
+    ) as $expected_relationships |
+    ([.relationships[] | [
+      .spdxElementId,
+      .relationshipType,
+      .relatedSpdxElement
+    ]] | sort) == $expected_relationships
+  ' "$sbom" >/dev/null; then
+    printf 'SBOM relationships do not match binary package ownership: %s\n' "$sbom" >&2
     exit 1
   fi
 done

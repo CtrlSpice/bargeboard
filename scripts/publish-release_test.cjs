@@ -261,6 +261,30 @@ test("detects changed assets in the publication response", async (t) => {
   ]);
 });
 
+test("removes a release when main moves during publication", async (t) => {
+  const { calls, github, releaseDir } = releaseFixture(t);
+  let refReads = 0;
+  github.rest.git.getRef = async () => ({
+    data: { object: { sha: ++refReads < 3 ? commit : "b".repeat(40) } },
+  });
+
+  await assert.rejects(
+    publishRelease({
+      github,
+      owner: "CtrlSpice",
+      repo: "bargeboard",
+      tag,
+      releaseCommit: commit,
+      releaseDir,
+    }),
+    /during publication/,
+  );
+  assert.equal(calls.published.length, 1);
+  assert.deepEqual(calls.deleted, [
+    { owner: "CtrlSpice", repo: "bargeboard", release_id: 7 },
+  ]);
+});
+
 test("removes a release published without immutability", async (t) => {
   const { calls, github, releaseDir } = releaseFixture(t);
   github.request = async (_route, input) => {
@@ -322,7 +346,7 @@ test("accepts a valid immutable release after a lost publication response", asyn
   assert.deepEqual(calls.deleted, []);
 });
 
-test("leaves an unchanged draft after a failed publication request", async (t) => {
+test("removes an unchanged draft after a failed publication request", async (t) => {
   const { calls, github, releaseDir } = releaseFixture(t);
   github.request = async () => {
     throw new Error("publication failed");
@@ -337,9 +361,11 @@ test("leaves an unchanged draft after a failed publication request", async (t) =
       releaseCommit: commit,
       releaseDir,
     }),
-    /publication failed/,
+    /request failed and the published state was invalid/,
   );
-  assert.deepEqual(calls.deleted, []);
+  assert.deepEqual(calls.deleted, [
+    { owner: "CtrlSpice", repo: "bargeboard", release_id: 7 },
+  ]);
 });
 
 test("removes a changed draft after a failed publication request", async (t) => {
@@ -374,8 +400,8 @@ test("removes a changed draft after a failed publication request", async (t) => 
   ]);
 });
 
-test("reports an unknown result when publication cannot be reconciled", async (t) => {
-  const { assets, github, release, releaseDir } = releaseFixture(t);
+test("removes a release when publication cannot be reconciled", async (t) => {
+  const { assets, calls, github, release, releaseDir } = releaseFixture(t);
   let releaseReads = 0;
   github.rest.repos.getRelease = async () => {
     if (++releaseReads === 1) return { data: { ...release, assets } };
@@ -396,10 +422,48 @@ test("reports an unknown result when publication cannot be reconciled", async (t
     }),
     (error) => {
       assert(error instanceof AggregateError);
-      assert.match(error.message, /publication result is unknown/);
+      assert.match(error.message, /result was unknown and the release was removed/);
       assert.deepEqual(
         error.errors.map((cause) => cause.message),
         ["response lost", "reconciliation failed"],
+      );
+      return true;
+    },
+  );
+  assert.deepEqual(calls.deleted, [
+    { owner: "CtrlSpice", repo: "bargeboard", release_id: 7 },
+  ]);
+});
+
+test("reports unknown publication and cleanup failures together", async (t) => {
+  const { assets, github, release, releaseDir } = releaseFixture(t);
+  let releaseReads = 0;
+  github.rest.repos.getRelease = async () => {
+    if (++releaseReads === 1) return { data: { ...release, assets } };
+    throw new Error("reconciliation failed");
+  };
+  github.request = async () => {
+    throw new Error("response lost");
+  };
+  github.rest.repos.deleteRelease = async () => {
+    throw new Error("cleanup failed");
+  };
+
+  await assert.rejects(
+    publishRelease({
+      github,
+      owner: "CtrlSpice",
+      repo: "bargeboard",
+      tag,
+      releaseCommit: commit,
+      releaseDir,
+    }),
+    (error) => {
+      assert(error instanceof AggregateError);
+      assert.match(error.message, /result is unknown and could not be removed/);
+      assert.deepEqual(
+        error.errors.map((cause) => cause.message),
+        ["response lost", "reconciliation failed", "cleanup failed"],
       );
       return true;
     },

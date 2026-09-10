@@ -152,9 +152,17 @@ async function publishRelease({ github, owner, repo, tag, releaseCommit, release
         release_id: release.id,
       });
     } catch (reconciliationError) {
+      try {
+        await github.rest.repos.deleteRelease({ owner, repo, release_id: release.id });
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [publishRequestError, reconciliationError, cleanupError],
+          `release ${tag} publication result is unknown and could not be removed`,
+        );
+      }
       throw new AggregateError(
         [publishRequestError, reconciliationError],
-        `release ${tag} publication result is unknown`,
+        `release ${tag} publication result was unknown and the release was removed`,
       );
     }
 
@@ -165,7 +173,11 @@ async function publishRelease({ github, owner, repo, tag, releaseCommit, release
       } catch (stateError) {
         reconciledDraftError = stateError;
       }
-      if (!reconciledDraftError) throw publishRequestError;
+      if (!reconciledDraftError) {
+        reconciledDraftError = new Error(
+          `release ${tag} remained a draft after the publication request failed`,
+        );
+      }
     }
   }
 
@@ -176,6 +188,12 @@ async function publishRelease({ github, owner, repo, tag, releaseCommit, release
     }
     verifyPublishedRelease(published.data, tag);
     verifyAssets(published.data.assets, expected);
+    const publishedMainRef = await github.rest.git.getRef({ owner, repo, ref: "heads/main" });
+    if (publishedMainRef.data.object.sha !== releaseCommit) {
+      throw new Error(
+        `main moved from ${releaseCommit} to ${publishedMainRef.data.object.sha} during publication`,
+      );
+    }
   } catch (publicationError) {
     try {
       await github.rest.repos.deleteRelease({ owner, repo, release_id: release.id });

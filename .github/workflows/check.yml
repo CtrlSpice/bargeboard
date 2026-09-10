@@ -29,10 +29,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
+        uses: ./.github/actions/setup-go
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -108,10 +105,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: false
+        uses: ./.github/actions/setup-go
 
       - name: Build distribution
         env:
@@ -146,28 +140,17 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: "1.26.8"
-          check-latest: false
-          cache: false
+        uses: ./.github/actions/setup-go
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
 
-      - name: Install Syft
-        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+      - name: Install release tools
+        uses: ./.github/actions/setup-release-tools
         with:
-          syft-version: v1.51.1
-
-      - name: Install GoReleaser Pro
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
-        with:
-          distribution: goreleaser-pro
-          version: v2.18.1
-          install-only: true
+          actionlint: "true"
 
       - name: Verify packaging tools
         shell: bash
@@ -180,9 +163,15 @@ jobs:
             abca2def61de9952fa06d3977bb1e064818facb9badfce502b450d3d6846a91f \
             "$(command -v syft)" | sha256sum --check --strict
           test "$(go version)" = "go version go1.26.8 linux/amd64"
+          actionlint -version
+
+      - name: Check workflow definitions
+        run: actionlint -color
 
       - name: Test release-ref validation
         run: |
+          bash scripts/go-toolchain_test.sh
+          bash scripts/verify-sha256_test.sh
           bash scripts/validate-release-ref_test.sh
           bash scripts/validate-release-controls_test.sh
           bash scripts/validate-release-binary_test.sh

@@ -12,9 +12,39 @@ fi
 
 temporary_document="$(mktemp "${document}.tmp.XXXXXX")"
 readonly temporary_document
-trap 'rm -f "$temporary_document"' EXIT
+temporary_binary="$(mktemp "${document}.binary.XXXXXX")"
+readonly temporary_binary
+trap 'rm -f "$temporary_document" "$temporary_binary"' EXIT
 
-syft "$artifact" --output "spdx-json=$temporary_document"
+artifact_name="${artifact##*/}"
+case "$artifact_name" in
+  *.tar.gz)
+    archive_root="${artifact_name%.tar.gz}"
+    tar -xOzf "$artifact" "$archive_root/bargeboard" >"$temporary_binary"
+    ;;
+  *.zip)
+    archive_root="${artifact_name%.zip}"
+    unzip -p "$artifact" "$archive_root/bargeboard.exe" >"$temporary_binary"
+    ;;
+  *)
+    printf 'unsupported SBOM artifact: %s\n' "$artifact" >&2
+    exit 1
+    ;;
+esac
+readonly archive_root
+
+module_version="$(
+  go version -m -json "$temporary_binary" |
+    jq -er --arg package "$project_package" '
+      select(.Path == $package and .Main.Path == $package) |
+      .Main.Version | select(type == "string" and length > 0)
+    '
+)"
+readonly module_version
+
+syft "$artifact" \
+  --override-default-catalogers go-module-binary-cataloger \
+  --output "spdx-json=$temporary_document"
 
 if command -v sha256sum >/dev/null 2>&1; then
   artifact_digest="$(sha256sum "$artifact" | cut -d ' ' -f 1)"
@@ -38,9 +68,27 @@ fi
 jq \
   --arg namespace "$document_namespace" \
   --arg created "$created" \
-  --arg package "$project_package" '
+  --arg package "$project_package" \
+  --arg module_version "$module_version" '
     .documentNamespace = $namespace |
     .creationInfo.created = $created |
-    (.packages[] | select(.name == $package) | .licenseConcluded) = "Apache-2.0" |
-    (.packages[] | select(.name == $package) | .licenseDeclared) = "Apache-2.0"
+    (.packages[] | select(.name == $package)) |= (
+      .versionInfo = $module_version |
+      .licenseConcluded = "Apache-2.0" |
+      .licenseDeclared = "Apache-2.0"
+    ) |
+    (.packages[] | select(
+      .name != "stdlib" and
+      any(.externalRefs[]?; .referenceType == "purl")
+    )) |= (
+      .externalRefs = (
+        [.externalRefs[]? | select(.referenceType != "purl")] + [{
+          referenceCategory: "PACKAGE-MANAGER",
+          referenceType: "purl",
+          referenceLocator: (
+            "pkg:golang/" + (.name | ascii_downcase) + "@" + (.versionInfo | @uri)
+          )
+        }]
+      )
+    )
   ' "$temporary_document" >"$document"

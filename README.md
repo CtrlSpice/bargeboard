@@ -54,7 +54,9 @@ passed the protected `check` workflow, and the configured release controls must
 still match repository policy. A required reviewer then approves the protected
 `release` environment. GoReleaser creates a draft, the workflow verifies its
 assets and records attestations, and only then does it publish the immutable
-release.
+release. CI authenticates the official Go 1.26.8, Syft, GoReleaser Pro, and
+actionlint archives against SHA-256 digests pinned in the repository before
+extracting or executing them.
 
 Maintainers can validate the external controls with the release control token
 before creating a tag:
