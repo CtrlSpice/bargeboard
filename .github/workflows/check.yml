@@ -171,9 +171,12 @@ jobs:
       - name: Test release-ref validation
         run: |
           bash scripts/build-release_test.sh
+          bash scripts/generate-release-sbom_test.sh
           bash scripts/go-toolchain_test.sh
+          bash scripts/release-workflow_test.sh
           bash scripts/verify-sha256_test.sh
           bash scripts/validate-release-ref_test.sh
+          bash scripts/verify-release-ref_test.sh
           bash scripts/validate-release-controls_test.sh
           bash scripts/validate-release-binary_test.sh
           node --test scripts/publish-release_test.cjs

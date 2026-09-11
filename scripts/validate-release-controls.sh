@@ -25,7 +25,7 @@ if ! jq -e '
   }]) and
   ([.environment.protection_rules[].type] | sort) == ["branch_policy", "required_reviewers"] and
   .deployment_policies.total_count == 1 and
-  ([.deployment_policies.branch_policies[] | {name, type}]) == [{name: "v*", type: "tag"}] and
+  ([.deployment_policies.branch_policies[] | {name, type}]) == [{name: "main", type: "branch"}] and
   .immutable_releases.enabled == true and
   (.immutable_releases.enforced_by_owner | type) == "boolean" and
   .immutability_ruleset.name == "Protect release tags" and

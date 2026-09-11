@@ -8,14 +8,19 @@ const test = require("node:test");
 const {
   expectedAssets,
   isPrerelease,
-  publishRelease,
+  publishRelease: publishReleaseByID,
   selectDraft,
+  uploadRelease,
   verifyAssets,
   verifyPublishedRelease,
 } = require("./publish-release.cjs");
 
 const commit = "a".repeat(40);
 const tag = "v1.2.3";
+
+function publishRelease(input) {
+  return publishReleaseByID({ releaseID: 7, ...input });
+}
 
 function digest(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
@@ -159,6 +164,129 @@ test("rejects unexpected, duplicate, and mismatched draft assets", (t) => {
   );
 });
 
+test("creates a new draft and uploads only verified local assets", async (t) => {
+  const { assets, expected, github, release, releaseDir } = releaseFixture(t);
+  const calls = { created: [], uploaded: [] };
+  github.rest.repos.createRelease = async (input) => {
+    calls.created.push(input);
+    return { data: release };
+  };
+  github.rest.repos.uploadReleaseAsset = async (input) => {
+    calls.uploaded.push({
+      owner: input.owner,
+      repo: input.repo,
+      release_id: input.release_id,
+      name: input.name,
+      length: input.data.length,
+      headers: input.headers,
+    });
+    assert.equal(
+      digest(input.data),
+      expected.get(input.name).digest.slice("sha256:".length),
+    );
+    return { data: assets.find((asset) => asset.name === input.name) };
+  };
+  github.paginate = async (method) => {
+    if (method === github.rest.repos.listReleases) return [];
+    if (method === github.rest.repos.listReleaseAssets) return assets;
+    throw new Error("unexpected pagination method");
+  };
+
+  const releaseID = await uploadRelease({
+    github,
+    owner: "CtrlSpice",
+    repo: "bargeboard",
+    tag,
+    releaseCommit: commit,
+    releaseDir,
+  });
+
+  assert.equal(releaseID, 7);
+  assert.deepEqual(calls.created, [
+    {
+      owner: "CtrlSpice",
+      repo: "bargeboard",
+      tag_name: tag,
+      target_commitish: commit,
+      name: tag,
+      body: "",
+      draft: true,
+      prerelease: false,
+      generate_release_notes: false,
+      make_latest: "false",
+      headers: { "X-GitHub-Api-Version": "2026-03-10" },
+    },
+  ]);
+  assert.deepEqual(
+    calls.uploaded,
+    [...expected.keys()].sort().map((name) => ({
+      owner: "CtrlSpice",
+      repo: "bargeboard",
+      release_id: 7,
+      name,
+      length: expected.get(name).size,
+      headers: {
+        "content-type": "application/octet-stream",
+        "content-length": expected.get(name).size,
+        "X-GitHub-Api-Version": "2026-03-10",
+      },
+    })),
+  );
+});
+
+test("refuses to mutate an existing release", async (t) => {
+  const { github, release, releaseDir } = releaseFixture(t);
+  let mutated = false;
+  github.paginate = async () => [{ ...release, draft: false, published_at: "2026-09-09T00:00:00Z" }];
+  github.rest.repos.createRelease = async () => {
+    mutated = true;
+  };
+  github.rest.repos.uploadReleaseAsset = async () => {
+    mutated = true;
+  };
+
+  await assert.rejects(
+    uploadRelease({
+      github,
+      owner: "CtrlSpice",
+      repo: "bargeboard",
+      tag,
+      releaseCommit: commit,
+      releaseDir,
+    }),
+    /already exists; refusing to mutate it/,
+  );
+  assert.equal(mutated, false);
+});
+
+test("preserves a newly created draft after an indeterminate asset upload", async (t) => {
+  const { github, release, releaseDir } = releaseFixture(t);
+  const calls = { deleted: 0, uploaded: 0 };
+  github.paginate = async () => [];
+  github.rest.repos.createRelease = async () => ({ data: release });
+  github.rest.repos.uploadReleaseAsset = async () => {
+    calls.uploaded++;
+    throw new Error("upload response lost");
+  };
+  github.rest.repos.deleteRelease = async () => {
+    calls.deleted++;
+  };
+
+  await assert.rejects(
+    uploadRelease({
+      github,
+      owner: "CtrlSpice",
+      repo: "bargeboard",
+      tag,
+      releaseCommit: commit,
+      releaseDir,
+    }),
+    /upload response lost/,
+  );
+  assert.equal(calls.uploaded, 1);
+  assert.equal(calls.deleted, 0);
+});
+
 test("publishes one verified immutable draft", async (t) => {
   const { calls, github, releaseDir } = releaseFixture(t);
   const url = await publishRelease({
@@ -233,6 +361,25 @@ test("rejects a draft asset changed after initial verification", async (t) => {
   assert.deepEqual(calls.published, []);
 });
 
+test("refuses to publish a replacement draft with the same tag", async (t) => {
+  const { assets, calls, github, release, releaseDir } = releaseFixture(t);
+  github.rest.repos.getRelease = async () => ({
+    data: { ...release, id: 8, assets },
+  });
+  await assert.rejects(
+    publishRelease({
+      github,
+      owner: "CtrlSpice",
+      repo: "bargeboard",
+      tag,
+      releaseCommit: commit,
+      releaseDir,
+    }),
+    /draft identifier changed before publication/,
+  );
+  assert.deepEqual(calls.published, []);
+});
+
 test("detects changed assets in the publication response", async (t) => {
   const { assets, calls, github, release, releaseDir } = releaseFixture(t);
   github.request = async () => ({
@@ -265,6 +412,9 @@ test("preserves incomplete successful publication evidence", async (t) => {
   const mutations = [
     (published) => {
       delete published.immutable;
+    },
+    (published) => {
+      published.published_at = null;
     },
     (published) => {
       delete published.assets;

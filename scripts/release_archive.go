@@ -55,6 +55,11 @@ func releaseArchiveOrder(root, binary string) []string {
 	return []string{
 		path.Join(root, "LICENSE"),
 		path.Join(root, "README.md"),
+		path.Join(root, "SOURCE-go-version-v1.9.0.zip"),
+		path.Join(root, "SOURCE-golang-lru-v2.0.7.zip"),
+		path.Join(root, "SOURCE-public-suffix-list-LICENSE.txt"),
+		path.Join(root, "SOURCE-public-suffix-list.dat"),
+		path.Join(root, "THIRD_PARTY_NOTICES"),
 		path.Join(root, "config.yaml"),
 		path.Join(root, binary),
 	}
@@ -68,10 +73,15 @@ func releaseArchiveEntries(root, binary string) (map[string]fs.FileMode, error) 
 		return nil, fmt.Errorf("invalid archive binary: %q", binary)
 	}
 	return map[string]fs.FileMode{
-		path.Join(root, "LICENSE"):     0o644,
-		path.Join(root, "README.md"):   0o644,
-		path.Join(root, "config.yaml"): 0o644,
-		path.Join(root, binary):        0o755,
+		path.Join(root, "LICENSE"):                               0o644,
+		path.Join(root, "README.md"):                             0o644,
+		path.Join(root, "config.yaml"):                           0o644,
+		path.Join(root, "THIRD_PARTY_NOTICES"):                   0o644,
+		path.Join(root, "SOURCE-go-version-v1.9.0.zip"):          0o644,
+		path.Join(root, "SOURCE-golang-lru-v2.0.7.zip"):          0o644,
+		path.Join(root, "SOURCE-public-suffix-list.dat"):         0o644,
+		path.Join(root, "SOURCE-public-suffix-list-LICENSE.txt"): 0o644,
+		path.Join(root, binary):                                  0o755,
 	}, nil
 }
 

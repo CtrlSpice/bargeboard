@@ -4,16 +4,10 @@ set -euo pipefail
 readonly tag="${1:?usage: validate-release-ref.sh TAG MAIN_COMMIT}"
 readonly main_commit="${2:?usage: validate-release-ref.sh TAG MAIN_COMMIT}"
 readonly required_check_app_id=15368
-readonly semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$'
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly script_dir
 
-if [[ ! "$tag" =~ $semver ]]; then
-  printf 'release tag is not strict SemVer with a v prefix: %s\n' "$tag" >&2
-  exit 1
-fi
-if (( ${#tag} > 131 )); then
-  printf 'release tag is too long for the canonical archive layout: %s\n' "$tag" >&2
-  exit 1
-fi
+bash "$script_dir/validate-release-tag.sh" "$tag"
 if [[ ! "$main_commit" =~ ^[0-9a-f]{40}$ ]]; then
   printf 'current main is not a full commit OID: %s\n' "$main_commit" >&2
   exit 1
@@ -26,11 +20,8 @@ payload="$(jq -ce .)" || {
 readonly payload
 
 if ! jq -e --arg tag "$tag" '
-  .event.ref == ("refs/tags/" + $tag) and
-  .event.created == true and
-  .event.deleted == false and
-  .event.forced == false and
-  .event.after == .tag.sha and
+  .event.action == "release" and
+  .event.client_payload == {tag: $tag} and
   .ref.ref == ("refs/tags/" + $tag) and
   .ref.object.type == "tag" and
   .ref.object.sha == .tag.sha and

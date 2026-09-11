@@ -20,10 +20,11 @@ if [[ "$(<"$work/capture/tag")" != v1.2.3 ]]; then
   printf 'GoReleaser was not bound to the requested release tag\n' >&2
   exit 1
 fi
-if [[ "$(<"$work/capture/arguments")" != $'release\n--clean' ]]; then
+if [[ "$(<"$work/capture/arguments")" != $'release\n--clean\n--prepare' ]]; then
   printf 'unexpected GoReleaser arguments\n' >&2
   exit 1
 fi
+
 if bash scripts/build-release.sh >/dev/null 2>&1; then
   printf 'build-release accepted a missing tag\n' >&2
   exit 1

@@ -80,6 +80,62 @@ function verifyAssets(assets, expected) {
   }
 }
 
+async function uploadRelease({ github, owner, repo, tag, releaseCommit, releaseDir }) {
+  const releases = await github.paginate(github.rest.repos.listReleases, {
+    owner,
+    repo,
+    per_page: 100,
+  });
+  if (releases.some((release) => release.tag_name === tag)) {
+    throw new Error(`release ${tag} already exists; refusing to mutate it`);
+  }
+
+  const expected = expectedAssets(releaseDir);
+  const created = await github.rest.repos.createRelease({
+    owner,
+    repo,
+    tag_name: tag,
+    target_commitish: releaseCommit,
+    name: tag,
+    body: "",
+    draft: true,
+    prerelease: isPrerelease(tag),
+    generate_release_notes: false,
+    make_latest: "false",
+    headers: { "X-GitHub-Api-Version": "2026-03-10" },
+  });
+  const release = selectDraft([created.data], tag);
+  if (!Number.isSafeInteger(release.id) || release.id <= 0) {
+    throw new Error(`release ${tag} creation returned an invalid identifier`);
+  }
+
+  for (const name of [...expected.keys()].sort()) {
+    const data = fs.readFileSync(path.join(releaseDir, name));
+    const uploaded = await github.rest.repos.uploadReleaseAsset({
+      owner,
+      repo,
+      release_id: release.id,
+      name,
+      data,
+      headers: {
+        "content-type": "application/octet-stream",
+        "content-length": data.length,
+        "X-GitHub-Api-Version": "2026-03-10",
+      },
+    });
+    verifyAssets([uploaded.data], new Map([[name, expected.get(name)]]));
+  }
+
+  const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
+    owner,
+    repo,
+    release_id: release.id,
+    per_page: 100,
+  });
+  verifyAssets(assets, expected);
+  return release.id;
+}
+
 function verifyPublishedRelease(release, tag) {
   if (
     release.tag_name !== tag ||
@@ -100,7 +156,8 @@ function hasCompletePublicationEvidence(release) {
     typeof release === "object" &&
     typeof release.tag_name === "string" &&
     typeof release.draft === "boolean" &&
-    (release.published_at === null || typeof release.published_at === "string") &&
+    typeof release.published_at === "string" &&
+    release.published_at.length > 0 &&
     typeof release.prerelease === "boolean" &&
     typeof release.immutable === "boolean" &&
     typeof release.html_url === "string" &&
@@ -122,10 +179,14 @@ async function publishRelease({
   github,
   owner,
   repo,
+  releaseID,
   tag,
   releaseCommit,
   releaseDir,
 }) {
+  if (!Number.isSafeInteger(releaseID) || releaseID <= 0) {
+    throw new Error(`release ${tag} has an invalid draft identifier`);
+  }
   const mainRef = await github.rest.git.getRef({ owner, repo, ref: "heads/main" });
   if (mainRef.data.object.sha !== releaseCommit) {
     throw new Error(
@@ -133,17 +194,11 @@ async function publishRelease({
     );
   }
 
-  const releases = await github.paginate(github.rest.repos.listReleases, {
-    owner,
-    repo,
-    per_page: 100,
-  });
-  const release = selectDraft(releases, tag);
   const expected = expectedAssets(releaseDir);
   const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
     owner,
     repo,
-    release_id: release.id,
+    release_id: releaseID,
     per_page: 100,
   });
   verifyAssets(assets, expected);
@@ -151,9 +206,12 @@ async function publishRelease({
   const finalDraft = await github.rest.repos.getRelease({
     owner,
     repo,
-    release_id: release.id,
+    release_id: releaseID,
   });
-  selectDraft([finalDraft.data], tag);
+  const release = selectDraft([finalDraft.data], tag);
+  if (release.id !== releaseID) {
+    throw new Error(`release ${tag} draft identifier changed before publication`);
+  }
   verifyAssets(finalDraft.data.assets, expected);
 
   const finalMainRef = await github.rest.git.getRef({ owner, repo, ref: "heads/main" });
@@ -252,6 +310,7 @@ module.exports = {
   isPrerelease,
   publishRelease,
   selectDraft,
+  uploadRelease,
   verifyAssets,
   verifyPublishedRelease,
 };

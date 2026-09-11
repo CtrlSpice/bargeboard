@@ -8,6 +8,29 @@ readonly artifacts="$dist/artifacts.json"
 readonly checksums="$dist/checksums.txt"
 readonly project_package=github.com/CtrlSpice/bargeboard
 readonly other_relationship_comment="evident-by: indicates the package's existence is evident by the given file"
+readonly source_go_version_sha256=b6c05489bf11a28c81cf38119782284c859d6c2d193b811d3f0117592eb31fcb
+readonly source_golang_lru_sha256=2eb92ff13970bccd460efae14255bfc03bb51474da0137e477a60f95561acc30
+readonly source_public_suffix_list_sha256=a5638281157e8c902b127a5376f9ea2d024bf2ee11524133a6a76cd1d14ee7be
+readonly source_public_suffix_license_sha256=66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172
+readonly compliance_files=(
+  THIRD_PARTY_NOTICES
+  SOURCE-go-version-v1.9.0.zip
+  SOURCE-golang-lru-v2.0.7.zip
+  SOURCE-public-suffix-list-LICENSE.txt
+  SOURCE-public-suffix-list.dat
+)
+readonly source_files=(
+  SOURCE-go-version-v1.9.0.zip
+  SOURCE-golang-lru-v2.0.7.zip
+  SOURCE-public-suffix-list-LICENSE.txt
+  SOURCE-public-suffix-list.dat
+)
+readonly source_digests=(
+  "$source_go_version_sha256"
+  "$source_golang_lru_sha256"
+  "$source_public_suffix_license_sha256"
+  "$source_public_suffix_list_sha256"
+)
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly script_dir
 
@@ -359,6 +382,11 @@ for archive in "${archives[@]}"; do
     "$root/LICENSE" \
     "$root/README.md" \
     "$root/config.yaml" \
+    "$root/THIRD_PARTY_NOTICES" \
+    "$root/SOURCE-go-version-v1.9.0.zip" \
+    "$root/SOURCE-golang-lru-v2.0.7.zip" \
+    "$root/SOURCE-public-suffix-list-LICENSE.txt" \
+    "$root/SOURCE-public-suffix-list.dat" \
     "$root/$binary" | LC_ALL=C sort)"
   if [[ "$actual_entries" != "$expected_entries" ]]; then
     printf 'archive has an unexpected payload: %s\n' "$archive" >&2
@@ -380,6 +408,38 @@ for archive in "${archives[@]}"; do
       exit 1
     fi
   done
+  for compliance_file in "${compliance_files[@]}"; do
+    if ! cmp -s \
+      "$repository_root/build/compliance/$compliance_file" \
+      "$payload_dir/$root/$compliance_file"; then
+      printf 'archive compliance payload differs from generated %s: %s\n' "$compliance_file" "$archive" >&2
+      exit 1
+    fi
+  done
+
+  notices="$payload_dir/$root/THIRD_PARTY_NOTICES"
+  if ! grep -Fqx -- $'Module\tstdlib\t'"$expected_go_version"$'\t-' "$notices"; then
+    printf 'third-party notices omit the Go standard library: %s\n' "$archive" >&2
+    exit 1
+  fi
+  for source_index in "${!source_files[@]}"; do
+    source_file="${source_files[$source_index]}"
+    if command -v sha256sum >/dev/null 2>&1; then
+      source_digest="$(sha256sum "$payload_dir/$root/$source_file" | cut -d ' ' -f 1)"
+    else
+      source_digest="$(shasum -a 256 "$payload_dir/$root/$source_file" | cut -d ' ' -f 1)"
+    fi
+    expected_source_digest="${source_digests[$source_index]}"
+    if [[ "$source_digest" != "$expected_source_digest" ]]; then
+      printf 'embedded source archive has an unexpected digest: %s\n' "$source_file" >&2
+      exit 1
+    fi
+  done
+  if ! grep -Fqx -- $'Source\tSOURCE-public-suffix-list.dat\t'"$source_public_suffix_list_sha256" "$notices" ||
+    ! grep -Fq -- 'Mozilla Public License Version 2.0' "$notices"; then
+    printf 'third-party notices omit Public Suffix List source or license: %s\n' "$archive" >&2
+    exit 1
+  fi
 
   binary_path="$payload_dir/$root/$binary"
   if [[ ! -f "$binary_path" || -L "$binary_path" || ! -x "$binary_path" ]]; then
@@ -510,6 +570,12 @@ for archive in "${archives[@]}"; do
   while IFS=$'\t' read -r dependency_name dependency_version dependency_sum; do
     if [[ ! "$dependency_sum" =~ ^h1:[A-Za-z0-9+/]{43}=$ ]]; then
       printf 'binary dependency lacks an authenticated Go module sum: %s\n' "$dependency_name" >&2
+      exit 1
+    fi
+    if ! grep -Fqx -- \
+      $'Module\t'"$dependency_name"$'\t'"$dependency_version"$'\t'"$dependency_sum" \
+      "$notices"; then
+      printf 'third-party notices omit binary dependency: %s\n' "$dependency_name" >&2
       exit 1
     fi
     dependency_checksum="$(

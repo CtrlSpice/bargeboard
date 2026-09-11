@@ -48,16 +48,25 @@ else
 fi
 ```
 
-The release workflow accepts only a signed annotated SemVer tag such as
-`v1.2.3`. The tag must point to the current `main` commit, that commit must have
-passed the protected `check` workflow, and the configured release controls must
-still match repository policy. A required reviewer then approves the protected
-`release` environment. GoReleaser creates a draft, the workflow verifies its
-assets and records attestations, and only then does it publish the immutable
-release. CI authenticates the official Go 1.26.8, Syft, GoReleaser Pro, and
-actionlint archives against SHA-256 digests pinned in the repository before
-extracting or executing them. Tags are limited to 131 ASCII characters so every
-wrapped archive path has one canonical USTAR representation.
+The release workflow runs trusted code from `main` after a maintainer dispatches
+a signed annotated SemVer tag such as `v1.2.3`. The tag must point to the current
+`main` commit, that commit must have passed the protected `check` workflow, and
+the configured release controls must still match repository policy. A required
+reviewer then approves the protected `release` environment. GoReleaser prepares
+the release without uploading it, the workflow independently reproduces and
+verifies every subject, and only then does it upload, reverify, and publish the
+draft as an immutable release. CI authenticates the official Go 1.26.8, Syft,
+GoReleaser Pro, and actionlint archives against SHA-256 digests pinned in the
+repository before extracting or executing them. Tags are limited to 131 ASCII
+characters so every wrapped archive path has one canonical USTAR representation.
+
+Every archive also contains `THIRD_PARTY_NOTICES`, generated from the union of
+packages selected for all supported targets, and exact pinned source payloads
+for MPL-covered module and embedded data dependencies. That includes the Public
+Suffix List revision compiled into `golang.org/x/net/publicsuffix`. The
+generator includes nested license, notice, patent, and selected-source
+attribution text; it fails when a selected module lacks legal material or an
+MPL dependency lacks pinned corresponding source.
 
 The final verified read of `main` immediately before publication is the release
 decision point. A later branch update does not invalidate that decision. A
@@ -68,10 +77,21 @@ otherwise preserves the release for manual reconciliation because deleting an
 immutable release permanently prevents reuse of its tag name.
 
 Maintainers can validate the external controls with the release control token
-before creating a tag:
+before dispatching a tag:
 
 ```bash
 GITHUB_REPOSITORY=CtrlSpice/bargeboard bash scripts/verify-release-controls.sh
+```
+
+After creating the signed tag at current `main`, dispatch the workflow through
+the repository API so GitHub executes the workflow definition from protected
+`main`, not from the tagged commit:
+
+```bash
+tag=v1.2.3
+gh api --method POST repos/CtrlSpice/bargeboard/dispatches \
+  --raw-field event_type=release \
+  --field "client_payload[tag]=$tag"
 ```
 
 The protected environment supplies `GORELEASER_KEY` and a repository-scoped
@@ -79,6 +99,8 @@ The protected environment supplies `GORELEASER_KEY` and a repository-scoped
 with ruleset write access, so that token needs repository Administration write
 permission even though the workflow uses it only for `GET` requests. Keep both
 secrets in the `release` environment, not at repository scope.
+The environment deployment policy must permit only the `main` branch; the
+requested release tag is validated as data inside that trusted workflow.
 
 ### F1 Live Timing
 

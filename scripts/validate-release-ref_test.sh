@@ -15,11 +15,8 @@ fixture() {
     --arg tag_oid "$tag_oid" \
     '{
       event: {
-        ref: ("refs/tags/" + $tag),
-        created: true,
-        deleted: false,
-        forced: false,
-        after: $tag_oid
+        action: "release",
+        client_payload: {tag: $tag}
       },
       ref: {
         ref: ("refs/tags/" + $tag),
@@ -118,10 +115,9 @@ if fixture v1.2.3 | bash "$validator" v1.2.3 ccccccccccccccccccccccccccccccccccc
 fi
 
 reject_evidence 'lightweight tag' '.ref.object.type = "commit"'
-reject_evidence 'wrong event ref' '.event.ref = "refs/tags/v1.2.4"'
-reject_evidence 'updated tag event' '.event.created = false'
-reject_evidence 'forced tag event' '.event.forced = true'
-reject_evidence 'moved tag after push' '.event.after = "cccccccccccccccccccccccccccccccccccccccc"'
+reject_evidence 'wrong dispatch action' '.event.action = "other"'
+reject_evidence 'wrong dispatched tag' '.event.client_payload.tag = "v1.2.4"'
+reject_evidence 'extra dispatch input' '.event.client_payload.unexpected = true'
 reject_evidence 'ref and tag object mismatch' '.tag.sha = "cccccccccccccccccccccccccccccccccccccccc"'
 reject_evidence 'tag name mismatch' '.tag.tag = "v1.2.4"'
 reject_evidence 'unverified tag' '.tag.verification.verified = false'

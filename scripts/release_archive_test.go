@@ -43,6 +43,11 @@ func validArchiveFixtureEntries() []archiveFixtureEntry {
 	return []archiveFixtureEntry{
 		{name: testArchiveRoot + "/LICENSE", mode: 0o644, modified: testArchiveTime, typeflag: tar.TypeReg, zipMethod: zip.Deflate, uname: "root", gname: "root"},
 		{name: testArchiveRoot + "/README.md", mode: 0o644, modified: testArchiveTime, typeflag: tar.TypeReg, zipMethod: zip.Deflate, uname: "root", gname: "root"},
+		{name: testArchiveRoot + "/SOURCE-go-version-v1.9.0.zip", mode: 0o644, modified: testArchiveTime, typeflag: tar.TypeReg, zipMethod: zip.Deflate, uname: "root", gname: "root"},
+		{name: testArchiveRoot + "/SOURCE-golang-lru-v2.0.7.zip", mode: 0o644, modified: testArchiveTime, typeflag: tar.TypeReg, zipMethod: zip.Deflate, uname: "root", gname: "root"},
+		{name: testArchiveRoot + "/SOURCE-public-suffix-list-LICENSE.txt", mode: 0o644, modified: testArchiveTime, typeflag: tar.TypeReg, zipMethod: zip.Deflate, uname: "root", gname: "root"},
+		{name: testArchiveRoot + "/SOURCE-public-suffix-list.dat", mode: 0o644, modified: testArchiveTime, typeflag: tar.TypeReg, zipMethod: zip.Deflate, uname: "root", gname: "root"},
+		{name: testArchiveRoot + "/THIRD_PARTY_NOTICES", mode: 0o644, modified: testArchiveTime, typeflag: tar.TypeReg, zipMethod: zip.Deflate, uname: "root", gname: "root"},
 		{name: testArchiveRoot + "/config.yaml", mode: 0o644, modified: testArchiveTime, typeflag: tar.TypeReg, zipMethod: zip.Deflate, uname: "root", gname: "root"},
 		{name: testArchiveRoot + "/bargeboard", mode: 0o755, modified: testArchiveTime, typeflag: tar.TypeReg, zipMethod: zip.Deflate, uname: "root", gname: "root"},
 	}
@@ -285,9 +290,9 @@ func TestMaximumReleaseTagFitsCanonicalUSTAR(t *testing.T) {
 }
 
 func TestValidateReleaseArchiveRejectsInvalidCardinality(t *testing.T) {
-	missing := validArchiveFixtureEntries()[:3]
+	missing := validArchiveFixtureEntries()[:6]
 	err := validateReleaseArchive(writeTarFixture(t, missing), testArchiveRoot, testArchiveBinary, testArchiveTime)
-	if err == nil || !strings.Contains(err.Error(), "expected 4") {
+	if err == nil || !strings.Contains(err.Error(), "expected 9") {
 		t.Fatalf("missing entry error = %v", err)
 	}
 

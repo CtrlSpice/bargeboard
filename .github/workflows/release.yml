@@ -1,9 +1,8 @@
 name: release
 
 on:
-  push:
-    tags:
-      - "v*"
+  repository_dispatch:
+    types: [release]
 
 permissions: {}
 
@@ -22,19 +21,22 @@ jobs:
       checks: read
       contents: read
     outputs:
+      tag: ${{ steps.release_ref.outputs.tag }}
       tag_oid: ${{ steps.release_ref.outputs.tag_oid }}
       commit: ${{ steps.release_ref.outputs.commit }}
     steps:
-      - name: Check out release tag
+      - name: Check out trusted main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ github.sha }}
 
       - name: Validate signed release ref
         id: release_ref
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.client_payload.tag }}
         shell: bash
         run: bash scripts/verify-release-ref.sh >>"$GITHUB_OUTPUT"
 
@@ -55,28 +57,33 @@ jobs:
     env:
       GOTOOLCHAIN: local
     steps:
-      - name: Check out release tag
+      - name: Check out trusted main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ github.sha }}
 
       - name: Revalidate signed release ref
         id: release_ref
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         shell: bash
         run: bash scripts/verify-release-ref.sh >>"$GITHUB_OUTPUT"
 
       - name: Match approved release ref
         env:
           APPROVED_COMMIT: ${{ needs.validate.outputs.commit }}
+          APPROVED_TAG: ${{ needs.validate.outputs.tag }}
           APPROVED_TAG_OID: ${{ needs.validate.outputs.tag_oid }}
           CURRENT_COMMIT: ${{ steps.release_ref.outputs.commit }}
+          CURRENT_TAG: ${{ steps.release_ref.outputs.tag }}
           CURRENT_TAG_OID: ${{ steps.release_ref.outputs.tag_oid }}
         shell: bash
         run: |
           set -euo pipefail
+          test "$CURRENT_TAG" = "$APPROVED_TAG"
           test "$CURRENT_COMMIT" = "$APPROVED_COMMIT"
           test "$CURRENT_TAG_OID" = "$APPROVED_TAG_OID"
 
@@ -110,22 +117,65 @@ jobs:
       - name: Validate GoReleaser configuration
         run: goreleaser check
 
-      - name: Build draft release
+      - name: Clone independent release source
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_REPRO_SOURCE: ${{ runner.temp }}/bargeboard-release-repro-source
+        run: |
+          git clone --no-hardlinks "$GITHUB_WORKSPACE" "$RELEASE_REPRO_SOURCE"
+          git -C "$RELEASE_REPRO_SOURCE" checkout --detach "$GITHUB_SHA"
+
+      - name: Build independent release subjects
+        id: reference_build
+        env:
+          GOCACHE: ${{ runner.temp }}/bargeboard-release-repro-go-build
+          GOMODCACHE: ${{ runner.temp }}/bargeboard-release-repro-go-mod
+          GORELEASER_CURRENT_TAG: ${{ steps.release_ref.outputs.tag }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
-          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        working-directory: ${{ runner.temp }}/bargeboard-release-repro-source
+        run: |
+          set -euo pipefail
+          : "${GORELEASER_KEY:?GORELEASER_KEY is not configured in the release environment}"
+          touch -t 200001010000 LICENSE README.md config.yaml
+          goreleaser release --clean --prepare
+          {
+            printf 'digests<<EOF\n'
+            sha256sum \
+              build/release/*.tar.gz \
+              build/release/*.zip \
+              build/release/*.sbom.spdx.json \
+              build/release/checksums.txt
+            printf 'EOF\n'
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Build prepared release
+        env:
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+          RELEASE_TAG: ${{ steps.release_ref.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
           : "${GORELEASER_KEY:?GORELEASER_KEY is not configured in the release environment}"
           bash scripts/build-release.sh "$RELEASE_TAG"
 
+      - name: Check reproducible release subjects
+        env:
+          REFERENCE_DIGESTS: ${{ steps.reference_build.outputs.digests }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$(sha256sum \
+            build/release/*.tar.gz \
+            build/release/*.zip \
+            build/release/*.sbom.spdx.json \
+            build/release/checksums.txt)"
+          test "$current" = "$REFERENCE_DIGESTS"
+
       - name: Verify release artifacts
         env:
           EXPECTED_COMMIT: ${{ steps.release_ref.outputs.commit }}
           EXPECTED_GO_VERSION: go1.26.8
-          EXPECTED_TAG: ${{ github.ref_name }}
+          EXPECTED_TAG: ${{ steps.release_ref.outputs.tag }}
           EXPECTED_VCS_MODIFIED: "false"
         shell: bash
         run: |
@@ -137,6 +187,31 @@ jobs:
             '.tag == $tag and .commit == $commit and .version == ($tag | ltrimstr("v"))' \
             build/release/metadata.json >/dev/null
           git diff --exit-code -- go.mod go.sum
+
+      - name: Upload verified draft
+        id: upload_release
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          RELEASE_COMMIT: ${{ steps.release_ref.outputs.commit }}
+          RELEASE_DIR: build/release
+          RELEASE_TAG: ${{ steps.release_ref.outputs.tag }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const { uploadRelease } = require(
+              `${process.env.GITHUB_WORKSPACE}/scripts/publish-release.cjs`,
+            );
+            const releaseID = await uploadRelease({
+              github,
+              owner,
+              repo,
+              tag: process.env.RELEASE_TAG,
+              releaseCommit: process.env.RELEASE_COMMIT,
+              releaseDir: process.env.RELEASE_DIR,
+            });
+            core.setOutput("release_id", String(releaseID));
+            core.info(`Uploaded verified draft ${releaseID}`);
 
       - name: Attest archives and SBOMs
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
@@ -152,6 +227,7 @@ jobs:
         id: publish_ref
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release_ref.outputs.tag }}
         shell: bash
         run: bash scripts/verify-release-ref.sh >>"$GITHUB_OUTPUT"
 
@@ -167,12 +243,15 @@ jobs:
       - name: Match built release ref
         env:
           BUILT_COMMIT: ${{ steps.release_ref.outputs.commit }}
+          BUILT_TAG: ${{ steps.release_ref.outputs.tag }}
           BUILT_TAG_OID: ${{ steps.release_ref.outputs.tag_oid }}
           CURRENT_COMMIT: ${{ steps.publish_ref.outputs.commit }}
+          CURRENT_TAG: ${{ steps.publish_ref.outputs.tag }}
           CURRENT_TAG_OID: ${{ steps.publish_ref.outputs.tag_oid }}
         shell: bash
         run: |
           set -euo pipefail
+          test "$CURRENT_TAG" = "$BUILT_TAG"
           test "$CURRENT_COMMIT" = "$BUILT_COMMIT"
           test "$CURRENT_TAG_OID" = "$BUILT_TAG_OID"
 
@@ -181,7 +260,8 @@ jobs:
         env:
           RELEASE_COMMIT: ${{ steps.publish_ref.outputs.commit }}
           RELEASE_DIR: build/release
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_ID: ${{ steps.upload_release.outputs.release_id }}
+          RELEASE_TAG: ${{ steps.publish_ref.outputs.tag }}
         with:
           github-token: ${{ github.token }}
           script: |
@@ -193,6 +273,7 @@ jobs:
               github,
               owner,
               repo,
+              releaseID: Number(process.env.RELEASE_ID),
               tag: process.env.RELEASE_TAG,
               releaseCommit: process.env.RELEASE_COMMIT,
               releaseDir: process.env.RELEASE_DIR,

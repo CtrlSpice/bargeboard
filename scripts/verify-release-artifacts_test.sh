@@ -285,6 +285,21 @@ cp LICENSE README.md config.yaml "$work/source/"
 printf 'tampered\n' >>"$work/source/LICENSE"
 expect_failure 'tracked payload equality' 'archive payload differs from tracked LICENSE' "$source_dist" "$work/source"
 
+mkdir "$work/mismatched-compliance-bin"
+real_cmp="$(command -v cmp)"
+cat >"$work/mismatched-compliance-bin/cmp" <<EOF
+#!/usr/bin/env bash
+if [[ "\${2:-}" == */build/compliance/THIRD_PARTY_NOTICES ]]; then
+  exit 1
+fi
+exec "$real_cmp" "\$@"
+EOF
+chmod +x "$work/mismatched-compliance-bin/cmp"
+PATH="$work/mismatched-compliance-bin:$PATH" expect_failure \
+  'generated compliance equality' \
+  'archive compliance payload differs from generated THIRD_PARTY_NOTICES' \
+  "$source_dist"
+
 cp -R "$source_dist" "$work/dist-invalid-metadata"
 jq 'map(if .type == "Archive" and .target == "linux_amd64_v1" then .target = "linux_amd64_v3" else . end)' \
   "$work/dist-invalid-metadata/artifacts.json" >"$work/artifacts.json"

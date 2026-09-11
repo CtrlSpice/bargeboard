@@ -5,6 +5,8 @@ readonly artifact="${1:?usage: generate-release-sbom.sh ARTIFACT DOCUMENT}"
 readonly document="${2:?usage: generate-release-sbom.sh ARTIFACT DOCUMENT}"
 readonly project_package=github.com/CtrlSpice/bargeboard
 readonly other_relationship_comment="evident-by: indicates the package's existence is evident by the given file"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly script_dir
 
 if [[ ! -f "$artifact" ]]; then
   printf 'SBOM artifact does not exist: %s\n' "$artifact" >&2
@@ -21,18 +23,31 @@ artifact_name="${artifact##*/}"
 case "$artifact_name" in
   *.tar.gz)
     archive_root="${artifact_name%.tar.gz}"
-    tar -xOzf "$artifact" "$archive_root/bargeboard" >"$temporary_binary"
+    archive_binary=bargeboard
     ;;
   *.zip)
     archive_root="${artifact_name%.zip}"
-    unzip -p "$artifact" "$archive_root/bargeboard.exe" >"$temporary_binary"
+    archive_binary=bargeboard.exe
     ;;
   *)
     printf 'unsupported SBOM artifact: %s\n' "$artifact" >&2
     exit 1
     ;;
 esac
-readonly archive_root
+readonly archive_root archive_binary
+commit_epoch="$(git show -s --format=%ct HEAD)"
+readonly commit_epoch
+
+if ! go run "$script_dir/release_archive.go" \
+  "$artifact" "$archive_root" "$archive_binary" "$commit_epoch"; then
+  printf 'refusing to scan a noncanonical release archive: %s\n' "$artifact" >&2
+  exit 1
+fi
+if [[ "$artifact" == *.zip ]]; then
+  unzip -p "$artifact" "$archive_root/$archive_binary" >"$temporary_binary"
+else
+  tar -xOzf "$artifact" "$archive_root/$archive_binary" >"$temporary_binary"
+fi
 
 module_version="$(
   go version -m -json "$temporary_binary" |
@@ -54,8 +69,6 @@ else
 fi
 readonly artifact_digest
 readonly document_namespace="https://github.com/CtrlSpice/bargeboard/sbom/sha256-$artifact_digest"
-commit_epoch="$(git show -s --format=%ct HEAD)"
-readonly commit_epoch
 created="$(jq -nr --argjson epoch "$commit_epoch" '$epoch | todateiso8601')"
 readonly created
 

@@ -25,7 +25,7 @@ fixture() {
     },
     deployment_policies: {
       total_count: 1,
-      branch_policies: [{name: "v*", type: "tag"}]
+      branch_policies: [{name: "main", type: "branch"}]
     },
     immutable_releases: {
       enabled: true,
@@ -114,7 +114,7 @@ reject 'extra reviewer' '.environment.protection_rules[1].reviewers += [{type: "
 reject 'team reviewer' '.environment.protection_rules[1].reviewers = [{type: "Team", reviewer: {login: "maintainers"}}]'
 reject 'extra protection rule' '.environment.protection_rules += [{type: "wait_timer"}]'
 reject 'protected branch policy' '.environment.deployment_branch_policy.protected_branches = true'
-reject 'extra deployment policy' '.deployment_policies.branch_policies += [{name: "main", type: "branch"}]'
+reject 'extra deployment policy' '.deployment_policies.branch_policies += [{name: "v*", type: "tag"}]'
 reject 'incorrect deployment-policy count' '.deployment_policies.total_count = 2'
 reject 'disabled immutable releases' '.immutable_releases.enabled = false'
 reject 'missing owner-enforcement evidence' 'del(.immutable_releases.enforced_by_owner)'

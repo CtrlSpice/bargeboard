@@ -7,6 +7,10 @@ dist: build/release
 metadata:
   license: Apache-2.0
 
+before:
+  hooks:
+    - go run -mod=readonly ./scripts/thirdparty -output build/compliance
+
 builds:
   - id: bargeboard
     main: .
@@ -64,6 +68,41 @@ archives:
           group: root
           mtime: "{{ .CommitDate }}"
           mode: 0644
+      - src: build/compliance/THIRD_PARTY_NOTICES
+        dst: THIRD_PARTY_NOTICES
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
+          mode: 0644
+      - src: build/compliance/SOURCE-go-version-v1.9.0.zip
+        dst: SOURCE-go-version-v1.9.0.zip
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
+          mode: 0644
+      - src: build/compliance/SOURCE-golang-lru-v2.0.7.zip
+        dst: SOURCE-golang-lru-v2.0.7.zip
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
+          mode: 0644
+      - src: build/compliance/SOURCE-public-suffix-list.dat
+        dst: SOURCE-public-suffix-list.dat
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
+          mode: 0644
+      - src: build/compliance/SOURCE-public-suffix-list-LICENSE.txt
+        dst: SOURCE-public-suffix-list-LICENSE.txt
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
+          mode: 0644
 
 sboms:
   - id: archives
@@ -94,6 +133,9 @@ checksum:
   ids:
     - release
     - archives
+
+changelog:
+  disable: true
 
 release:
   draft: true
