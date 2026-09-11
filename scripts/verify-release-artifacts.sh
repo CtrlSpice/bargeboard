@@ -53,7 +53,15 @@ created="$(jq -nr --argjson epoch "$commit_epoch" '$epoch | todateiso8601')"
 readonly created
 readonly expected_commit="${EXPECTED_COMMIT:-$(git rev-parse --verify 'HEAD^{commit}')}"
 readonly expected_go_version="${EXPECTED_GO_VERSION:-$(go env GOVERSION)}"
+readonly expected_tag="${EXPECTED_TAG:-}"
 readonly expected_vcs_modified="${EXPECTED_VCS_MODIFIED:-}"
+if [[ -n "$expected_tag" ]]; then
+  bash "$script_dir/validate-release-tag.sh" "$expected_tag"
+  if [[ "$version" != "${expected_tag#v}" ]]; then
+    printf 'release metadata version does not match release tag: %s\n' "$expected_tag" >&2
+    exit 1
+  fi
+fi
 readonly archives=(
   "bargeboard_${version}_darwin_amd64.tar.gz"
   "bargeboard_${version}_darwin_arm64.tar.gz"
@@ -149,12 +157,22 @@ reference_binary="$payload_dir/reference-bargeboard"
   cd "$repository_root"
   CGO_ENABLED=0 go build -buildvcs=true -mod=readonly -trimpath -o "$reference_binary" .
 )
-expected_module_version="$(go version -m -json "$reference_binary" | jq -er \
+reference_module_version="$(go version -m -json "$reference_binary" | jq -er \
   --arg package "$project_package" '
     select(.Path == $package and .Main.Path == $package) |
     .Main.Version | select(type == "string" and length > 0)
   ')"
-readonly expected_module_version
+readonly reference_module_version
+if [[ -n "$expected_tag" ]]; then
+  readonly expected_module_version="$expected_tag"
+  if [[ "$reference_module_version" != "$expected_module_version" ]]; then
+    printf 'source module version %s does not match release tag %s\n' \
+      "$reference_module_version" "$expected_module_version" >&2
+    exit 1
+  fi
+else
+  readonly expected_module_version="$reference_module_version"
+fi
 
 for archive in "${archives[@]}"; do
   case "$archive" in

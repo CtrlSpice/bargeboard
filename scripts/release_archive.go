@@ -20,7 +20,10 @@ import (
 	"time"
 )
 
-const maxReleaseArchiveSize = 128 << 20
+const (
+	maxReleaseArchiveSize      = 128 << 20
+	maxZipCentralDirectorySize = 64 << 10
+)
 
 func main() {
 	log.SetFlags(0)
@@ -210,6 +213,9 @@ func validateZip(filename string, expected map[string]fs.FileMode, order []strin
 	if archiveInfo.Size() > maxReleaseArchiveSize {
 		return fmt.Errorf("zip archive exceeds %d bytes", maxReleaseArchiveSize)
 	}
+	if err := preflightZip(filename, archiveInfo.Size(), order); err != nil {
+		return err
+	}
 	zipReader, err := zip.OpenReader(filename)
 	if err != nil {
 		return fmt.Errorf("open zip archive: %w", err)
@@ -287,6 +293,45 @@ func validateZip(filename string, expected map[string]fs.FileMode, order []strin
 		}
 	}
 	return requireArchiveEntries(seen, expected)
+}
+
+func preflightZip(filename string, size int64, order []string) error {
+	if size < 22 {
+		return fmt.Errorf("zip archive lacks an end-of-central-directory record")
+	}
+	file, err := os.Open(filename)
+	if err != nil {
+		return fmt.Errorf("open zip preflight: %w", err)
+	}
+	defer file.Close()
+
+	eocd := make([]byte, 22)
+	if _, err := file.ReadAt(eocd, size-int64(len(eocd))); err != nil {
+		return fmt.Errorf("read zip end-of-central-directory record: %w", err)
+	}
+	if binary.LittleEndian.Uint32(eocd[0:4]) != 0x06054b50 {
+		return fmt.Errorf("zip end-of-central-directory record does not end at EOF; archive comments and trailing data are prohibited")
+	}
+	if binary.LittleEndian.Uint16(eocd[4:6]) != 0 ||
+		binary.LittleEndian.Uint16(eocd[6:8]) != 0 ||
+		binary.LittleEndian.Uint16(eocd[20:22]) != 0 {
+		return fmt.Errorf("unexpected multi-disk zip or archive comment")
+	}
+	entries := binary.LittleEndian.Uint16(eocd[10:12])
+	if binary.LittleEndian.Uint16(eocd[8:10]) != entries || int(entries) != len(order) {
+		return fmt.Errorf("zip central directory contains %d entries; expected %d", entries, len(order))
+	}
+
+	centralSize := uint64(binary.LittleEndian.Uint32(eocd[12:16]))
+	if centralSize < uint64(len(order))*46 || centralSize > maxZipCentralDirectorySize {
+		return fmt.Errorf("zip central directory size %d falls outside its bounded canonical range", centralSize)
+	}
+	centralOffset := uint64(binary.LittleEndian.Uint32(eocd[16:20]))
+	eocdOffset := uint64(size - int64(len(eocd)))
+	if centralOffset > eocdOffset || centralSize != eocdOffset-centralOffset {
+		return fmt.Errorf("zip central directory does not end at the end-of-central-directory record")
+	}
+	return nil
 }
 
 func validateZipPayloadSize(files []*zip.File) error {

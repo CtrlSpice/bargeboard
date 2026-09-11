@@ -54,6 +54,22 @@ mutate_sbom() {
 
 bash "$verifier" "$source_dist"
 
+source_version="$(jq -er '.version' "$source_dist/metadata.json")"
+readonly source_version
+mismatched_tag=v0.0.0
+if [[ "$source_version" == "${mismatched_tag#v}" ]]; then
+  mismatched_tag=v0.0.1
+fi
+readonly mismatched_tag
+if output="$(EXPECTED_TAG="$mismatched_tag" bash "$verifier" "$source_dist" 2>&1)"; then
+  printf 'expected release artifact verification failure: release tag binding\n' >&2
+  exit 1
+fi
+if ! grep -F 'release metadata version does not match release tag' <<<"$output" >/dev/null; then
+  printf 'release artifact failure did not reach release tag binding:\n%s\n' "$output" >&2
+  exit 1
+fi
+
 cp -R "$source_dist" "$work/dist-extra-file"
 unexpected="$work/dist-extra-file/unexpected.tar.gz"
 touch "$unexpected"

@@ -266,6 +266,58 @@ func TestValidateZipPayloadSizeRejectsOversizedAggregate(t *testing.T) {
 	}
 }
 
+func TestPreflightZipRejectsUnboundedCentralDirectory(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func([]byte)
+		message string
+	}{
+		{
+			name: "cardinality",
+			mutate: func(eocd []byte) {
+				binary.LittleEndian.PutUint16(eocd[8:10], 0xffff)
+				binary.LittleEndian.PutUint16(eocd[10:12], 0xffff)
+			},
+			message: "expected 9",
+		},
+		{
+			name: "central directory size",
+			mutate: func(eocd []byte) {
+				binary.LittleEndian.PutUint32(eocd[12:16], maxZipCentralDirectorySize+1)
+			},
+			message: "central directory size",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filename := writeZipFixture(t, validArchiveFixtureEntries())
+			file, err := os.OpenFile(filename, os.O_RDWR, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			info, err := file.Stat()
+			if err != nil {
+				t.Fatal(err)
+			}
+			eocd := make([]byte, 22)
+			if _, err := file.ReadAt(eocd, info.Size()-int64(len(eocd))); err != nil {
+				t.Fatal(err)
+			}
+			tt.mutate(eocd)
+			if _, err := file.WriteAt(eocd, info.Size()-int64(len(eocd))); err != nil {
+				t.Fatal(err)
+			}
+			if err := file.Close(); err != nil {
+				t.Fatal(err)
+			}
+			err = preflightZip(filename, info.Size(), releaseArchiveOrder(testArchiveRoot, testArchiveBinary))
+			if err == nil || !strings.Contains(err.Error(), tt.message) {
+				t.Fatalf("zip preflight error = %v", err)
+			}
+		})
+	}
+}
+
 func TestZipRangeRejectsTruncatedRecord(t *testing.T) {
 	if _, err := zipRange([]byte{0}, 1, 1, "fixture"); err == nil ||
 		!strings.Contains(err.Error(), "truncated") {
@@ -296,7 +348,8 @@ func TestValidateReleaseArchiveRejectsInvalidCardinality(t *testing.T) {
 		t.Fatalf("missing entry error = %v", err)
 	}
 
-	duplicate := append(validArchiveFixtureEntries(), validArchiveFixtureEntries()[0])
+	duplicate := validArchiveFixtureEntries()
+	duplicate[3] = duplicate[2]
 	err = validateReleaseArchive(writeZipFixture(t, duplicate), testArchiveRoot, testArchiveBinary, testArchiveTime)
 	if err == nil || !strings.Contains(err.Error(), "duplicate zip entry") {
 		t.Fatalf("duplicate entry error = %v", err)

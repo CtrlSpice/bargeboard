@@ -88,8 +88,6 @@ accept v1.0.0-alpha.1
 accept v1.0.0-0.3.7
 accept v1.0.0-x.7.z.92
 accept v1.0.0-x-y-z.--
-accept v1.0.0+build.1
-accept v1.0.0-beta+exp.sha.5114f85
 max_prerelease="$(printf 'a%.0s' {1..124})"
 readonly max_prerelease
 accept "v1.2.3-$max_prerelease"
@@ -104,6 +102,10 @@ reject_tag v1.2.3-01
 reject_tag v1.2.3-alpha..1
 reject_tag v1.2.3+
 reject_tag v1.2.3+build..1
+reject_tag v1.2.3+build.1
+reject_tag v1.2.3-beta+exp.sha.5114f85
+reject_tag v2.0.0
+reject_tag v999999999999999999999999999999.0.0
 reject_tag v1.2.3_alpha
 reject_tag v1.2.3.4
 reject_tag v1.2.3/other

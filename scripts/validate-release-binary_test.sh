@@ -74,7 +74,12 @@ git -C "$work/module" \
   -c tag.gpgSign=false \
   -c user.name='Release Test' \
   -c user.email='release-test@example.invalid' \
-  tag -a -m fixture v1.2.3+build.1
+  tag -a -m fixture v1.2.3
+git -C "$work/module" \
+  -c tag.gpgSign=false \
+  -c user.name='Release Test' \
+  -c user.email='release-test@example.invalid' \
+  tag -a -m fixture v1.9.9
 (
   cd "$work/module"
   CGO_ENABLED=0 go build -buildvcs=true -trimpath -o "$work/bargeboard" .
@@ -88,6 +93,10 @@ readonly real_module_version
 real_go_version="$(go env GOVERSION)"
 real_goos="$(go env GOOS)"
 real_goarch="$(go env GOARCH)"
+if [[ "$real_module_version" != v1.9.9 ]]; then
+  printf 'expected Go to select the highest compatible tag, got %s\n' "$real_module_version" >&2
+  exit 1
+fi
 case "$real_goarch" in
   amd64)
     real_tuning_key=GOAMD64
@@ -113,22 +122,7 @@ printf '%s\n' "$real_build_info" | jq -c '.Deps = []' |
     false \
     2026-09-09T00:00:00Z \
     "$real_module_version"
-
-git -C "$work/module" tag -d v1.2.3+build.1 >/dev/null
-git -C "$work/module" \
-  -c tag.gpgSign=false \
-  -c user.name='Release Test' \
-  -c user.email='release-test@example.invalid' \
-  tag -a -m fixture v2.0.0
-(
-  cd "$work/module"
-  CGO_ENABLED=0 go build -a -buildvcs=true -trimpath -o "$work/bargeboard-v2" .
-)
-v2_build_info="$(go version -m -json "$work/bargeboard-v2")"
-readonly v2_build_info
-v2_module_version="$(jq -er '.Main.Version | select(. != "(devel)")' <<<"$v2_build_info")"
-readonly v2_module_version
-printf '%s\n' "$v2_build_info" | jq -c '.Deps = []' |
+if printf '%s\n' "$real_build_info" | jq -c '.Deps = []' |
   bash "$validator" \
     "$real_go_version" \
     "$real_goos" \
@@ -138,7 +132,10 @@ printf '%s\n' "$v2_build_info" | jq -c '.Deps = []' |
     "$real_commit" \
     false \
     2026-09-09T00:00:00Z \
-    "$v2_module_version"
+    v1.2.3 >/dev/null 2>&1; then
+  printf 'expected a binary built with a competing compatible tag to fail validation\n' >&2
+  exit 1
+fi
 
 reject 'Go version' '.GoVersion = "go1.27.0"'
 reject 'command path' '.Path = "example.com/other"'

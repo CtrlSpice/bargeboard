@@ -49,9 +49,11 @@ fi
 ```
 
 The release workflow runs trusted code from `main` after a maintainer dispatches
-a signed annotated SemVer tag such as `v1.2.3`. The tag must point to the current
-`main` commit, that commit must have passed the protected `check` workflow, and
-the configured release controls must still match repository policy. A required
+a signed annotated `v0` or `v1` SemVer tag such as `v1.2.3`. Build metadata is
+not accepted because Go cannot represent it in this module's embedded version.
+The tag must point to the current `main` commit, that commit must have passed the
+protected `check` workflow, and the configured release controls must still match
+repository policy. A required
 reviewer then approves the protected `release` environment. GoReleaser prepares
 the release without uploading it, the workflow independently reproduces and
 verifies every subject, and only then does it upload, reverify, and publish the
