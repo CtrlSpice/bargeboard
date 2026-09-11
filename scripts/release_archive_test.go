@@ -268,17 +268,25 @@ func TestValidateZipPayloadSizeRejectsOversizedAggregate(t *testing.T) {
 
 func TestPreflightZipRejectsUnboundedCentralDirectory(t *testing.T) {
 	tests := []struct {
-		name    string
-		mutate  func([]byte)
-		message string
+		name          string
+		extraPhysical bool
+		mutate        func([]byte)
+		message       string
 	}{
 		{
-			name: "cardinality",
+			name: "declared cardinality",
 			mutate: func(eocd []byte) {
-				binary.LittleEndian.PutUint16(eocd[8:10], 0xffff)
-				binary.LittleEndian.PutUint16(eocd[10:12], 0xffff)
+				binary.LittleEndian.PutUint16(eocd[8:10], 10)
+				binary.LittleEndian.PutUint16(eocd[10:12], 10)
 			},
 			message: "expected 9",
+		},
+		{
+			name: "ZIP64 sentinel",
+			mutate: func(eocd []byte) {
+				binary.LittleEndian.PutUint32(eocd[12:16], 0xffff)
+			},
+			message: "ZIP64",
 		},
 		{
 			name: "central directory size",
@@ -287,10 +295,23 @@ func TestPreflightZipRejectsUnboundedCentralDirectory(t *testing.T) {
 			},
 			message: "central directory size",
 		},
+		{
+			name:          "physical cardinality",
+			extraPhysical: true,
+			mutate: func(eocd []byte) {
+				binary.LittleEndian.PutUint16(eocd[8:10], 9)
+				binary.LittleEndian.PutUint16(eocd[10:12], 9)
+			},
+			message: "data after 9 records",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			filename := writeZipFixture(t, validArchiveFixtureEntries())
+			entries := validArchiveFixtureEntries()
+			if tt.extraPhysical {
+				entries = append(entries, entries[0])
+			}
+			filename := writeZipFixture(t, entries)
 			file, err := os.OpenFile(filename, os.O_RDWR, 0)
 			if err != nil {
 				t.Fatal(err)

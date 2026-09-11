@@ -619,6 +619,70 @@ test("accepts a valid immutable release after a lost publication response", asyn
   assert.deepEqual(calls.deleted, []);
 });
 
+test("removes a known-invalid public release after a lost response", async (t) => {
+  const cases = [
+    {
+      name: "missing immutability",
+      mutate: (published) => ({ ...published, immutable: false }),
+      message: "published release is not immutable: https://example.test/reconciled",
+    },
+    {
+      name: "mismatched assets",
+      mutate: (published) => ({
+        ...published,
+        assets: [
+          { ...published.assets[0], size: published.assets[0].size + 1 },
+          ...published.assets.slice(1),
+        ],
+      }),
+      message: "draft asset does not match local output: subject-0.txt",
+    },
+  ];
+  for (const tt of cases) {
+    await t.test(tt.name, async (t) => {
+      const { assets, calls, github, release, releaseDir } = releaseFixture(t);
+      let releaseReads = 0;
+      const published = tt.mutate({
+        ...release,
+        assets,
+        draft: false,
+        immutable: true,
+        published_at: "2026-09-09T00:00:00Z",
+        html_url: "https://example.test/reconciled",
+      });
+      github.rest.repos.getRelease = async () => ({
+        data: ++releaseReads === 1 ? { ...release, assets } : published,
+      });
+      github.request = async () => {
+        throw new Error("response lost");
+      };
+
+      await assert.rejects(
+        publishRelease({
+          github,
+          owner: "CtrlSpice",
+          repo: "bargeboard",
+          tag,
+          releaseCommit: commit,
+          releaseDir,
+        }),
+        (error) => {
+          assert(error instanceof AggregateError);
+          assert.match(error.message, /invalid published release was removed/);
+          assert.deepEqual(
+            error.errors.map((cause) => cause.message),
+            ["response lost", tt.message],
+          );
+          return true;
+        },
+      );
+      assert.deepEqual(calls.deleted, [
+        { owner: "CtrlSpice", repo: "bargeboard", release_id: 7 },
+      ]);
+    });
+  }
+});
+
 test("preserves an unchanged draft after an indeterminate publication request", async (t) => {
   const { calls, github, releaseDir } = releaseFixture(t);
   github.request = async () => {

@@ -304,12 +304,13 @@ func packageSourceFiles(pkg listedPackage) []string {
 }
 
 func collectMaterials(components map[string]*component) error {
+	materialSize := 0
 	for _, current := range components {
 		legalFiles := 0
 		licenseFiles := 0
 		if current.path == "stdlib" {
 			for _, name := range []string{"LICENSE", "PATENTS"} {
-				if err := addMaterialFile(current, name, filepath.Join(current.root, name)); err != nil {
+				if err := addMaterialFile(current, name, filepath.Join(current.root, name), &materialSize); err != nil {
 					return err
 				}
 				legalFiles++
@@ -332,7 +333,7 @@ func collectMaterials(components map[string]*component) error {
 				if !isLegalPath(relative) {
 					return nil
 				}
-				if err := addMaterialFile(current, filepath.ToSlash(relative), filename); err != nil {
+				if err := addMaterialFile(current, filepath.ToSlash(relative), filename, &materialSize); err != nil {
 					return err
 				}
 				legalFiles++
@@ -368,7 +369,14 @@ func collectMaterials(components map[string]*component) error {
 			}
 			for index, notice := range notices {
 				label := fmt.Sprintf("source-header:%s#%d", filepath.ToSlash(relative), index+1)
-				current.materials[label] = notice
+				requiresSource, err := classifySourceLicense(notice)
+				if err != nil {
+					return fmt.Errorf("validate selected source notice %s: %w", filename, err)
+				}
+				current.mpl = current.mpl || requiresSource
+				if err := storeMaterial(current, label, notice, &materialSize); err != nil {
+					return err
+				}
 			}
 		}
 		for _, material := range current.materials {
@@ -426,7 +434,7 @@ func isLicensePath(name string) bool {
 	return false
 }
 
-func addMaterialFile(current *component, label, filename string) error {
+func addMaterialFile(current *component, label, filename string, materialSize *int) error {
 	contents, err := readBoundedRegularFile(filename)
 	if err != nil {
 		return fmt.Errorf("read legal material %s: %w", filename, err)
@@ -440,8 +448,27 @@ func addMaterialFile(current *component, label, filename string) error {
 			return fmt.Errorf("validate license %s: %w", filename, err)
 		}
 	}
-	current.materials[label] = normalized
+	return storeMaterial(current, label, normalized, materialSize)
+}
+
+func storeMaterial(current *component, label string, contents []byte, materialSize *int) error {
+	if _, exists := current.materials[label]; exists {
+		return fmt.Errorf("duplicate legal material label: %s", label)
+	}
+	next, err := boundedNoticeMaterialSize(*materialSize, len(contents))
+	if err != nil {
+		return err
+	}
+	current.materials[label] = contents
+	*materialSize = next
 	return nil
+}
+
+func boundedNoticeMaterialSize(current, addition int) (int, error) {
+	if current < 0 || addition < 0 || current > maxNoticeMaterialSize || addition > maxNoticeMaterialSize-current {
+		return current, fmt.Errorf("third-party legal material exceeds %d bytes", maxNoticeMaterialSize)
+	}
+	return current + addition, nil
 }
 
 func readBoundedRegularFile(filename string) ([]byte, error) {
@@ -505,6 +532,51 @@ func validateLicenseText(contents []byte) error {
 		}
 	}
 	return fmt.Errorf("unrecognized license text")
+}
+
+func classifySourceLicense(contents []byte) (bool, error) {
+	const marker = "spdx-license-identifier:"
+	scanner := bufio.NewScanner(bytes.NewReader(contents))
+	scanner.Buffer(nil, maxLegalFileSize+1)
+	requiresSource := false
+	for scanner.Scan() {
+		line := scanner.Text()
+		lower := strings.ToLower(line)
+		index := strings.Index(lower, marker)
+		if index < 0 {
+			continue
+		}
+		expression := strings.TrimSpace(line[index+len(marker):])
+		expression = strings.TrimSpace(strings.TrimSuffix(expression, "*/"))
+		expression = strings.TrimSpace(strings.TrimSuffix(expression, "-->"))
+		switch strings.ToUpper(expression) {
+		case "APACHE-2.0", "BSD-2-CLAUSE", "BSD-3-CLAUSE", "ISC", "MIT", "0BSD", "UNLICENSE":
+		case "MPL-2.0":
+			requiresSource = true
+		default:
+			return false, fmt.Errorf("source SPDX license %q requires explicit release-policy review", expression)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return false, err
+	}
+	lower := bytes.ToLower(contents)
+	if bytes.Contains(lower, []byte("mozilla public license")) && bytes.Contains(lower, []byte("2.0")) {
+		requiresSource = true
+	}
+	for _, prohibited := range [][]byte{
+		[]byte("gnu general public license"),
+		[]byte("gnu affero general public license"),
+		[]byte("gnu lesser general public license"),
+		[]byte("eclipse public license"),
+		[]byte("common development and distribution license"),
+		[]byte("server side public license"),
+	} {
+		if bytes.Contains(lower, prohibited) {
+			return false, fmt.Errorf("source license family requires explicit release-policy review")
+		}
+	}
+	return requiresSource, nil
 }
 
 func normalizeNotice(contents []byte) ([]byte, error) {
@@ -622,6 +694,16 @@ func containsNoticeLanguage(contents []byte) bool {
 }
 
 func copyRequiredSources(components map[string]*component, output string) error {
+	materialSize := 0
+	for _, current := range components {
+		for _, material := range current.materials {
+			var err error
+			materialSize, err = boundedNoticeMaterialSize(materialSize, len(material))
+			if err != nil {
+				return err
+			}
+		}
+	}
 	requirements := make(map[string]sourceRequirement, len(sourceRequirements))
 	for _, requirement := range sourceRequirements {
 		requirements[requirement.path+"@"+requirement.version] = requirement
@@ -652,7 +734,9 @@ func copyRequiredSources(components map[string]*component, output string) error 
 			if err := validateLicenseText(normalized); err != nil {
 				return fmt.Errorf("validate license for %s: %w", key, err)
 			}
-			current.materials["embedded-license:publicsuffix/list/LICENSE"] = normalized
+			if err := storeMaterial(current, "embedded-license:publicsuffix/list/LICENSE", normalized, &materialSize); err != nil {
+				return err
+			}
 			current.mpl = current.mpl || bytes.Contains(bytes.ToLower(normalized), []byte("mozilla public license"))
 			if err := os.WriteFile(filepath.Join(output, requirement.license.name), license, 0o644); err != nil {
 				return fmt.Errorf("write license source for %s: %w", key, err)
@@ -675,7 +759,14 @@ func copyRequiredSources(components map[string]*component, output string) error 
 			}
 			for index, notice := range notices {
 				label := fmt.Sprintf("embedded-source-header:publicsuffix/list/public_suffix_list.dat#%d", index+1)
-				current.materials[label] = notice
+				requiresSource, err := classifySourceLicense(notice)
+				if err != nil {
+					return fmt.Errorf("validate pinned source notice for %s: %w", key, err)
+				}
+				current.mpl = current.mpl || requiresSource
+				if err := storeMaterial(current, label, notice, &materialSize); err != nil {
+					return err
+				}
 			}
 		}
 		current.source = requirement.archive
@@ -828,10 +919,11 @@ func renderNotices(components map[string]*component) ([]byte, error) {
 		sort.Strings(labels)
 		for _, label := range labels {
 			contents := current.materials[label]
-			if materialSize > maxNoticeMaterialSize-len(contents) {
-				return nil, fmt.Errorf("third-party legal material exceeds %d bytes", maxNoticeMaterialSize)
+			var err error
+			materialSize, err = boundedNoticeMaterialSize(materialSize, len(contents))
+			if err != nil {
+				return nil, err
 			}
-			materialSize += len(contents)
 			digest := sha256.Sum256(contents)
 			digestText := hex.EncodeToString(digest[:])
 			fmt.Fprintf(&result, "Legal\t%s\t%s\n", digestText, label)

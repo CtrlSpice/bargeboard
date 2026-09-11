@@ -41,6 +41,53 @@ func TestValidateLicenseText(t *testing.T) {
 	}
 }
 
+func TestClassifySourceLicense(t *testing.T) {
+	tests := []struct {
+		name           string
+		notice         string
+		requiresSource bool
+		wantError      bool
+	}{
+		{name: "permissive SPDX", notice: "// SPDX-License-Identifier: Apache-2.0\n"},
+		{name: "MPL SPDX", notice: "// SPDX-License-Identifier: MPL-2.0\n", requiresSource: true},
+		{name: "GPL SPDX", notice: "// SPDX-License-Identifier: GPL-3.0-only\n", wantError: true},
+		{name: "unknown SPDX", notice: "// SPDX-License-Identifier: LicenseRef-Unknown\n", wantError: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requiresSource, err := classifySourceLicense([]byte(tt.notice))
+			if (err != nil) != tt.wantError || requiresSource != tt.requiresSource {
+				t.Fatalf("classifySourceLicense() = (%v, %v)", requiresSource, err)
+			}
+		})
+	}
+}
+
+func TestBoundedNoticeMaterialSize(t *testing.T) {
+	size, err := boundedNoticeMaterialSize(maxNoticeMaterialSize-1, 1)
+	if err != nil || size != maxNoticeMaterialSize {
+		t.Fatalf("exact material limit = (%d, %v)", size, err)
+	}
+	size, err = boundedNoticeMaterialSize(size, 1)
+	if err == nil || size != maxNoticeMaterialSize {
+		t.Fatalf("material over limit = (%d, %v)", size, err)
+	}
+}
+
+func TestStoreMaterialEnforcesAggregateBudget(t *testing.T) {
+	current := &component{materials: map[string][]byte{}}
+	size := maxNoticeMaterialSize - 1
+	if err := storeMaterial(current, "at-limit", []byte{'a'}, &size); err != nil {
+		t.Fatal(err)
+	}
+	if err := storeMaterial(current, "over-limit", []byte{'b'}, &size); err == nil {
+		t.Fatal("storeMaterial accepted material over the aggregate limit")
+	}
+	if size != maxNoticeMaterialSize || len(current.materials) != 1 {
+		t.Fatalf("failed insertion changed state: size=%d materials=%v", size, current.materials)
+	}
+}
+
 func TestGenerateRejectsUnsafeOutput(t *testing.T) {
 	if err := generate(t.TempDir()); err == nil || !strings.Contains(err.Error(), "unsafe output") {
 		t.Fatalf("unsafe output error = %v", err)
@@ -232,6 +279,55 @@ func TestCollectMaterialsIncludesNestedLicenseFiles(t *testing.T) {
 	}
 }
 
+func TestCollectMaterialsClassifiesSelectedSourceLicenses(t *testing.T) {
+	fixture := func(t *testing.T, identifier string) *component {
+		t.Helper()
+		root := t.TempDir()
+		if err := os.WriteFile(
+			filepath.Join(root, "LICENSE"),
+			[]byte("Permission is hereby granted, free of charge, to use this example.\n"),
+			0o600,
+		); err != nil {
+			t.Fatal(err)
+		}
+		source := filepath.Join(root, "source.go")
+		if err := os.WriteFile(source, []byte("// SPDX-License-Identifier: "+identifier+"\npackage fixture\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return &component{
+			path:       "example.com/module",
+			version:    "v1.0.0",
+			sum:        "h1:example",
+			root:       root,
+			sourceFile: map[string]struct{}{source: {}},
+			materials:  map[string][]byte{},
+		}
+	}
+
+	t.Run("MPL requires pinned source", func(t *testing.T) {
+		current := fixture(t, "MPL-2.0")
+		components := map[string]*component{"example.com/module@v1.0.0": current}
+		if err := collectMaterials(components); err != nil {
+			t.Fatal(err)
+		}
+		if !current.mpl {
+			t.Fatal("MPL source header did not mark the component")
+		}
+		if err := copyRequiredSources(components, t.TempDir()); err == nil ||
+			!strings.Contains(err.Error(), "lacks a pinned source archive") {
+			t.Fatalf("unpinned selected-source MPL error = %v", err)
+		}
+	})
+
+	t.Run("GPL requires policy review", func(t *testing.T) {
+		current := fixture(t, "GPL-3.0-only")
+		err := collectMaterials(map[string]*component{"example.com/module@v1.0.0": current})
+		if err == nil || !strings.Contains(err.Error(), "explicit release-policy review") {
+			t.Fatalf("selected-source GPL error = %v", err)
+		}
+	})
+}
+
 func TestMaterialReadersRejectSymlinks(t *testing.T) {
 	directory := t.TempDir()
 	target := filepath.Join(directory, "target")
@@ -243,7 +339,8 @@ func TestMaterialReadersRejectSymlinks(t *testing.T) {
 		t.Skipf("create symlink: %v", err)
 	}
 	current := &component{materials: map[string][]byte{}}
-	if err := addMaterialFile(current, "LICENSE", link); err == nil || !strings.Contains(err.Error(), "bounded regular file") {
+	materialSize := 0
+	if err := addMaterialFile(current, "LICENSE", link, &materialSize); err == nil || !strings.Contains(err.Error(), "bounded regular file") {
 		t.Fatalf("symlinked legal material error = %v", err)
 	}
 	if _, err := sourceNotices(link); err == nil || !strings.Contains(err.Error(), "bounded regular file") {

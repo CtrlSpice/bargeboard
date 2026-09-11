@@ -286,7 +286,7 @@ async function publishRelease({
     verifyPublishedRelease(published.data, tag);
     verifyAssets(published.data.assets, expected);
   } catch (publicationError) {
-    if (publishRequestError) {
+    if (publishRequestError && published.data.draft !== false) {
       throw new AggregateError(
         [publishRequestError, publicationError],
         `release ${tag} publication request failed and the reconciled release was preserved`,
@@ -298,6 +298,12 @@ async function publishRelease({
       throw new AggregateError(
         [publishRequestError, publicationError, cleanupError].filter(Boolean),
         `release ${tag} failed validation and could not be removed`,
+      );
+    }
+    if (publishRequestError) {
+      throw new AggregateError(
+        [publishRequestError, publicationError],
+        `release ${tag} publication request failed and the invalid published release was removed`,
       );
     }
     throw publicationError;

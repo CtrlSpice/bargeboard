@@ -67,15 +67,18 @@ packages selected for all supported targets, and exact pinned source payloads
 for MPL-covered module and embedded data dependencies. That includes the Public
 Suffix List revision compiled into `golang.org/x/net/publicsuffix`. The
 generator includes nested license, notice, patent, and selected-source
-attribution text; it fails when a selected module lacks legal material or an
-MPL dependency lacks pinned corresponding source.
+attribution text, classifies selected-source SPDX declarations, and enforces a
+64 MiB aggregate material limit while collecting it. It fails when a selected
+module lacks legal material, a source license needs explicit policy review, or
+an MPL dependency lacks pinned corresponding source.
 
 The final verified read of `main` immediately before publication is the release
 decision point. A later branch update does not invalidate that decision. A
 failed run before publication can leave an unpublished draft that maintainers
 must inspect and remove before retrying. If a publication request fails, the
 workflow accepts only a positively reconciled valid immutable release and
-otherwise preserves the release for manual reconciliation because deleting an
+removes a positively reconciled invalid public release. Unknown outcomes and
+unpublished drafts are preserved for manual reconciliation because deleting an
 immutable release permanently prevents reuse of its tag name.
 
 Maintainers can validate the external controls with the release control token

@@ -317,19 +317,45 @@ func preflightZip(filename string, size int64, order []string) error {
 		binary.LittleEndian.Uint16(eocd[20:22]) != 0 {
 		return fmt.Errorf("unexpected multi-disk zip or archive comment")
 	}
+	entriesOnDisk := binary.LittleEndian.Uint16(eocd[8:10])
 	entries := binary.LittleEndian.Uint16(eocd[10:12])
-	if binary.LittleEndian.Uint16(eocd[8:10]) != entries || int(entries) != len(order) {
+	centralSize := uint64(binary.LittleEndian.Uint32(eocd[12:16]))
+	centralOffset := uint64(binary.LittleEndian.Uint32(eocd[16:20]))
+	if entriesOnDisk == 0xffff || entries == 0xffff ||
+		centralSize == 0xffff || centralSize == 0xffffffff || centralOffset == 0xffffffff {
+		return fmt.Errorf("ZIP64 release archives are prohibited")
+	}
+	if entriesOnDisk != entries || int(entries) != len(order) {
 		return fmt.Errorf("zip central directory contains %d entries; expected %d", entries, len(order))
 	}
 
-	centralSize := uint64(binary.LittleEndian.Uint32(eocd[12:16]))
 	if centralSize < uint64(len(order))*46 || centralSize > maxZipCentralDirectorySize {
 		return fmt.Errorf("zip central directory size %d falls outside its bounded canonical range", centralSize)
 	}
-	centralOffset := uint64(binary.LittleEndian.Uint32(eocd[16:20]))
 	eocdOffset := uint64(size - int64(len(eocd)))
 	if centralOffset > eocdOffset || centralSize != eocdOffset-centralOffset {
 		return fmt.Errorf("zip central directory does not end at the end-of-central-directory record")
+	}
+	central := make([]byte, int(centralSize))
+	if _, err := file.ReadAt(central, int64(centralOffset)); err != nil {
+		return fmt.Errorf("read zip central directory: %w", err)
+	}
+	cursor := 0
+	for index := range order {
+		if len(central)-cursor < 46 || binary.LittleEndian.Uint32(central[cursor:cursor+4]) != 0x02014b50 {
+			return fmt.Errorf("zip central directory record %d is missing or malformed", index+1)
+		}
+		nameLength := int(binary.LittleEndian.Uint16(central[cursor+28 : cursor+30]))
+		extraLength := int(binary.LittleEndian.Uint16(central[cursor+30 : cursor+32]))
+		commentLength := int(binary.LittleEndian.Uint16(central[cursor+32 : cursor+34]))
+		recordLength := 46 + nameLength + extraLength + commentLength
+		if recordLength > len(central)-cursor {
+			return fmt.Errorf("zip central directory record %d exceeds the bounded directory", index+1)
+		}
+		cursor += recordLength
+	}
+	if cursor != len(central) {
+		return fmt.Errorf("zip central directory contains data after %d records", len(order))
 	}
 	return nil
 }
