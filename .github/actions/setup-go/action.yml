@@ -1,0 +1,87 @@
+name: Set up authenticated Go
+description: Install the pinned Go toolchain after authenticating its official archive
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve Go archive
+      id: archive
+      shell: bash
+      run: |
+        set -euo pipefail
+        IFS=$'\t' read -r version archive checksum < <(
+          bash "$GITHUB_WORKSPACE/scripts/go-toolchain.sh" "$RUNNER_OS" "$RUNNER_ARCH"
+        )
+        printf 'version=%s\narchive=%s\nchecksum=%s\n' \
+          "$version" "$archive" "$checksum" >>"$GITHUB_OUTPUT"
+
+    - name: Install Go on Linux or macOS
+      if: runner.os != 'Windows'
+      shell: bash
+      env:
+        GO_ARCHIVE: ${{ steps.archive.outputs.archive }}
+        GO_ARCHIVE_CHECKSUM: ${{ steps.archive.outputs.checksum }}
+        GO_VERSION: ${{ steps.archive.outputs.version }}
+      run: |
+        set -euo pipefail
+        archive_path="$RUNNER_TEMP/$GO_ARCHIVE"
+        install_parent="$RUNNER_TEMP/authenticated-go"
+        trap 'rm -f "$archive_path"' EXIT
+
+        curl \
+          --fail \
+          --location \
+          --proto '=https' \
+          --proto-redir '=https' \
+          --retry 3 \
+          --retry-all-errors \
+          --output "$archive_path" \
+          "https://go.dev/dl/$GO_ARCHIVE"
+
+        bash "$GITHUB_WORKSPACE/scripts/verify-sha256.sh" \
+          "$archive_path" "$GO_ARCHIVE_CHECKSUM"
+
+        rm -rf "$install_parent"
+        mkdir -p "$install_parent"
+        tar -xzf "$archive_path" -C "$install_parent"
+        go_root="$install_parent/go"
+        test "$("$go_root/bin/go" env GOVERSION)" = "go$GO_VERSION"
+        printf '%s\n' "$go_root/bin" >>"$GITHUB_PATH"
+        printf 'GOROOT=%s\n' "$go_root" >>"$GITHUB_ENV"
+
+    - name: Install Go on Windows
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        GO_ARCHIVE: ${{ steps.archive.outputs.archive }}
+        GO_ARCHIVE_CHECKSUM: ${{ steps.archive.outputs.checksum }}
+        GO_VERSION: ${{ steps.archive.outputs.version }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        $archivePath = Join-Path $env:RUNNER_TEMP $env:GO_ARCHIVE
+        $installParent = Join-Path $env:RUNNER_TEMP "authenticated-go"
+
+        try {
+          Invoke-WebRequest `
+            -Uri "https://go.dev/dl/$env:GO_ARCHIVE" `
+            -OutFile $archivePath `
+            -MaximumRetryCount 3
+
+          & bash "$env:GITHUB_WORKSPACE/scripts/verify-sha256.sh" `
+            $archivePath $env:GO_ARCHIVE_CHECKSUM
+          if ($LASTEXITCODE -ne 0) { throw "Go archive authentication failed" }
+
+          Remove-Item -Recurse -Force $installParent -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $installParent | Out-Null
+          Expand-Archive -LiteralPath $archivePath -DestinationPath $installParent
+          $goRoot = Join-Path $installParent "go"
+          $installedVersion = & (Join-Path $goRoot "bin/go.exe") env GOVERSION
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($installedVersion -ne "go$env:GO_VERSION") {
+            throw "unexpected installed Go version: $installedVersion"
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $goRoot "bin")
+          Add-Content -Path $env:GITHUB_ENV -Value "GOROOT=$goRoot"
+        } finally {
+          Remove-Item -Force $archivePath -ErrorAction SilentlyContinue
+        }

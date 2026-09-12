@@ -4,6 +4,7 @@ go 1.26
 
 require (
 	github.com/coder/websocket v1.8.15
+	github.com/google/licensecheck v0.3.1
 	go.opentelemetry.io/collector/component v1.65.0
 	go.opentelemetry.io/collector/component/componentstatus v0.159.0
 	go.opentelemetry.io/collector/component/componenttest v0.159.0

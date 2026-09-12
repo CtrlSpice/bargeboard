@@ -25,6 +25,94 @@ The shipped `config.yaml` enables F1 Live Timing and listens for OTLP/gRPC on
 `localhost:4317` and OTLP/HTTP on `localhost:4318`. Run `make components` to
 inspect the components compiled into the distribution.
 
+## Releases
+
+GitHub releases provide native `bargeboard` archives for Linux and macOS on
+amd64 and arm64, and for Windows on amd64. Each archive includes the binary,
+`config.yaml`, this README, and the Apache 2.0 license. The release also includes
+SHA-256 checksums and an SPDX SBOM for every archive.
+
+After downloading all assets for a release, verify them before running the
+binary:
+
+```bash
+tag=v1.2.3
+gh release verify "$tag" --repo CtrlSpice/bargeboard
+for asset in checksums.txt bargeboard_*; do
+  gh release verify-asset "$tag" "$asset" --repo CtrlSpice/bargeboard
+done
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum --check checksums.txt
+else
+  shasum -a 256 --check checksums.txt
+fi
+```
+
+The release workflow runs trusted code from `main` after a maintainer dispatches
+a signed annotated `v0` or `v1` SemVer tag such as `v1.2.3`. Build metadata is
+not accepted because Go cannot represent it in this module's embedded version.
+The tag must point to the current `main` commit, that commit must have passed the
+protected `check` workflow, and the configured release controls must still match
+repository policy. A required
+reviewer then approves the protected `release` environment. GoReleaser prepares
+the release without uploading it, the workflow independently reproduces and
+verifies every subject, and only then does it upload, reverify, and publish the
+draft as an immutable release with the tag as its title, empty notes, and no
+change to GitHub's latest-release selection. CI authenticates the official Go
+1.26.8, Syft, GoReleaser Pro, and actionlint archives against SHA-256 digests
+pinned in the repository before extracting or executing them. Tags are limited
+to 131 ASCII characters so every wrapped archive path has one canonical USTAR
+representation.
+
+Every archive also contains `THIRD_PARTY_NOTICES`, generated from the union of
+packages selected for all supported targets, and exact pinned source payloads
+for MPL-covered module and embedded data dependencies. That includes the Public
+Suffix List revision compiled into `golang.org/x/net/publicsuffix`. The
+generator includes nested license, notice, patent, and selected-source
+attribution text, classifies complete legal texts and selected-source license
+assertions against an explicit release policy, and enforces a 64 MiB aggregate
+material limit while collecting it. The complete canonical notices output is
+bound to a reviewed SHA-256 value, so any dependency, attribution, or legal-text
+change requires explicit review. Generation also fails on recognized additional
+license terms, when a selected module lacks legal material, when a source license
+needs explicit policy review, or when an MPL dependency lacks pinned corresponding
+source.
+
+The final verified read of `main` immediately before publication is the release
+decision point. A later branch update does not invalidate that decision. A
+failed run before publication can leave an unpublished draft that maintainers
+must inspect and remove before retrying. If a publication request fails, the
+workflow accepts only a positively reconciled valid immutable release and
+removes a positively reconciled invalid public release. Unknown outcomes and
+unpublished drafts are preserved for manual reconciliation because deleting an
+immutable release permanently prevents reuse of its tag name.
+
+Maintainers can validate the external controls with the release control token
+before dispatching a tag:
+
+```bash
+GITHUB_REPOSITORY=CtrlSpice/bargeboard bash scripts/verify-release-controls.sh
+```
+
+After creating the signed tag at current `main`, dispatch the workflow through
+the repository API so GitHub executes the workflow definition from protected
+`main`, not from the tagged commit:
+
+```bash
+tag=v1.2.3
+gh api --method POST repos/CtrlSpice/bargeboard/dispatches \
+  --raw-field event_type=release \
+  --field "client_payload[tag]=$tag"
+```
+
+The protected environment supplies `GORELEASER_KEY` and a repository-scoped
+`RELEASE_CONTROL_TOKEN`. GitHub only discloses ruleset bypass actors to callers
+with ruleset write access, so that token needs repository Administration write
+permission even though the workflow uses it only for `GET` requests. Keep both
+secrets in the `release` environment, not at repository scope.
+The environment deployment policy must permit only the `main` branch; the
+requested release tag is validated as data inside that trusted workflow.
+
 ### F1 Live Timing
 
 The Collector reads each user's own F1 TV `subscriptionToken` from
@@ -35,6 +123,19 @@ permissions before running the Collector. After storing the token:
 ```bash
 chmod 600 "$HOME/.config/bargeboard/f1tv-token"
 make run
+```
+
+The packaged Windows configuration uses the same `HOME`-relative path.
+PowerShell does not normally export its `$HOME` value as an environment
+variable, so set it for the Collector process and create the token file in the
+same profile before starting `bargeboard.exe`:
+
+```powershell
+$tokenDirectory = Join-Path $HOME ".config\bargeboard"
+New-Item -ItemType Directory -Force $tokenDirectory | Out-Null
+notepad (Join-Path $tokenDirectory "f1tv-token")
+$env:HOME = $HOME
+.\bargeboard.exe --config config.yaml
 ```
 
 The token file should be readable only by its owner. Never put a token directly
@@ -197,3 +298,7 @@ The Python prototype lives at the `last-python` git tag if you want to compare.
 
 - [OpenF1](https://openf1.org/) for free public access to historical F1 timing + telemetry data from 2023 onwards.
 - [@anthropic-ai/claude-code](https://docs.claude.com/claude-code) for being the world's most patient pair-programmer through this rewrite.
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).

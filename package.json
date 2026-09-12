@@ -2,6 +2,7 @@
   "name": "bargeboard",
   "version": "0.2.0",
   "description": "Replay F1 race sessions as OpenTelemetry traces, metrics, and logs.",
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "bargeboard": "./dist/index.js"

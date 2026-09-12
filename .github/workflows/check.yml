@@ -29,10 +29,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
+        uses: ./.github/actions/setup-go
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -108,10 +105,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: false
+        uses: ./.github/actions/setup-go
 
       - name: Build distribution
         env:
@@ -120,11 +114,145 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: go build -mod=readonly -trimpath .
 
+      - name: Validate Windows configuration
+        if: matrix.goos == 'windows'
+        shell: pwsh
+        run: |
+          $profileHome = $HOME
+          Remove-Item Env:HOME -ErrorAction SilentlyContinue
+          $env:HOME = $profileHome
+          go test -mod=readonly -run '^TestShippedConfigResolvesTokenFileFromHome$' .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\bargeboard.exe validate --config config.yaml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  package:
+    name: release package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: ./.github/actions/setup-go
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Install release tools
+        uses: ./.github/actions/setup-release-tools
+        with:
+          actionlint: "true"
+
+      - name: Verify packaging tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' \
+            e6a6c163ef25bcaee8454b4943adffcad748a4dd6090d4e9f39ced5a72ee38d7 \
+            "$(command -v goreleaser)" | sha256sum --check --strict
+          printf '%s  %s\n' \
+            abca2def61de9952fa06d3977bb1e064818facb9badfce502b450d3d6846a91f \
+            "$(command -v syft)" | sha256sum --check --strict
+          test "$(go version)" = "go version go1.26.8 linux/amd64"
+          actionlint -version
+
+      - name: Check workflow definitions
+        run: actionlint -color
+
+      - name: Test release-ref validation
+        run: |
+          bash scripts/build-release_test.sh
+          bash scripts/generate-release-sbom_test.sh
+          bash scripts/go-toolchain_test.sh
+          bash scripts/release-workflow_test.sh
+          bash scripts/verify-sha256_test.sh
+          bash scripts/validate-release-ref_test.sh
+          bash scripts/verify-release-ref_test.sh
+          bash scripts/validate-release-controls_test.sh
+          bash scripts/validate-release-binary_test.sh
+          node --test scripts/publish-release_test.cjs
+
+      - name: Check release scripts
+        run: bash -n scripts/*.sh
+
+      - name: Check GoReleaser configuration
+        run: goreleaser check
+
+      - name: Build release snapshot
+        run: goreleaser release --snapshot --clean --skip=publish
+
+      - name: Record release subject digests
+        id: first_build
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            printf 'digests<<EOF\n'
+            sha256sum \
+              build/release/*.tar.gz \
+              build/release/*.zip \
+              build/release/*.sbom.spdx.json \
+              build/release/checksums.txt
+            printf 'EOF\n'
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Clone independent reproducibility source
+        env:
+          REPRODUCIBILITY_ROOT: ${{ runner.temp }}/bargeboard-repro-source
+        run: |
+          git clone --no-hardlinks "$GITHUB_WORKSPACE" "$REPRODUCIBILITY_ROOT"
+          git -C "$REPRODUCIBILITY_ROOT" checkout --detach "$GITHUB_SHA"
+
+      - name: Rebuild release snapshot
+        env:
+          GOCACHE: ${{ runner.temp }}/bargeboard-repro-go-build
+          GOMODCACHE: ${{ runner.temp }}/bargeboard-repro-go-mod
+        working-directory: ${{ runner.temp }}/bargeboard-repro-source
+        run: |
+          touch -t 200001010000 LICENSE README.md config.yaml
+          goreleaser release --snapshot --clean --skip=publish
+
+      - name: Check reproducible release subjects
+        env:
+          FIRST_BUILD_DIGESTS: ${{ steps.first_build.outputs.digests }}
+        shell: bash
+        working-directory: ${{ runner.temp }}/bargeboard-repro-source
+        run: |
+          set -euo pipefail
+          current="$(sha256sum \
+            build/release/*.tar.gz \
+            build/release/*.zip \
+            build/release/*.sbom.spdx.json \
+            build/release/checksums.txt)"
+          test "$current" = "$FIRST_BUILD_DIGESTS"
+
+      - name: Test release artifacts
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+          EXPECTED_GO_VERSION: go1.26.8
+          EXPECTED_VCS_MODIFIED: "false"
+        run: bash scripts/verify-release-artifacts_test.sh build/release
+
+      - name: Check module files are unchanged
+        run: |
+          git diff --exit-code -- go.mod go.sum
+          git diff --cached --exit-code -- go.mod go.sum
+
   check:
     name: check
     needs:
       - quality
       - release_build
+      - package
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -133,8 +261,9 @@ jobs:
         env:
           QUALITY_RESULT: ${{ needs.quality.result }}
           RELEASE_BUILD_RESULT: ${{ needs.release_build.result }}
+          PACKAGE_RESULT: ${{ needs.package.result }}
         run: |
-          if [ "$QUALITY_RESULT" != "success" ] || [ "$RELEASE_BUILD_RESULT" != "success" ]; then
-            printf 'quality=%s\nrelease_build=%s\n' "$QUALITY_RESULT" "$RELEASE_BUILD_RESULT"
+          if [ "$QUALITY_RESULT" != "success" ] || [ "$RELEASE_BUILD_RESULT" != "success" ] || [ "$PACKAGE_RESULT" != "success" ]; then
+            printf 'quality=%s\nrelease_build=%s\npackage=%s\n' "$QUALITY_RESULT" "$RELEASE_BUILD_RESULT" "$PACKAGE_RESULT"
             exit 1
           fi
