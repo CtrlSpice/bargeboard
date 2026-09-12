@@ -57,20 +57,26 @@ repository policy. A required
 reviewer then approves the protected `release` environment. GoReleaser prepares
 the release without uploading it, the workflow independently reproduces and
 verifies every subject, and only then does it upload, reverify, and publish the
-draft as an immutable release. CI authenticates the official Go 1.26.8, Syft,
-GoReleaser Pro, and actionlint archives against SHA-256 digests pinned in the
-repository before extracting or executing them. Tags are limited to 131 ASCII
-characters so every wrapped archive path has one canonical USTAR representation.
+draft as an immutable release with the tag as its title, empty notes, and no
+change to GitHub's latest-release selection. CI authenticates the official Go
+1.26.8, Syft, GoReleaser Pro, and actionlint archives against SHA-256 digests
+pinned in the repository before extracting or executing them. Tags are limited
+to 131 ASCII characters so every wrapped archive path has one canonical USTAR
+representation.
 
 Every archive also contains `THIRD_PARTY_NOTICES`, generated from the union of
 packages selected for all supported targets, and exact pinned source payloads
 for MPL-covered module and embedded data dependencies. That includes the Public
 Suffix List revision compiled into `golang.org/x/net/publicsuffix`. The
 generator includes nested license, notice, patent, and selected-source
-attribution text, classifies selected-source SPDX declarations, and enforces a
-64 MiB aggregate material limit while collecting it. It fails when a selected
-module lacks legal material, a source license needs explicit policy review, or
-an MPL dependency lacks pinned corresponding source.
+attribution text, classifies complete legal texts and selected-source license
+assertions against an explicit release policy, and enforces a 64 MiB aggregate
+material limit while collecting it. The complete canonical notices output is
+bound to a reviewed SHA-256 value, so any dependency, attribution, or legal-text
+change requires explicit review. Generation also fails on recognized additional
+license terms, when a selected module lacks legal material, when a source license
+needs explicit policy review, or when an MPL dependency lacks pinned corresponding
+source.
 
 The final verified read of `main` immediately before publication is the release
 decision point. A later branch update does not invalidate that decision. A

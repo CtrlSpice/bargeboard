@@ -2,14 +2,54 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
+
+const testMITLicense = `MIT License
+
+Copyright (c) 2026 Example Authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+`
+
+const testCommonsClause = `
+The Software is provided to you by the Licensor under the License, as defined
+below, subject to the following condition. Without limiting other conditions in
+the License, the grant of rights under the License will not include, and the
+License does not grant to you, the right to Sell the Software. For purposes of
+the foregoing, "Sell" means practicing any or all of the rights granted to you
+under the License to provide to third parties, for a fee or other consideration,
+a product or service that consists, entirely or substantially, of the Software
+or the functionality of the Software. Any license notice or attribution required
+by the License must also include this Commons Cause License Condition notice.
+`
 
 func TestIsLegalFilename(t *testing.T) {
 	for _, name := range []string{"LICENSE", "LICENSE.md", "LICENCE-MIT", "NOTICE.txt", "PATENTS", "COPYRIGHT", "AUTHORS"} {
@@ -23,21 +63,78 @@ func TestIsLegalFilename(t *testing.T) {
 	if !isLicensePath("LICENSES/Apache-2.0.txt") || isLicensePath("NOTICE") {
 		t.Fatal("license path classification is incorrect")
 	}
-	for _, name := range []string{"licensecheck.go", "notices.go", "README.md"} {
+	for _, name := range []string{"license.go", "license_test.go", "licensecheck.go", "LICENSE.py", "LICENSE.f90", "notices.go", "README.md"} {
 		if isLegalFilename(name) {
 			t.Errorf("isLegalFilename(%q) = true", name)
+		}
+	}
+	for _, name := range []string{"LICENSES/license.go", "internal/licenses/parser.go"} {
+		if isLegalPath(name) {
+			t.Errorf("isLegalPath(%q) = true", name)
 		}
 	}
 }
 
 func TestValidateLicenseText(t *testing.T) {
-	if err := validateLicenseText([]byte("Permission is hereby granted, free of charge")); err != nil {
+	if _, err := validateLicenseText([]byte(testMITLicense)); err != nil {
 		t.Fatalf("validate permissive license: %v", err)
 	}
-	for _, text := range []string{"unknown terms", "GNU General Public License, version 3"} {
-		if err := validateLicenseText([]byte(text)); err == nil {
+	for _, text := range []string{
+		"unknown terms",
+		"GNU General Public License, version 3",
+		testMITLicense + testCommonsClause,
+		testMITLicense + "\nNo commercial use.\n",
+		strings.Replace(testMITLicense, "this software and associated", "this software commercial use is prohibited and associated", 1),
+	} {
+		if _, err := validateLicenseText([]byte(text)); err == nil {
 			t.Fatalf("validateLicenseText(%q) succeeded", text)
 		}
+	}
+	requiresSource, err := validateLicenseText([]byte("https://opensource.org/licenses/MPL-2.0\n"))
+	if err != nil || !requiresSource {
+		t.Fatalf("MPL URL classification = (%v, %v)", requiresSource, err)
+	}
+	requiresSource, err = validateLicenseText([]byte("http://www.mozilla.org/MPL/2.0/\n"))
+	if err != nil || !requiresSource {
+		t.Fatalf("approved MPL reference classification = (%v, %v)", requiresSource, err)
+	}
+}
+
+func TestValidateNoticesDigest(t *testing.T) {
+	notices := []byte("reviewed notices\n")
+	digest := sha256.Sum256(notices)
+	expected := hex.EncodeToString(digest[:])
+	if err := validateNoticesDigest(notices, expected); err != nil {
+		t.Fatalf("validate approved notices: %v", err)
+	}
+	for _, tt := range []struct {
+		name     string
+		notices  []byte
+		expected string
+	}{
+		{name: "changed notices", notices: []byte("changed notices\n"), expected: expected},
+		{name: "short digest", notices: notices, expected: "00"},
+		{name: "invalid digest", notices: notices, expected: strings.Repeat("z", sha256.Size*2)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validateNoticesDigest(tt.notices, tt.expected); err == nil {
+				t.Fatal("validateNoticesDigest succeeded")
+			}
+		})
+	}
+}
+
+func TestRequiresMPLSource(t *testing.T) {
+	for _, text := range []string{
+		"Mozilla Public License Version 2.0",
+		"https://opensource.org/licenses/MPL-2.0",
+	} {
+		if !requiresMPLSource([]byte(text)) {
+			t.Fatalf("requiresMPLSource(%q) = false", text)
+		}
+	}
+	if requiresMPLSource([]byte("MIT License")) {
+		t.Fatal("requiresMPLSource accepted MIT")
 	}
 }
 
@@ -49,9 +146,15 @@ func TestClassifySourceLicense(t *testing.T) {
 		wantError      bool
 	}{
 		{name: "permissive SPDX", notice: "// SPDX-License-Identifier: Apache-2.0\n"},
+		{name: "permissive provenance", notice: "// Provenance-includes-license: Apache-2.0\n"},
 		{name: "MPL SPDX", notice: "// SPDX-License-Identifier: MPL-2.0\n", requiresSource: true},
+		{name: "BSD reference", notice: "// Copyright 2026 Example Authors\n// Use of this source code is governed by a BSD-style\n// license that can be found in the LICENSE file.\n"},
 		{name: "GPL SPDX", notice: "// SPDX-License-Identifier: GPL-3.0-only\n", wantError: true},
 		{name: "unknown SPDX", notice: "// SPDX-License-Identifier: LicenseRef-Unknown\n", wantError: true},
+		{name: "unknown provenance", notice: "// Provenance-includes-license: LicenseRef-Unknown\n", wantError: true},
+		{name: "unknown prose", notice: "// Licensed under the Example Commercial License.\n", wantError: true},
+		{name: "additive restriction", notice: testMITLicense + "\nAdditional use requires written permission.\n", wantError: true},
+		{name: "implicit restriction", notice: "// Copyright 2026 Example Authors\n// Redistribution of this file is prohibited.\n", wantError: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -63,6 +166,30 @@ func TestClassifySourceLicense(t *testing.T) {
 	}
 }
 
+func TestSourceNoticesKeepsLeadingAttributionGroupsOnly(t *testing.T) {
+	filename := filepath.Join(t.TempDir(), "example.h")
+	contents := []byte("// Copyright 2026 Example Authors\n// Licensed under the MIT License.\n\n// Package documentation.\n\n// Copyright 2025 Upstream Authors\n// Derived from the upstream implementation.\n\n#include <stdint.h>\n")
+	if err := os.WriteFile(filename, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := sourceNotices(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"// Copyright 2026 Example Authors\n// Licensed under the MIT License.\n\n",
+		"// Copyright 2025 Upstream Authors\n// Derived from the upstream implementation.\n\n",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("sourceNotices() returned %d notices, want %d", len(got), len(want))
+	}
+	for index := range want {
+		if string(got[index]) != want[index] {
+			t.Fatalf("sourceNotices()[%d] = %q, want %q", index, got[index], want[index])
+		}
+	}
+}
+
 func TestBoundedNoticeMaterialSize(t *testing.T) {
 	size, err := boundedNoticeMaterialSize(maxNoticeMaterialSize-1, 1)
 	if err != nil || size != maxNoticeMaterialSize {
@@ -71,6 +198,138 @@ func TestBoundedNoticeMaterialSize(t *testing.T) {
 	size, err = boundedNoticeMaterialSize(size, 1)
 	if err == nil || size != maxNoticeMaterialSize {
 		t.Fatalf("material over limit = (%d, %v)", size, err)
+	}
+}
+
+func TestDecodePackageCommandTerminatesMalformedProducer(t *testing.T) {
+	deadline, stopDeadline := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stopDeadline()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMalformedPackageProducer$")
+	command.WaitDelay = packageCommandWait
+	command.Env = append(os.Environ(), "BARGEBOARD_MALFORMED_PACKAGE_PRODUCER=blocked")
+	result := make(chan error, 1)
+	go func() {
+		result <- decodePackageCommand(command, make(map[string]*component), cancel)
+	}()
+	var err error
+	select {
+	case err = <-result:
+	case <-deadline.Done():
+		t.Fatalf("decodePackageCommand waited for the malformed producer: %v", deadline.Err())
+	}
+	if err == nil || !strings.Contains(err.Error(), "decode output") {
+		t.Fatalf("decodePackageCommand() error = %v", err)
+	}
+	if command.ProcessState == nil {
+		t.Fatal("decodePackageCommand did not reap the malformed producer")
+	}
+}
+
+func TestDecodePackageCommandBoundsInheritedPipes(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
+	t.Cleanup(func() {
+		contents, err := os.ReadFile(pidFile)
+		if err != nil {
+			return
+		}
+		pid, err := strconv.Atoi(string(contents))
+		if err != nil {
+			return
+		}
+		if process, err := os.FindProcess(pid); err == nil {
+			_ = process.Kill()
+		}
+	})
+	deadline, stopDeadline := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stopDeadline()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMalformedPackageProducer$")
+	command.WaitDelay = 100 * time.Millisecond
+	command.Env = append(
+		os.Environ(),
+		"BARGEBOARD_MALFORMED_PACKAGE_PRODUCER=inherited-pipe",
+		"BARGEBOARD_GRANDCHILD_PID_FILE="+pidFile,
+	)
+	result := make(chan error, 1)
+	go func() {
+		result <- decodePackageCommand(command, make(map[string]*component), cancel)
+	}()
+	select {
+	case err := <-result:
+		if err == nil || !strings.Contains(err.Error(), "decode output") {
+			t.Fatalf("decodePackageCommand() error = %v", err)
+		}
+		if command.ProcessState == nil {
+			t.Fatal("decodePackageCommand did not reap the malformed producer")
+		}
+	case <-deadline.Done():
+		t.Fatalf("decodePackageCommand waited for an inherited pipe: %v", deadline.Err())
+	}
+}
+
+func TestDecodePackageCommandHonorsContextDeadline(t *testing.T) {
+	deadline, stopDeadline := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stopDeadline()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMalformedPackageProducer$")
+	command.WaitDelay = 100 * time.Millisecond
+	command.Env = append(os.Environ(), "BARGEBOARD_MALFORMED_PACKAGE_PRODUCER=silent")
+	result := make(chan error, 1)
+	go func() {
+		result <- decodePackageCommand(command, make(map[string]*component), cancel)
+	}()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("decodePackageCommand succeeded after its context deadline")
+		}
+		if ctx.Err() != context.DeadlineExceeded {
+			t.Fatalf("command context error = %v", ctx.Err())
+		}
+		if command.ProcessState == nil {
+			t.Fatal("decodePackageCommand did not reap the silent producer")
+		}
+	case <-deadline.Done():
+		t.Fatalf("decodePackageCommand ignored its context deadline: %v", deadline.Err())
+	}
+}
+
+func TestMalformedPackageProducer(t *testing.T) {
+	mode := os.Getenv("BARGEBOARD_MALFORMED_PACKAGE_PRODUCER")
+	if mode == "" {
+		return
+	}
+	if mode == "grandchild" {
+		for {
+			runtime.Gosched()
+		}
+	}
+	if mode == "silent" {
+		for {
+			runtime.Gosched()
+		}
+	}
+	if mode == "inherited-pipe" {
+		grandchild := exec.Command(os.Args[0], "-test.run=^TestMalformedPackageProducer$")
+		grandchild.Env = append(os.Environ(), "BARGEBOARD_MALFORMED_PACKAGE_PRODUCER=grandchild")
+		grandchild.Stdout = os.Stderr
+		grandchild.Stderr = os.Stderr
+		if err := grandchild.Start(); err != nil {
+			os.Exit(2)
+		}
+		if err := os.WriteFile(os.Getenv("BARGEBOARD_GRANDCHILD_PID_FILE"), []byte(strconv.Itoa(grandchild.Process.Pid)), 0o600); err != nil {
+			os.Exit(2)
+		}
+	}
+	if _, err := os.Stdout.Write([]byte("}\n")); err != nil {
+		os.Exit(2)
+	}
+	for {
+		runtime.Gosched()
 	}
 }
 
@@ -259,7 +518,7 @@ func TestCollectMaterialsIncludesNestedLicenseFiles(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, "LICENSES"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	license := "Permission is hereby granted, free of charge, to use this example.\n"
+	license := testMITLicense
 	if err := os.WriteFile(filepath.Join(root, "LICENSES", "Example.txt"), []byte(license), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +544,7 @@ func TestCollectMaterialsClassifiesSelectedSourceLicenses(t *testing.T) {
 		root := t.TempDir()
 		if err := os.WriteFile(
 			filepath.Join(root, "LICENSE"),
-			[]byte("Permission is hereby granted, free of charge, to use this example.\n"),
+			[]byte(testMITLicense),
 			0o600,
 		); err != nil {
 			t.Fatal(err)
@@ -326,6 +585,36 @@ func TestCollectMaterialsClassifiesSelectedSourceLicenses(t *testing.T) {
 			t.Fatalf("selected-source GPL error = %v", err)
 		}
 	})
+}
+
+func TestCollectMaterialsPropagatesMPLFromLicenseFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(root, "LICENSE"),
+		[]byte("https://opensource.org/licenses/MPL-2.0\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	current := &component{
+		path:       "example.com/module",
+		version:    "v1.0.0",
+		sum:        "h1:example",
+		root:       root,
+		sourceFile: map[string]struct{}{},
+		materials:  map[string][]byte{},
+	}
+	components := map[string]*component{"example.com/module@v1.0.0": current}
+	if err := collectMaterials(components); err != nil {
+		t.Fatal(err)
+	}
+	if !current.mpl {
+		t.Fatal("MPL license file did not mark the component")
+	}
+	if err := copyRequiredSources(components, t.TempDir()); err == nil ||
+		!strings.Contains(err.Error(), "lacks a pinned source archive") {
+		t.Fatalf("unpinned license-file MPL error = %v", err)
+	}
 }
 
 func TestMaterialReadersRejectSymlinks(t *testing.T) {

@@ -12,6 +12,10 @@ function isPrerelease(tag) {
   return tag.split("+", 1)[0].includes("-");
 }
 
+function hasExpectedReleaseMetadata(release, tag) {
+  return release.name === tag && (release.body === "" || release.body === null);
+}
+
 function selectDraft(releases, tag) {
   const matches = releases.filter((release) => release.tag_name === tag);
   if (matches.length !== 1) {
@@ -23,6 +27,9 @@ function selectDraft(releases, tag) {
   }
   if (release.prerelease !== isPrerelease(tag)) {
     throw new Error(`release ${tag} has an unexpected prerelease setting`);
+  }
+  if (!hasExpectedReleaseMetadata(release, tag)) {
+    throw new Error(`release ${tag} has unexpected title or notes`);
   }
   return release;
 }
@@ -140,6 +147,7 @@ function verifyPublishedRelease(release, tag) {
   if (
     release.tag_name !== tag ||
     release.draft !== false ||
+    !hasExpectedReleaseMetadata(release, tag) ||
     typeof release.published_at !== "string" ||
     release.published_at.length === 0
   ) {
@@ -155,6 +163,8 @@ function hasCompletePublicationEvidence(release) {
     release !== null &&
     typeof release === "object" &&
     typeof release.tag_name === "string" &&
+    typeof release.name === "string" &&
+    (typeof release.body === "string" || release.body === null) &&
     typeof release.draft === "boolean" &&
     typeof release.published_at === "string" &&
     release.published_at.length > 0 &&
@@ -228,7 +238,11 @@ async function publishRelease({
       owner,
       repo,
       release_id: release.id,
+      name: tag,
+      body: "",
       draft: false,
+      prerelease: isPrerelease(tag),
+      make_latest: "false",
       headers: { "X-GitHub-Api-Version": "2026-03-10" },
     });
   } catch (error) {

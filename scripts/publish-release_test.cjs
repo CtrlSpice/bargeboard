@@ -48,6 +48,8 @@ function releaseFixture(t) {
   const release = {
     id: 7,
     tag_name: tag,
+    name: tag,
+    body: "",
     draft: true,
     published_at: null,
     prerelease: false,
@@ -98,8 +100,16 @@ test("classifies stable and prerelease tags", () => {
 });
 
 test("selects exactly one matching unpublished draft", () => {
-  const release = { tag_name: tag, draft: true, published_at: null, prerelease: false };
+  const release = {
+    tag_name: tag,
+    name: tag,
+    body: "",
+    draft: true,
+    published_at: null,
+    prerelease: false,
+  };
   assert.equal(selectDraft([release], tag), release);
+  assert.equal(selectDraft([{ ...release, body: null }], tag).body, null);
   assert.throws(() => selectDraft([], tag), /expected one release/);
   assert.throws(() => selectDraft([release, release], tag), /found 2/);
   assert.throws(
@@ -110,16 +120,27 @@ test("selects exactly one matching unpublished draft", () => {
     () => selectDraft([{ ...release, prerelease: true }], tag),
     /unexpected prerelease setting/,
   );
+  assert.throws(
+    () => selectDraft([{ ...release, name: "changed" }], tag),
+    /unexpected title or notes/,
+  );
+  assert.throws(
+    () => selectDraft([{ ...release, body: "changed" }], tag),
+    /unexpected title or notes/,
+  );
 });
 
 test("validates the final published state", () => {
   const release = {
     tag_name: tag,
+    name: tag,
+    body: "",
     draft: false,
     published_at: "2026-09-09T00:00:00Z",
     prerelease: false,
   };
   assert.doesNotThrow(() => verifyPublishedRelease(release, tag));
+  assert.doesNotThrow(() => verifyPublishedRelease({ ...release, body: null }, tag));
   assert.throws(
     () => verifyPublishedRelease({ ...release, draft: true }, tag),
     /not published in the expected state/,
@@ -127,6 +148,14 @@ test("validates the final published state", () => {
   assert.throws(
     () => verifyPublishedRelease({ ...release, prerelease: true }, tag),
     /unexpected prerelease setting/,
+  );
+  assert.throws(
+    () => verifyPublishedRelease({ ...release, name: "changed" }, tag),
+    /not published in the expected state/,
+  );
+  assert.throws(
+    () => verifyPublishedRelease({ ...release, body: "changed" }, tag),
+    /not published in the expected state/,
   );
 });
 
@@ -298,7 +327,19 @@ test("publishes one verified immutable draft", async (t) => {
     releaseDir,
   });
   assert.equal(url, "https://example.test/release");
-  assert.equal(calls.published.length, 1);
+  assert.deepEqual(calls.published, [
+    {
+      owner: "CtrlSpice",
+      repo: "bargeboard",
+      release_id: 7,
+      name: tag,
+      body: "",
+      draft: false,
+      prerelease: false,
+      make_latest: "false",
+      headers: { "X-GitHub-Api-Version": "2026-03-10" },
+    },
+  ]);
   assert.deepEqual(calls.deleted, []);
 });
 
@@ -380,6 +421,28 @@ test("refuses to publish a replacement draft with the same tag", async (t) => {
   assert.deepEqual(calls.published, []);
 });
 
+test("refuses to publish a draft with changed title or notes", async (t) => {
+  for (const mutation of [{ name: "changed" }, { body: "changed" }]) {
+    const { assets, calls, github, release, releaseDir } = releaseFixture(t);
+    github.rest.repos.getRelease = async () => ({
+      data: { ...release, ...mutation, assets },
+    });
+    await assert.rejects(
+      publishRelease({
+        github,
+        owner: "CtrlSpice",
+        repo: "bargeboard",
+        tag,
+        releaseCommit: commit,
+        releaseDir,
+      }),
+      /unexpected title or notes/,
+    );
+    assert.deepEqual(calls.published, []);
+    assert.deepEqual(calls.deleted, []);
+  }
+});
+
 test("detects changed assets in the publication response", async (t) => {
   const { assets, calls, github, release, releaseDir } = releaseFixture(t);
   github.request = async () => ({
@@ -421,6 +484,12 @@ test("preserves incomplete successful publication evidence", async (t) => {
     },
     (published) => {
       delete published.html_url;
+    },
+    (published) => {
+      delete published.name;
+    },
+    (published) => {
+      delete published.body;
     },
     (published) => {
       published.assets[0] = { ...published.assets[0], digest: null };
@@ -636,6 +705,16 @@ test("removes a known-invalid public release after a lost response", async (t) =
         ],
       }),
       message: "draft asset does not match local output: subject-0.txt",
+    },
+    {
+      name: "changed title",
+      mutate: (published) => ({ ...published, name: "changed" }),
+      message: "release v1.2.3 was not published in the expected state",
+    },
+    {
+      name: "changed notes",
+      mutate: (published) => ({ ...published, body: "changed" }),
+      message: "release v1.2.3 was not published in the expected state",
     },
   ];
   for (const tt of cases) {
