@@ -53,12 +53,14 @@ a signed annotated `v0` or `v1` SemVer tag such as `v1.2.3`. Build metadata is
 not accepted because Go cannot represent it in this module's embedded version.
 The tag must point to the current `main` commit, that commit must have passed the
 protected `check` workflow, and the configured release controls must still match
-repository policy. A required
-reviewer then approves the protected `release` environment. GoReleaser prepares
-the release without uploading it, the workflow independently reproduces and
-verifies every subject, and only then does it upload, reverify, and publish the
-draft as an immutable release with the tag as its title, empty notes, and no
-change to GitHub's latest-release selection. CI authenticates the official Go
+repository policy. A required reviewer then approves the protected `release`
+environment. GoReleaser builds the release subjects without uploading them. The
+workflow independently reproduces and verifies every subject, and only then does
+it upload, reverify, and publish the draft. GitHub immutability then locks the tag
+and assets. At publication, the workflow also requires the tag as the title,
+empty notes, the expected prerelease state, and no change to GitHub's latest-
+release selection. GitHub still allows maintainers to edit those display fields
+later. CI authenticates the official Go
 1.26.8, Syft, GoReleaser Pro, and actionlint archives against SHA-256 digests
 pinned in the repository before extracting or executing them. Tags are limited
 to 131 ASCII characters so every wrapped archive path has one canonical USTAR

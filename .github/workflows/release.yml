@@ -49,7 +49,6 @@ jobs:
       name: release
     permissions:
       actions: read
-      artifact-metadata: write
       attestations: write
       checks: read
       contents: write
@@ -137,7 +136,7 @@ jobs:
           set -euo pipefail
           : "${GORELEASER_KEY:?GORELEASER_KEY is not configured in the release environment}"
           touch -t 200001010000 LICENSE README.md config.yaml
-          goreleaser release --clean --prepare
+          goreleaser release --clean --skip=publish
           {
             printf 'digests<<EOF\n'
             sha256sum \

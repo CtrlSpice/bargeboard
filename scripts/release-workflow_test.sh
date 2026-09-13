@@ -17,7 +17,8 @@ require_count() {
 
 require_count 1 '  repository_dispatch:'
 require_count 2 '          ref: ${{ github.sha }}'
-require_count 1 '          goreleaser release --clean --prepare'
+require_count 1 '          goreleaser release --clean --skip=publish'
+require_count 0 '--prepare'
 require_count 0 'goreleaser publish'
 require_count 1 '          bash scripts/build-release.sh "$RELEASE_TAG"'
 require_count 1 '            const { uploadRelease } = require('
@@ -29,6 +30,7 @@ require_count 1 '          REFERENCE_DIGESTS: ${{ steps.reference_build.outputs.
 require_count 1 '          test "$current" = "$REFERENCE_DIGESTS"'
 require_count 0 '${{ github.ref_name }}'
 require_count 0 '  push:'
+require_count 0 '      artifact-metadata: write'
 if [[ "$(grep -A1 -x 'changelog:' "$goreleaser_config")" != $'changelog:\n  disable: true' ]]; then
   printf 'GoReleaser changelog generation must remain disabled for the closed release output\n' >&2
   exit 1

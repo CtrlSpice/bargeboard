@@ -263,7 +263,7 @@ async function publishRelease({
 
   if (!hasCompletePublicationEvidence(published.data)) {
     const incompleteEvidence = new Error(
-      `release ${tag} publication response did not contain complete immutable state`,
+      `release ${tag} publication response did not contain complete publication state`,
     );
     if (!publishRequestError) {
       try {

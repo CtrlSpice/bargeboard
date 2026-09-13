@@ -593,7 +593,7 @@ test("preserves an incomplete successful response when reconciliation fails", as
       assert.deepEqual(
         error.errors.map((cause) => cause.message),
         [
-          "release v1.2.3 publication response did not contain complete immutable state",
+          "release v1.2.3 publication response did not contain complete publication state",
           "reconciliation failed",
         ],
       );

@@ -20,7 +20,7 @@ if [[ "$(<"$work/capture/tag")" != v1.2.3 ]]; then
   printf 'GoReleaser was not bound to the requested release tag\n' >&2
   exit 1
 fi
-if [[ "$(<"$work/capture/arguments")" != $'release\n--clean\n--prepare' ]]; then
+if [[ "$(<"$work/capture/arguments")" != $'release\n--clean\n--skip=publish' ]]; then
   printf 'unexpected GoReleaser arguments\n' >&2
   exit 1
 fi
