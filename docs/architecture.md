@@ -4189,12 +4189,19 @@ only the first record and remaining input views without mutation or a
 record-count-sized list. It MUST enforce the 16 MiB record limit, excluding the
 separator, on both complete and incomplete first records. A 32 MiB message of
 separators must not allocate a slice header per separator before rejecting its
-first empty record. The imperative read loop checks context cancellation between
-records, including ignored records, and retains only a bounded incomplete tail
-across successful message reads. Handshake pending data follows the same record
-order. After consumed records are discarded, the incomplete-tail buffer is
-reused across fragments rather than cloned on every read. A successful
-subscription completion consumes the outstanding requested
+first empty record. The local `hubRecordBuffer` in `protocol.go` owns buffered
+contents and their compaction lifecycle. Its `next` method calls the pure framer,
+advances past complete records, and detaches the bounded incomplete tail once
+after a consumed prefix. Further incomplete checks reuse that storage, including
+after empty fragments; ordinary append growth may allocate. Completing another
+record rearms compaction. Handshake pending data starts eligible for compaction
+because it may still retain the consumed handshake prefix. Framing errors leave
+the buffer state intact.
+
+The imperative read loop checks context cancellation between records, including
+ignored records, and appends only successful text WebSocket reads after `next`
+reports an incomplete record. Handshake pending data follows the same record
+order. A successful subscription completion consumes the outstanding requested
 manifest before its callback; a duplicate completion remains invalid. Close and
 reconnect-allowed close records stop processing at their wire position. The
 receiver lifecycle continues to own retry and permanent-failure policy, and a
@@ -4212,6 +4219,18 @@ and partial-message discard on WebSocket read error. Tests MUST compare complete
 batches and relevant input and subscription state, prove that failed snapshot
 normalization returns no partial result or normalized callback, and synchronize
 local transport tests without sleeps.
+
+Buffering tests MUST exercise the production `hubRecordBuffer` lifecycle directly:
+a large complete prefix followed by a small incomplete tail detaches the prefix
+once; subsequent incomplete checks preserve storage identity and capacity across
+several appended fragments, including empty fragments; and the next complete
+record rearms detachment. Tests MUST account for append growth separately, compare
+complete buffer state and input preservation, and cover initial handshake tails,
+empty tails, and size-error state preservation. Deterministic storage-identity
+checks must catch both unconditional cloning and failure to detach a prefix;
+framer allocation counts or transport delivery outcomes alone do not prove these
+buffering properties. Heap-size thresholds and timing-based assertions are not
+valid substitutes.
 
 ## OTLP Projection
 
