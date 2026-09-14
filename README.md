@@ -134,6 +134,12 @@ chmod 600 "$HOME/.config/bargeboard/f1tv-token"
 make run
 ```
 
+The receiver sends a SignalR keepalive after 15 seconds of outbound inactivity.
+It reconnects after 30 seconds of server wait without a complete accepted hub
+record, or without the initial subscription completion. Incoming pings keep the
+connection active but do not satisfy subscription completion. Local processing
+time is excluded from both server-wait budgets.
+
 The packaged Windows configuration uses the same `HOME`-relative path.
 PowerShell does not normally export its `$HOME` value as an environment
 variable, so set it for the Collector process and create the token file in the

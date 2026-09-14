@@ -49,10 +49,20 @@ type negotiateResponse struct {
 	} `json:"availableTransports"`
 }
 
+// signalRSocket is the message-level I/O boundary. Tests use channel-backed I/O
+// with synctest; production uses coder/websocket's single reader and writer.
+type signalRSocket interface {
+	Read(context.Context) (websocket.MessageType, []byte, error)
+	Write(context.Context, websocket.MessageType, []byte) error
+	CloseNow() error
+	SetReadLimit(int64)
+}
+
 type signalRConnection struct {
-	conn            *websocket.Conn
+	conn            signalRSocket
 	pending         []byte
 	requestedTopics []string
+	subscribedAt    time.Time
 }
 
 func connectSignalR(ctx context.Context, client *http.Client, cfg *Config) (*signalRConnection, error) {
@@ -144,6 +154,7 @@ func (c *signalRConnection) subscribe(ctx context.Context) error {
 	if err := c.conn.Write(ctx, websocket.MessageText, message); err != nil {
 		return sanitizedTransportError(ctx, "write F1 topic subscription", err)
 	}
+	c.subscribedAt = time.Now()
 	c.requestedTopics = append([]string(nil), topics...)
 	return nil
 }
@@ -151,12 +162,55 @@ func (c *signalRConnection) subscribe(ctx context.Context) error {
 func (c *signalRConnection) read(
 	ctx context.Context,
 	consume func(context.Context, liveTimingBatch) error,
-) error {
+) (result error) {
+	// Subscription success is the initial clock boundary. Charge the handoff
+	// to this read owner once, then pause while processing handshake pending data.
+	started := time.Now()
+	budget := newServerWaitBudget(len(c.requestedTopics) != 0)
+	if !c.subscribedAt.IsZero() {
+		budget = budget.wait(started.Sub(c.subscribedAt))
+	}
+	runCtx, stop := context.WithCancel(ctx)
+	writerDone := make(chan struct{})
+	var pingErr error // Published only by closing writerDone.
+	if !c.subscribedAt.IsZero() {
+		go func() {
+			defer close(writerDone)
+			pingErr = writeHubPings(runCtx, c.conn, c.subscribedAt)
+			if pingErr != nil {
+				stop() // Interrupt the active read or a cooperative consumer.
+			}
+		}()
+	} else {
+		// Direct internal connections have a receive budget, and a subscription
+		// budget only if they explicitly carry a manifest; no unsolicited writer.
+		close(writerDone)
+	}
+	defer func() {
+		stop()
+		<-writerDone
+		callerErr := ctx.Err()
+		if deadline, ok := ctx.Deadline(); callerErr == nil && ok && !time.Now().Before(deadline) {
+			// Equal-deadline timer callbacks may run in either order. The caller's
+			// elapsed deadline wins even before its cancellation callback runs.
+			callerErr = context.DeadlineExceeded
+		}
+		if callerErr != nil {
+			result = callerErr
+		} else if pingErr != nil && !errors.Is(result, errInvalidLiveTimingData) &&
+			!errors.Is(result, errSignalRClosed) && !errors.Is(result, errSignalRReconnectAllowed) {
+			result = pingErr
+		}
+	}()
+
 	buffered := hubRecordBuffer{contents: c.pending, needsCompaction: true}
 	c.pending = nil
 
 	for {
-		if err := ctx.Err(); err != nil {
+		if err := runCtx.Err(); err != nil {
+			return err
+		}
+		if err := budget.expired(); err != nil {
 			return err
 		}
 		record, complete, err := buffered.next()
@@ -172,19 +226,29 @@ func (c *signalRConnection) read(
 				if batch.source == liveTimingUpdateSourceSnapshot {
 					c.requestedTopics = nil
 				}
-				if err := consume(ctx, *batch); err != nil {
+				if err := consume(runCtx, *batch); err != nil {
 					return fmt.Errorf("consume F1 live timing batch: %w", err)
 				}
 			}
+			budget = budget.accepted(batch != nil && batch.source == liveTimingUpdateSourceSnapshot)
 			continue
 		}
 
-		messageType, contents, err := c.conn.Read(ctx)
+		waitStarted := time.Now()
+		readCtx, cancelRead := context.WithDeadline(runCtx, waitStarted.Add(budget.remaining()))
+		messageType, contents, err := c.conn.Read(readCtx)
+		budget = budget.wait(time.Since(waitStarted))
+		// coder/websocket v1.8.15 clears its cancellation hook in finishRead
+		// before a successful Read returns, so canceling here leaves it usable.
+		cancelRead()
 		if err != nil {
 			if invalidWebSocketRead(err) {
 				return invalidLiveTimingData("F1 live timing WebSocket data is invalid")
 			}
-			return fmt.Errorf("read F1 live timing message: %w", err)
+			if expired := budget.expired(); expired != nil {
+				return expired
+			}
+			return sanitizedTransportError(runCtx, "read F1 live timing message", err)
 		}
 		if messageType != websocket.MessageText {
 			return invalidLiveTimingData("F1 live timing used a non-text WebSocket message")

@@ -123,6 +123,96 @@ on success, missing-cookie failure, cancellation, and deadline paths, including
 HTTP 405 with a cookie. A flushed-header response with a stalled body MUST prove
 bootstrap can finish before its context deadline without waiting for body data.
 
+### Live Timing Connection Liveness
+
+**Status: GREEN**
+
+After a successful Subscribe write, each connection MUST apply three independent
+process-monotonic timing rules:
+
+| Rule | Boundary | Reset or completion |
+|---|---|---|
+| Outbound hub keepalive | Send `{"type":6}` followed by byte `0x1e` after 15 seconds without a successful outbound hub write. | Only a successful write resets the outbound clock; Subscribe establishes its initial value. |
+| Receive timeout | Reconnect after 30 seconds of server wait without a complete accepted hub record. | Every accepted record resets the receive budget, including hub pings and valid ignored records. |
+| Subscribe completion timeout | Reconnect after 30 cumulative seconds of server wait while Subscribe is outstanding. | Only the successful Subscribe completion disables this budget; hub pings and other accepted records never reset it. |
+
+Expiry is inclusive: a server-wait budget at zero expires before another record
+is accepted. Partial bytes, empty successful WebSocket reads, and WebSocket
+control Ping/Pong frames MUST NOT reset either server-wait budget. Malformed hub
+records remain permanent protocol failures; the liveness layer does not broaden
+record acceptance. A successful completion still consumes the requested manifest
+before its synchronous callback, and duplicate completions remain invalid.
+
+The initial clock sample is taken immediately after Subscribe's successful
+`Write` returns, before installing its requested manifest. On entry to `read`,
+the owner charges the actual elapsed handoff from that sample once. It then
+pauses both server-wait budgets for pending-data processing. Each subsequent
+wait starts immediately before constructing the per-read deadline and calling
+`Read`, and ends immediately after that call returns. The opaque WebSocket read
+includes transport framing and control-frame handling. Hub framing, buffer
+compaction and appending, hub decoding, normalization, and the synchronous batch
+callback all execute outside that wait interval. These local operations MUST NOT
+spend either server-wait budget, even when they take longer than 30 seconds.
+Source timestamps, the receiver's racing observation clock, and wall-clock
+arithmetic MUST NOT drive these rules. Actual elapsed durations, rather than
+nominal timer ticks, determine remaining budgets.
+
+The read lifecycle owns one post-subscription hub writer with its own outbound
+clock and timer. It MUST continue keepalive during local processing, cancel on
+every read exit, and join before returning to the receiver lifecycle. Each ping
+write is bounded by 30 seconds of process time, reusing the server timeout as a
+technical I/O bound so a blocked writer cannot survive indefinitely while local
+processing pauses the receive budgets. This bound does not create another source
+liveness signal. A ping failure cancels the connection's read context, interrupting
+a blocked read and notifying a cooperative callback. Local callback completion
+remains synchronous; liveness does not abandon a callback in another goroutine.
+
+The reader exclusively owns buffered records, the requested manifest, and the
+two server-wait budgets. The writer exclusively owns its last successful write
+time. `liveness.go` contains the pure duration transitions and ping scheduling
+policy; `connection.go` and `liveness_runtime.go` own contexts, timers, socket I/O,
+and lifetime. The small `signalRSocket` interface permits deterministic I/O tests
+without introducing a clock abstraction. Direct internal connections without a
+successful Subscribe timestamp start with a fresh receive budget and enable a
+completion budget only for an explicitly supplied requested manifest; they MUST
+NOT start an unsolicited ping writer.
+
+Per-read contexts are canceled after each complete `Read` returns. In pinned
+`coder/websocket` v1.8.15, `finishRead` clears the read cancellation hook before
+returning, so canceling a successful read's context leaves the socket usable.
+Canceling a blocked read or write closes the underlying transport. Verification
+MUST preserve this distinction when the dependency changes.
+
+Receive expiry, completion expiry, and ping write failures are sanitized
+transient errors handled by the receiver's existing reconnect backoff. Caller
+cancellation or deadline expiry takes precedence over a transient timeout, using
+only canonical context errors. An elapsed caller deadline wins even if its timer
+callback has not yet run when the read's timeout fires. Peer text and custom
+cancellation causes MUST NOT survive in returned transport errors or their chains.
+Writer cancellation during cleanup MUST NOT replace the read's protocol,
+source-close, or callback outcome. A ping's own write deadline MUST retain its
+classification when its transport closure wakes the reader before the writer
+returns. Permanent invalid-data handling, source close without reconnect, failed
+WebSocket read byte discard, and the A-valid/B-invalid/C-valid commitment boundary
+remain as specified under State Reduction. This slice introduces no source
+mapping, operational metric, HTTP retry taxonomy, or Unicode acceptance policy.
+
+Verification MUST compare complete pure budget state at initial, remaining,
+reset, completion, and exact 15/30-second boundaries. Shell tests MUST use
+`testing/synctest` and controllable I/O, covering fragmented and empty reads,
+ignored records, subscription expiry despite hub pings, successful-write clock
+boundaries, initial handoff accounting, paused local work with continuing pings,
+sanitized failures, cancellation precedence, and writer cleanup on every exit.
+An active cooperative callback MUST observe ping-failure cancellation while its
+caller context remains live; `read` MUST still await that callback's completion
+before returning the sanitized ping failure, with no later record delivery.
+Synthetic WebSocket tests MUST prove successful read-context cancellation leaves
+the connection usable, control Ping/Pong cannot extend receive liveness, and a
+bounded blocked ping interrupts the reader. The actual receiver lifecycle MUST
+reconnect through backoff after liveness expiry and still honor a subsequent
+source close without reconnect. These tests MUST NOT wait for real 15- or
+30-second intervals or contact the live service.
+
 ## Source Ownership
 
 **Status: GREEN**
@@ -4358,6 +4448,8 @@ Current implementation seams:
 | Live Timing factory | `receiver/f1livetimingreceiver/factory.go` |
 | Auth and endpoint configuration | `receiver/f1livetimingreceiver/config.go` |
 | Connection and SignalR transport | `receiver/f1livetimingreceiver/connection.go` |
+| Pure transport liveness budgets and ping policy | `receiver/f1livetimingreceiver/liveness.go` |
+| Connection-owned keepalive writer | `receiver/f1livetimingreceiver/liveness_runtime.go` |
 | Wire record decoding | `receiver/f1livetimingreceiver/protocol.go` |
 | JSON and compressed normalization | `receiver/f1livetimingreceiver/normalize.go` |
 | Session descriptor parsing and classification | `receiver/f1livetimingreceiver/session_info.go` |

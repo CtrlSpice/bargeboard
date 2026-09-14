@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/coder/websocket"
@@ -19,6 +20,100 @@ import (
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 )
+
+func TestReceiverReconnectsAfterLivenessExpiry(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var connections atomic.Int32
+		firstPeer := make(chan *websocket.Conn, 1)
+		firstClosed := make(chan struct{})
+		client := livenessWebSocketClient(t, func(socket *websocket.Conn) {
+			_, handshake, err := socket.Read(t.Context())
+			if err != nil || string(handshake) != handshakeRequest {
+				t.Errorf("handshake = %q, %v", handshake, err)
+				return
+			}
+			if err := socket.Write(t.Context(), websocket.MessageText, []byte("{}\x1e")); err != nil {
+				t.Error(err)
+				return
+			}
+			_, subscription, err := socket.Read(t.Context())
+			wantSubscription, _ := encodeSubscribeInvocation(subscriptionTopics())
+			if err != nil || string(subscription) != string(wantSubscription) {
+				t.Errorf("subscription = %q, %v", subscription, err)
+				return
+			}
+			if connections.Add(1) == 1 {
+				defer close(firstClosed)
+				firstPeer <- socket
+				for {
+					if _, _, err := socket.Read(t.Context()); err != nil {
+						return
+					}
+				}
+			}
+			if err := socket.Write(t.Context(), websocket.MessageText, []byte(incrementalFeedA+incrementalClose)); err != nil {
+				t.Error(err)
+			}
+		})
+		r := newLiveTimingReceiver(connectionTestConfig(t, "http://synthetic.test"), receivertest.NewNopSettings(Type))
+		r.client = client
+		logs, observed := observer.New(zap.WarnLevel)
+		r.settings.Logger = zap.New(logs)
+		var attempts []int
+		r.retryDelay = func(attempt int) time.Duration {
+			attempts = append(attempts, attempt)
+			return reconnectDelay(attempt)
+		}
+		// Racing observation time deliberately does not advance with liveness.
+		observation := time.Unix(1, 0)
+		r.now = func() time.Time { return observation }
+		var batches []normalizedLiveTimingBatch
+		r.consume = func(_ context.Context, batch normalizedLiveTimingBatch) error {
+			batches = append(batches, batch)
+			return nil
+		}
+		if err := r.Start(t.Context(), nil); err != nil {
+			t.Fatal(err)
+		}
+		server := <-firstPeer
+		for range 2 {
+			time.Sleep(10 * time.Second)
+			if err := server.Write(t.Context(), websocket.MessageText, []byte(hubPingRecord)); err != nil {
+				t.Fatal(err)
+			}
+			synctest.Wait()
+		}
+		time.Sleep(10 * time.Second)
+		synctest.Wait()
+		<-firstClosed
+		if connections.Load() != 1 || !reflect.DeepEqual(attempts, []int{0}) {
+			t.Fatalf("before backoff: connections = %d, attempts = %v", connections.Load(), attempts)
+		}
+		time.Sleep(time.Second)
+		synctest.Wait()
+		<-r.done
+		if err := r.Shutdown(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		want, err := normalizeLiveTimingBatch(incrementalWantFeed("Started", "2026-08-21T10:30:00Z"), observation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if connections.Load() != 2 || !reflect.DeepEqual(attempts, []int{0}) || !reflect.DeepEqual(batches, []normalizedLiveTimingBatch{want}) {
+			t.Fatalf("connections = %d, attempts = %v, batches = %#v", connections.Load(), attempts, batches)
+		}
+		var messages []string
+		for _, entry := range observed.All() {
+			messages = append(messages, entry.Message)
+		}
+		if !reflect.DeepEqual(messages, []string{
+			"F1 live timing connection lost; reconnecting",
+			"F1 live timing server closed the connection without reconnect",
+		}) {
+			t.Fatalf("receiver logs = %q", messages)
+		}
+	})
+}
 
 func TestReceiverReconnectsAndConsumesFeed(t *testing.T) {
 	var connections atomic.Int32
