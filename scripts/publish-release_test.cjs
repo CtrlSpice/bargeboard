@@ -471,6 +471,141 @@ test("detects changed assets in the publication response", async (t) => {
   ]);
 });
 
+test("binds publication success and cleanup evidence to the requested release ID", async (t) => {
+  const identities = [
+    { name: "wrong ID", fields: { id: 8 } },
+    { name: "missing ID", fields: {} },
+    { name: "null ID", fields: { id: null } },
+    { name: "string ID", fields: { id: "7" } },
+    { name: "fractional ID", fields: { id: 7.5 } },
+    { name: "unsafe ID", fields: { id: Number.MAX_SAFE_INTEGER + 1 } },
+  ];
+  const scenarios = [
+    { name: "successful PATCH, unresolved identity", reconciled: "unresolved" },
+    { name: "successful PATCH, matching valid release", reconciled: "valid" },
+    { name: "successful PATCH, matching invalid release", reconciled: "invalid" },
+    { name: "successful PATCH, failed reconciliation", reconciled: "failed" },
+    { name: "lost PATCH response, unresolved identity", reconciled: "unresolved", patchFails: true },
+  ];
+
+  for (const identity of identities) {
+    for (const validMetadata of [true, false]) {
+      for (const scenario of scenarios) {
+        await t.test(`${identity.name}, ${validMetadata ? "valid" : "invalid"} metadata, ${scenario.name}`, async (t) => {
+          const { assets, github, release, releaseDir } = releaseFixture(t);
+          const published = {
+            ...release,
+            assets,
+            draft: false,
+            immutable: true,
+            published_at: "2026-09-09T00:00:00Z",
+            html_url: "https://example.test/reconciled",
+          };
+          const unidentified = {
+            ...published,
+            name: validMetadata ? tag : "changed",
+            html_url: "https://example.test/unidentified",
+          };
+          delete unidentified.id;
+          Object.assign(unidentified, identity.fields);
+
+          const requestError = new Error("response lost");
+          const reconciliationError = new Error("reconciliation failed");
+          let releaseReads = 0;
+          github.rest.repos.getRelease = async () => {
+            if (++releaseReads === 1) return { data: { ...release, assets } };
+            switch (scenario.reconciled) {
+              case "valid": return { data: published };
+              case "invalid": return { data: { ...published, name: "changed" } };
+              case "failed": throw reconciliationError;
+              default: return { data: unidentified };
+            }
+          };
+          github.request = async () => {
+            if (scenario.patchFails) throw requestError;
+            return { data: unidentified };
+          };
+
+          const calls = [];
+          for (const [api, method] of [
+            [github.rest.git, "getRef"],
+            [github, "paginate"],
+            [github.rest.repos, "getRelease"],
+            [github, "request"],
+            [github.rest.repos, "deleteRelease"],
+          ]) {
+            const original = api[method];
+            api[method] = async (...args) => {
+              calls.push([method, ...args]);
+              return original(...args);
+            };
+          }
+
+          const target = { owner: "CtrlSpice", repo: "bargeboard", release_id: 7 };
+          const main = { owner: "CtrlSpice", repo: "bargeboard", ref: "heads/main" };
+          const expectedCalls = [
+            ["getRef", main],
+            ["paginate", github.rest.repos.listReleaseAssets, { ...target, per_page: 100 }],
+            ["getRelease", target],
+            ["getRef", main],
+            ["request", "PATCH /repos/{owner}/{repo}/releases/{release_id}", {
+              ...target,
+              name: tag,
+              body: "",
+              draft: false,
+              prerelease: false,
+              make_latest: "false",
+              headers: { "X-GitHub-Api-Version": "2026-03-10" },
+            }],
+            ["getRelease", target],
+          ];
+          const result = publishRelease({
+            github,
+            owner: target.owner,
+            repo: target.repo,
+            tag,
+            releaseCommit: commit,
+            releaseDir,
+          });
+          if (scenario.reconciled === "valid") {
+            assert.equal(await result, published.html_url);
+          } else {
+            const incompleteEvidence = new Error(
+              `release ${tag} publication response did not contain complete publication state`,
+            );
+            let expectedError;
+            if (scenario.reconciled === "invalid") {
+              expectedError = new Error(`release ${tag} was not published in the expected state`);
+              expectedCalls.push(["deleteRelease", target]);
+            } else if (scenario.reconciled === "failed") {
+              expectedError = new AggregateError(
+                [incompleteEvidence, reconciliationError],
+                `release ${tag} publication evidence is incomplete and requires manual reconciliation`,
+              );
+            } else if (scenario.patchFails) {
+              expectedError = new AggregateError(
+                [requestError, incompleteEvidence],
+                `release ${tag} publication request failed and the reconciled release was preserved`,
+              );
+            } else {
+              expectedError = new AggregateError(
+                [incompleteEvidence],
+                `release ${tag} publication evidence is incomplete and the release was preserved`,
+              );
+            }
+            await assert.rejects(result, (error) => {
+              assert.deepEqual(error, expectedError);
+              assert.deepEqual(error.errors, expectedError.errors);
+              return true;
+            });
+          }
+          assert.deepEqual(calls, expectedCalls);
+        });
+      }
+    }
+  }
+});
+
 test("preserves incomplete successful publication evidence", async (t) => {
   const mutations = [
     (published) => {

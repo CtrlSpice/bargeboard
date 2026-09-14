@@ -158,10 +158,12 @@ function verifyPublishedRelease(release, tag) {
   }
 }
 
-function hasCompletePublicationEvidence(release) {
+function hasCompletePublicationEvidence(release, releaseID) {
   return (
     release !== null &&
     typeof release === "object" &&
+    Number.isSafeInteger(release.id) &&
+    release.id === releaseID &&
     typeof release.tag_name === "string" &&
     typeof release.name === "string" &&
     (typeof release.body === "string" || release.body === null) &&
@@ -261,7 +263,7 @@ async function publishRelease({
     }
   }
 
-  if (!hasCompletePublicationEvidence(published.data)) {
+  if (!hasCompletePublicationEvidence(published.data, releaseID)) {
     const incompleteEvidence = new Error(
       `release ${tag} publication response did not contain complete publication state`,
     );
@@ -279,7 +281,7 @@ async function publishRelease({
         );
       }
     }
-    if (!hasCompletePublicationEvidence(published.data)) {
+    if (!hasCompletePublicationEvidence(published.data, releaseID)) {
       if (publishRequestError) {
         throw new AggregateError(
           [publishRequestError, incompleteEvidence],
