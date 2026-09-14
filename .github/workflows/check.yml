@@ -182,7 +182,10 @@ jobs:
           node --test scripts/publish-release_test.cjs
 
       - name: Check release scripts
-        run: bash -n scripts/*.sh
+        run: |
+          for script in scripts/*.sh; do
+            bash -n "$script" || exit
+          done
 
       - name: Check GoReleaser configuration
         run: goreleaser check

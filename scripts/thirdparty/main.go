@@ -228,7 +228,7 @@ func discoverComponents() (map[string]*component, error) {
 			"GOARCH="+target.goarch,
 			target.tuningKey+"="+target.tuning,
 		)
-		err := decodePackageCommand(command, components, cancel)
+		err := decodePackageCommand(ctx, command, components, cancel)
 		cancel()
 		if err != nil {
 			return nil, fmt.Errorf("go list for %s/%s: %w", target.goos, target.goarch, err)
@@ -240,7 +240,7 @@ func discoverComponents() (map[string]*component, error) {
 	return components, nil
 }
 
-func decodePackageCommand(command *exec.Cmd, components map[string]*component, cancel context.CancelFunc) error {
+func decodePackageCommand(ctx context.Context, command *exec.Cmd, components map[string]*component, cancel context.CancelFunc) error {
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("open output: %w", err)
@@ -250,15 +250,29 @@ func decodePackageCommand(command *exec.Cmd, components map[string]*component, c
 	if err := command.Start(); err != nil {
 		return fmt.Errorf("start: %w", err)
 	}
+	// WaitDelay need not close StdoutPipe once exec's stderr copier has finished.
+	// Close it explicitly on cancellation so decoding can finish before Wait.
+	closed := make(chan struct{})
+	stopClose := context.AfterFunc(ctx, func() {
+		_ = stdout.Close()
+		close(closed)
+	})
+	defer func() {
+		if !stopClose() {
+			<-closed
+		}
+	}()
 	decodeErr := decodePackages(json.NewDecoder(stdout), components)
 	if decodeErr != nil {
 		_ = stdout.Close()
 		cancel()
-		_ = command.Wait()
+	}
+	waitErr := command.Wait()
+	if decodeErr != nil {
 		return fmt.Errorf("decode output: %w", decodeErr)
 	}
-	if err := command.Wait(); err != nil {
-		return fmt.Errorf("command failed: %w: %s", err, strings.TrimSpace(stderr.String()))
+	if waitErr != nil {
+		return fmt.Errorf("command failed: %w: %s", waitErr, strings.TrimSpace(stderr.String()))
 	}
 	return nil
 }

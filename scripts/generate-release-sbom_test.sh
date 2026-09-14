@@ -15,7 +15,7 @@ chmod +x "$work/bin/syft"
 
 archive="$work/bargeboard_v1.2.3_linux_amd64.tar.gz"
 readonly archive
-dd if=/dev/null of="$archive" bs=1 seek=$((128 * 1024 * 1024)) count=1 2>/dev/null
+dd if=/dev/zero of="$archive" bs=1 seek=$((128 * 1024 * 1024)) count=1 2>/dev/null
 
 output=""
 if output="$(
@@ -29,7 +29,8 @@ if [[ -e "$work/syft-called" ]]; then
   printf 'Syft scanned an archive before canonical validation\n' >&2
   exit 1
 fi
-if [[ "$output" != *'refusing to scan a noncanonical release archive'* ]]; then
-  printf 'SBOM preflight did not report canonical validation failure:\n%s\n' "$output" >&2
+if [[ "$output" != *'tar archive exceeds 134217728 bytes'* ||
+  "$output" != *'refusing to scan a noncanonical release archive'* ]]; then
+  printf 'SBOM preflight did not report the archive size limit:\n%s\n' "$output" >&2
   exit 1
 fi

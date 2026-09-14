@@ -5,9 +5,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strconv"
@@ -211,7 +214,7 @@ func TestDecodePackageCommandTerminatesMalformedProducer(t *testing.T) {
 	command.Env = append(os.Environ(), "BARGEBOARD_MALFORMED_PACKAGE_PRODUCER=blocked")
 	result := make(chan error, 1)
 	go func() {
-		result <- decodePackageCommand(command, make(map[string]*component), cancel)
+		result <- decodePackageCommand(ctx, command, make(map[string]*component), cancel)
 	}()
 	var err error
 	select {
@@ -225,6 +228,77 @@ func TestDecodePackageCommandTerminatesMalformedProducer(t *testing.T) {
 	if command.ProcessState == nil {
 		t.Fatal("decodePackageCommand did not reap the malformed producer")
 	}
+}
+
+func TestDecodePackageCommandFailurePolicy(t *testing.T) {
+	for _, mode := range []string{"success", "start-failure", "wait-failure", "decode-failure"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestPackageCommandResultProducer$")
+			command.WaitDelay = 100 * time.Millisecond
+			command.Env = append(os.Environ(), "BARGEBOARD_PACKAGE_RESULT_PRODUCER="+mode)
+			if mode == "start-failure" {
+				command.Path = filepath.Join(t.TempDir(), "missing-command")
+			}
+			components := make(map[string]*component)
+			err := decodePackageCommand(ctx, command, components, cancel)
+			want := make(map[string]*component)
+			if mode != "start-failure" {
+				want["example.com/module@v1.0.0"] = &component{
+					path: "example.com/module", version: "v1.0.0", sum: "h1:fixture", root: "module",
+					sourceFile: map[string]struct{}{filepath.Join("module", "source.go"): {}},
+					materials:  make(map[string][]byte),
+				}
+				if command.ProcessState == nil {
+					t.Fatal("decodePackageCommand did not reap the producer")
+				}
+			}
+			if !reflect.DeepEqual(components, want) {
+				t.Errorf("components = %#v, want %#v", components, want)
+			}
+			switch mode {
+			case "success":
+				if err != nil || ctx.Err() != nil || !command.ProcessState.Success() {
+					t.Errorf("successful command = (%v, %v, %v)", err, ctx.Err(), command.ProcessState)
+				}
+			case "start-failure":
+				if err == nil || !strings.HasPrefix(err.Error(), "start: ") || !errors.Is(err, os.ErrNotExist) || command.Process != nil {
+					t.Errorf("start failure = (%v, %v)", err, command.Process)
+				}
+			case "wait-failure":
+				var exitErr *exec.ExitError
+				if err == nil || err.Error() != "command failed: exit status 7: producer failed" ||
+					!errors.As(err, &exitErr) || exitErr.ExitCode() != 7 {
+					t.Errorf("wait failure = %v", err)
+				}
+			case "decode-failure":
+				if err == nil || !strings.HasPrefix(err.Error(), "decode output: ") || ctx.Err() != context.Canceled {
+					t.Errorf("decode failure = (%v, %v)", err, ctx.Err())
+				}
+			}
+		})
+	}
+}
+
+func TestPackageCommandResultProducer(t *testing.T) {
+	mode := os.Getenv("BARGEBOARD_PACKAGE_RESULT_PRODUCER")
+	if mode == "" {
+		return
+	}
+	if _, err := io.WriteString(os.Stdout, `{"Dir":"module","Module":{"Path":"example.com/module","Version":"v1.0.0","Sum":"h1:fixture","Dir":"module"},"GoFiles":["source.go"]}`+"\n"); err != nil {
+		os.Exit(2)
+	}
+	if mode == "success" {
+		os.Exit(0)
+	}
+	if mode == "decode-failure" {
+		if _, err := io.WriteString(os.Stdout, "}\n"); err != nil {
+			os.Exit(2)
+		}
+	}
+	_, _ = io.WriteString(os.Stderr, "  producer failed\n")
+	os.Exit(7)
 }
 
 func TestDecodePackageCommandBoundsInheritedPipes(t *testing.T) {
@@ -255,7 +329,7 @@ func TestDecodePackageCommandBoundsInheritedPipes(t *testing.T) {
 	)
 	result := make(chan error, 1)
 	go func() {
-		result <- decodePackageCommand(command, make(map[string]*component), cancel)
+		result <- decodePackageCommand(ctx, command, make(map[string]*component), cancel)
 	}()
 	select {
 	case err := <-result:
@@ -280,7 +354,7 @@ func TestDecodePackageCommandHonorsContextDeadline(t *testing.T) {
 	command.Env = append(os.Environ(), "BARGEBOARD_MALFORMED_PACKAGE_PRODUCER=silent")
 	result := make(chan error, 1)
 	go func() {
-		result <- decodePackageCommand(command, make(map[string]*component), cancel)
+		result <- decodePackageCommand(ctx, command, make(map[string]*component), cancel)
 	}()
 	select {
 	case err := <-result:
@@ -296,6 +370,110 @@ func TestDecodePackageCommandHonorsContextDeadline(t *testing.T) {
 	case <-deadline.Done():
 		t.Fatalf("decodePackageCommand ignored its context deadline: %v", deadline.Err())
 	}
+}
+
+func TestDecodePackageCommandCancelsInheritedStdout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("helper protocol requires exec.Cmd.ExtraFiles")
+	}
+	ready, readyWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ready.Close()
+	defer readyWriter.Close()
+	release, releaseWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release.Close()
+	defer releaseWriter.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestInheritedStdoutPackageProducer$")
+	command.WaitDelay = 100 * time.Millisecond
+	command.Env = append(os.Environ(), "BARGEBOARD_INHERITED_STDOUT_PRODUCER=parent")
+	command.Stdin = release
+	command.ExtraFiles = []*os.File{readyWriter}
+	components := make(map[string]*component)
+	result := make(chan error, 1)
+	go func() {
+		result <- decodePackageCommand(ctx, command, components, cancel)
+	}()
+	finished := false
+	t.Cleanup(func() {
+		cancel()
+		// Release the descendant even when the regression leaves decoding blocked.
+		_ = releaseWriter.Close()
+		if !finished {
+			select {
+			case <-result:
+			case <-time.After(5 * time.Second):
+				t.Error("package command did not finish after releasing inherited stdout")
+			}
+		}
+	})
+	if err := ready.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var signal [1]byte
+	if _, err := io.ReadFull(ready, signal[:]); err != nil || signal[0] != 'R' {
+		t.Fatalf("descendant readiness = (%q, %v)", signal, err)
+	}
+	// The producer wrote valid JSON and closed stderr; its descendant now holds
+	// only stdout open and cannot release it until cleanup closes releaseWriter.
+	cancel()
+	select {
+	case err := <-result:
+		finished = true
+		if err == nil || !strings.HasPrefix(err.Error(), "decode output: ") || !errors.Is(err, os.ErrClosed) {
+			t.Errorf("decodePackageCommand() error = %v, want closed stdout decode error", err)
+		}
+		if len(components) != 0 {
+			t.Errorf("decodePackageCommand() components = %#v, want empty map", components)
+		}
+		if command.ProcessState == nil {
+			t.Fatal("decodePackageCommand did not reap the direct child")
+		}
+		if err := command.Process.Kill(); !errors.Is(err, os.ErrProcessDone) {
+			t.Errorf("kill after reaping = %v, want os.ErrProcessDone", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("decodePackageCommand blocked on inherited stdout after cancellation")
+	}
+}
+
+func TestInheritedStdoutPackageProducer(t *testing.T) {
+	mode := os.Getenv("BARGEBOARD_INHERITED_STDOUT_PRODUCER")
+	if mode == "" {
+		return
+	}
+	ready := os.NewFile(3, "ready")
+	if err := os.Stderr.Close(); err != nil {
+		os.Exit(2)
+	}
+	if mode == "parent" {
+		if _, err := io.WriteString(os.Stdout, "{}\n"); err != nil {
+			os.Exit(2)
+		}
+		grandchild := exec.Command(os.Args[0], "-test.run=^TestInheritedStdoutPackageProducer$")
+		grandchild.Env = append(os.Environ(), "BARGEBOARD_INHERITED_STDOUT_PRODUCER=descendant")
+		grandchild.Stdin = os.Stdin
+		grandchild.Stdout = os.Stdout
+		grandchild.ExtraFiles = []*os.File{ready}
+		if err := grandchild.Run(); err != nil {
+			os.Exit(2)
+		}
+	} else {
+		if _, err := ready.Write([]byte{'R'}); err != nil {
+			os.Exit(2)
+		}
+		if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+			os.Exit(2)
+		}
+	}
+	os.Exit(0)
 }
 
 func TestMalformedPackageProducer(t *testing.T) {
