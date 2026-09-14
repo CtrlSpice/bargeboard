@@ -85,6 +85,44 @@ sanitized failure log, and continues reading rather than reconnecting.
 
 No Go OpenF1 receiver exists yet.
 
+### Live Timing Setup Boundaries
+
+**Status: GREEN**
+
+`bootstrapConnection` in `receiver/f1livetimingreceiver/bootstrap.go` owns the
+negotiation OPTIONS response and MUST close its body without reading or draining
+it. Only the response headers and status enter the pure
+`credentialsFromPreflight` decision. A non-empty `AWSALBCORS` cookie remains
+sufficient even on HTTP 405; without it, the existing invalid-server-data policy
+applies. Before accepting those headers, bootstrap MUST preserve an already
+canceled or expired caller context as canonical `context.Canceled` or
+`context.DeadlineExceeded` and return no credentials. Custom cancellation causes
+MUST NOT escape through errors.
+
+The preflight body has no source authority. Draining it for connection reuse
+would make setup depend on irrelevant, potentially unbounded or stalled input.
+Body-close errors do not alter the header decision; this boundary introduces no
+body parsing, status-based retry policy, or additional retry owner.
+
+In `receiver/f1livetimingreceiver/connection.go`, SignalR handshake reads and
+writes and subscription writes MUST pass transport failures through
+`sanitizedTransportError`. Handshake reads MUST first preserve the existing
+permanent invalid-WebSocket-framing classification. Other setup I/O failures
+retain only the operation and canonical cancellation/deadline classification,
+never the raw transport error or server-supplied close reason. Wrapping a raw
+WebSocket error is rejected because its close reason can carry confidential data
+into startup errors or reconnect logs. Failed handshakes return no pending data;
+failed subscription writes MUST preserve existing connection state. The receiver
+lifecycle remains the sole owner of reconnect and permanent-failure handling.
+
+Verification MUST use local HTTP/WebSocket servers and synthetic confidential
+markers to check complete startup errors, error chains, reconnect log entries,
+retry decisions, permanent status outcomes, context classification, and setup
+state preservation. A custom preflight body MUST prove zero reads and one close
+on success, missing-cookie failure, cancellation, and deadline paths, including
+HTTP 405 with a cookie. A flushed-header response with a stalled body MUST prove
+bootstrap can finish before its context deadline without waiting for body data.
+
 ## Source Ownership
 
 **Status: GREEN**
@@ -4276,8 +4314,9 @@ normative until their behavior slice begins.
 - Secrets MUST NOT appear in configuration examples, tests, logs, status events,
   spans, metrics, documentation, commits, or pull requests.
 - Configured endpoint paths MAY contain opaque proxy routing values. HTTP
-  request/body and WebSocket dial failures MUST be sanitized rather than
-  wrapping errors that can echo a configured or internally constructed URL.
+  request/body, WebSocket dial, and setup WebSocket I/O failures MUST be sanitized
+  rather than wrapping errors that can echo a configured or internally
+  constructed URL or a server-supplied close reason.
   Transport errors MUST NOT include endpoint paths, authorization headers,
   cookies, connection tokens, or internally constructed credential parameters.
   Sanitization MUST preserve canonical cancellation and deadline classification.

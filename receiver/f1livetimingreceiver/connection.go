@@ -142,7 +142,7 @@ func (c *signalRConnection) subscribe(ctx context.Context) error {
 		return err
 	}
 	if err := c.conn.Write(ctx, websocket.MessageText, message); err != nil {
-		return fmt.Errorf("write F1 topic subscription: %w", err)
+		return sanitizedTransportError(ctx, "write F1 topic subscription", err)
 	}
 	c.requestedTopics = append([]string(nil), topics...)
 	return nil
@@ -372,9 +372,12 @@ func websocketEndpoint(raw, connectionToken string) (string, error) {
 
 func exchangeHandshake(ctx context.Context, connection *websocket.Conn) ([]byte, error) {
 	if err := connection.Write(ctx, websocket.MessageText, encodeHandshakeRequest()); err != nil {
-		return nil, fmt.Errorf("write SignalR handshake: %w", err)
+		return nil, sanitizedTransportError(ctx, "write SignalR handshake", err)
 	}
+	return readHandshakeResponse(ctx, connection)
+}
 
+func readHandshakeResponse(ctx context.Context, connection *websocket.Conn) ([]byte, error) {
 	var buffered []byte
 	for {
 		messageType, contents, err := connection.Read(ctx)
@@ -382,7 +385,7 @@ func exchangeHandshake(ctx context.Context, connection *websocket.Conn) ([]byte,
 			if invalidWebSocketRead(err) {
 				return nil, invalidLiveTimingData("SignalR handshake WebSocket data is invalid")
 			}
-			return nil, fmt.Errorf("read SignalR handshake: %w", err)
+			return nil, sanitizedTransportError(ctx, "read SignalR handshake", err)
 		}
 		if messageType != websocket.MessageText {
 			return nil, invalidLiveTimingData("SignalR handshake used a non-text WebSocket message")

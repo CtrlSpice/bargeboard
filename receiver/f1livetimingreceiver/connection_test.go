@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -432,6 +433,145 @@ func TestSanitizedTransportErrorPreservesContextFailure(t *testing.T) {
 				t.Errorf("sanitizedTransportError() exposed transport data: %q", err)
 			}
 		})
+	}
+}
+
+func TestSetupWebSocketErrorsAreSanitized(t *testing.T) {
+	const confidential = "synthetic-confidential-close-reason"
+	for _, operation := range []string{"read SignalR handshake", "write SignalR handshake", "write F1 topic subscription"} {
+		for _, status := range []websocket.StatusCode{
+			websocket.StatusGoingAway,
+			websocket.StatusServiceRestart,
+			websocket.StatusProtocolError,
+			websocket.StatusUnsupportedData,
+			websocket.StatusInvalidFramePayloadData,
+			websocket.StatusMessageTooBig,
+		} {
+			t.Run(operation+"/"+status.String(), func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				server := newConnectionTestServer(t, func(connection *websocket.Conn) {
+					if operation == "read SignalR handshake" {
+						if _, _, err := connection.Read(ctx); err != nil {
+							t.Errorf("read handshake request: %v", err)
+							return
+						}
+					}
+					_ = connection.Close(status, confidential)
+				})
+				conn, _, err := websocket.Dial(ctx, server.URL, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer conn.CloseNow()
+				if operation != "read SignalR handshake" {
+					// Consume the real peer close before writing so failure is deterministic.
+					_, _, err := conn.Read(ctx)
+					var closeErr websocket.CloseError
+					if !errors.As(err, &closeErr) || closeErr != (websocket.CloseError{Code: status, Reason: confidential}) {
+						t.Fatalf("peer close = %v, want synthetic close with status %v", err, status)
+					}
+				}
+				connection := &signalRConnection{conn: conn, pending: []byte("pending"), requestedTopics: []string{"existing"}}
+				wantState := &signalRConnection{conn: conn, pending: []byte("pending"), requestedTopics: []string{"existing"}}
+				if operation == "write F1 topic subscription" {
+					err = connection.subscribe(ctx)
+				} else {
+					var pending []byte
+					pending, err = exchangeHandshake(ctx, conn)
+					if pending != nil {
+						t.Errorf("failed handshake returned pending data: %q", pending)
+					}
+				}
+				wantPermanent := operation == "read SignalR handshake" && status != websocket.StatusGoingAway && status != websocket.StatusServiceRestart
+				wantErr := operation + " failed"
+				if wantPermanent {
+					wantErr = "invalid F1 live timing data: SignalR handshake WebSocket data is invalid"
+				}
+				if err == nil || err.Error() != wantErr {
+					t.Errorf("setup error = %v, want %q", err, wantErr)
+				}
+				if errors.Is(err, errInvalidLiveTimingData) != wantPermanent {
+					t.Errorf("setup error permanent classification = %t, want %t", errors.Is(err, errInvalidLiveTimingData), wantPermanent)
+				}
+				var closeErr websocket.CloseError
+				if errors.As(err, &closeErr) {
+					t.Error("setup error retained the raw WebSocket close")
+				}
+				for cause := err; cause != nil; cause = errors.Unwrap(cause) {
+					for _, format := range []string{"%v", "%+v", "%#v"} {
+						if strings.Contains(fmt.Sprintf(format, cause), confidential) {
+							t.Errorf("setup error chain exposed synthetic confidential marker with %s", format)
+						}
+					}
+				}
+				if !reflect.DeepEqual(connection, wantState) {
+					t.Error("failed setup changed connection state")
+				}
+			})
+		}
+	}
+}
+
+func TestSetupWebSocketErrorsPreserveContext(t *testing.T) {
+	for _, operation := range []string{"read SignalR handshake", "write SignalR handshake", "write F1 topic subscription"} {
+		for _, want := range []error{context.Canceled, context.DeadlineExceeded} {
+			t.Run(operation+"/"+want.Error(), func(t *testing.T) {
+				release := make(chan struct{})
+				defer close(release)
+				server := newConnectionTestServer(t, func(*websocket.Conn) {
+					<-release
+				})
+				dialCtx, stopDial := context.WithTimeout(context.Background(), 5*time.Second)
+				defer stopDial()
+				conn, _, err := websocket.Dial(dialCtx, server.URL, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer conn.CloseNow()
+				if operation == "read SignalR handshake" {
+					// Complete the write with a live context before testing the read
+					// boundary; deadline expiry must not race with the write phase.
+					if err := conn.Write(dialCtx, websocket.MessageText, encodeHandshakeRequest()); err != nil {
+						t.Fatal(err)
+					}
+				}
+				ctx, cancel := context.WithCancelCause(context.Background())
+				defer cancel(nil)
+				if want == context.DeadlineExceeded {
+					var stop context.CancelFunc
+					ctx, stop = context.WithDeadlineCause(ctx, time.Unix(1, 0), errors.New("synthetic-confidential-cause"))
+					defer stop()
+				} else {
+					cancel(errors.New("synthetic-confidential-cause"))
+				}
+				if operation != "read SignalR handshake" {
+					// A small write can succeed even with a canceled context; force an
+					// I/O failure to verify that its sanitization preserves context.
+					_ = conn.CloseNow()
+				}
+				if operation == "write F1 topic subscription" {
+					connection := &signalRConnection{conn: conn}
+					err = connection.subscribe(ctx)
+					if !reflect.DeepEqual(connection, &signalRConnection{conn: conn}) {
+						t.Error("canceled subscription changed connection state")
+					}
+				} else {
+					var pending []byte
+					if operation == "read SignalR handshake" {
+						pending, err = readHandshakeResponse(ctx, conn)
+					} else {
+						pending, err = exchangeHandshake(ctx, conn)
+					}
+					if pending != nil {
+						t.Errorf("canceled handshake returned pending data: %q", pending)
+					}
+				}
+				if !errors.Is(err, want) || err.Error() != operation+": "+want.Error() || errors.Unwrap(err) != want {
+					t.Errorf("setup error = %v, want operation wrapping only canonical %v", err, want)
+				}
+			})
+		}
 	}
 }
 
