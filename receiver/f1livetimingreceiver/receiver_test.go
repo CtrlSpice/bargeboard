@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/collector/component/componentstatus"
 	"go.opentelemetry.io/collector/receiver/receivertest"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 )
 
@@ -531,6 +532,99 @@ func TestReceiverStopsOnInvalidReconnectSetup(t *testing.T) {
 				t.Fatal("timed out waiting for permanent status")
 			}
 		})
+	}
+}
+
+func TestReceiverSanitizesHandshakeCloseOutcomes(t *testing.T) {
+	for _, startup := range []bool{true, false} {
+		for _, status := range []websocket.StatusCode{websocket.StatusServiceRestart, websocket.StatusProtocolError} {
+			name := "reconnect/"
+			if startup {
+				name = "startup/"
+			}
+			t.Run(name+status.String(), func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				var connections atomic.Int32
+				server := newConnectionTestServer(t, func(connection *websocket.Conn) {
+					attempt := connections.Add(1)
+					if _, _, err := connection.Read(ctx); err != nil {
+						t.Errorf("read handshake request: %v", err)
+						return
+					}
+					if !startup && attempt == 1 {
+						_ = connection.Write(ctx, websocket.MessageText, []byte("{}\x1e"))
+						_, _, _ = connection.Read(ctx)
+						_ = connection.Close(websocket.StatusGoingAway, "force reconnect")
+						return
+					}
+					_ = connection.Close(status, "synthetic-confidential-close-reason")
+				})
+				core, logs := observer.New(zap.WarnLevel)
+				settings := receivertest.NewNopSettings(Type)
+				settings.Logger = zap.New(core)
+				r := newLiveTimingReceiver(connectionTestConfig(t, server.URL), settings)
+				host := &statusHost{events: make(chan *componentstatus.Event, 2)}
+				permanent := status == websocket.StatusProtocolError
+				if startup {
+					err := r.Start(ctx, host)
+					want := "connect to F1 live timing: read SignalR handshake failed"
+					if permanent {
+						want = "connect to F1 live timing: invalid F1 live timing data: SignalR handshake WebSocket data is invalid"
+					}
+					if err == nil || err.Error() != want || errors.Is(err, errInvalidLiveTimingData) != permanent {
+						t.Errorf("Start() = %v, want %q (permanent=%t)", err, want, permanent)
+					}
+					if r.cancel != nil || r.done != nil || connections.Load() != 1 || logs.Len() != 0 || len(host.events) != 0 {
+						t.Error("failed startup created lifecycle state, retried, logged, or reported status")
+					}
+					return
+				}
+				connection, err := r.connect(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var attempts []int
+				r.retryDelay = func(attempt int) time.Duration {
+					attempts = append(attempts, attempt)
+					if attempt == 1 {
+						cancel()
+						return time.Hour
+					}
+					return 0
+				}
+				done := make(chan struct{})
+				r.run(ctx, connection, host, done)
+				wantAttempts := []int{0, 1}
+				wantLogs := []observer.LoggedEntry{
+					{Entry: zapcore.Entry{Level: zap.WarnLevel, Message: "F1 live timing connection lost; reconnecting"}, Context: []zap.Field{}},
+					{Entry: zapcore.Entry{Level: zap.WarnLevel, Message: "F1 live timing reconnect failed: read SignalR handshake failed"}, Context: []zap.Field{}},
+				}
+				if permanent {
+					wantAttempts = []int{0}
+					wantLogs[1] = observer.LoggedEntry{Entry: zapcore.Entry{Level: zap.ErrorLevel, Message: errPermanentLiveTimingFailure.Error()}, Context: []zap.Field{}}
+					select {
+					case event := <-host.events:
+						if event.Status() != componentstatus.StatusPermanentError || event.Err() != errPermanentLiveTimingFailure {
+							t.Errorf("permanent status = %v, error = %v", event.Status(), event.Err())
+						}
+					default:
+						t.Error("missing permanent failure status")
+					}
+				}
+				if !reflect.DeepEqual(logs.AllUntimed(), wantLogs) {
+					t.Errorf("logs = %#v, want %#v", logs.AllUntimed(), wantLogs)
+				}
+				if connections.Load() != 2 || !reflect.DeepEqual(attempts, wantAttempts) || len(host.events) != 0 {
+					t.Errorf("connections=%d, retries=%v, remaining statuses=%d", connections.Load(), attempts, len(host.events))
+				}
+				select {
+				case <-done:
+				default:
+					t.Error("run did not close done")
+				}
+			})
+		}
 	}
 }
 
