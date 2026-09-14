@@ -4,14 +4,19 @@ set -euo pipefail
 validate_checksum_subjects() {
   local expected_subjects=("$@")
   local checksum_subjects=()
-  local line expected_sorted checksum_sorted
+  local contents line expected_sorted checksum_sorted
+  # NUL is read's delimiter here, so it cannot disappear during line parsing.
+  if IFS= read -r -d '' contents; then
+    printf 'checksums.txt contains a NUL byte\n' >&2
+    return 1
+  fi
   while IFS= read -r line || [[ -n "$line" ]]; do
     if [[ ! "$line" =~ ^([0-9a-f]{64})[[:space:]]{2}([^[:space:]]+)$ ]]; then
       printf 'invalid checksum line: %s\n' "$line" >&2
       return 1
     fi
     checksum_subjects+=("${BASH_REMATCH[2]}")
-  done
+  done < <(printf '%s' "$contents")
 
   expected_sorted="$(printf '%s\n' "${expected_subjects[@]}" | LC_ALL=C sort)"
   checksum_sorted="$(printf '%s\n' "${checksum_subjects[@]}" | LC_ALL=C sort)"

@@ -39,6 +39,21 @@ test_checksum_subjects() {
   done
   assert_checksum_result 'missing final subject' "$first"$'\n' 1 "$message"
   assert_checksum_result 'blank final record' "$valid"$'\n\n' 1 'invalid checksum line: '
+
+  # Keep NULs in the producer's byte stream: Bash variables cannot store them.
+  local prefix suffix output status
+  for prefix in '' "$first" "$valid" "$valid"$'\n'; do
+    for suffix in '' $'\n'; do
+      status=0
+      output="$(printf '%s\0%s' "$prefix" "$suffix" |
+        validate_checksum_subjects "$archive" "$sbom" 2>&1)" || status=$?
+      if [[ "$status" != 1 || "$output" != 'checksums.txt contains a NUL byte' ]]; then
+        printf 'NUL-containing checksum input was not rejected: status=%s output=<%s>\n' \
+          "$status" "$output" >&2
+        exit 1
+      fi
+    done
+  done
 }
 
 test_checksum_subjects
