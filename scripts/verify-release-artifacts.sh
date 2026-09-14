@@ -1,6 +1,36 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+validate_checksum_subjects() {
+  local expected_subjects=("$@")
+  local checksum_subjects=()
+  local contents line expected_sorted checksum_sorted
+  # NUL is read's delimiter here, so it cannot disappear during line parsing.
+  if IFS= read -r -d '' contents; then
+    printf 'checksums.txt contains a NUL byte\n' >&2
+    return 1
+  fi
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ ! "$line" =~ ^([0-9a-f]{64})[[:space:]]{2}([^[:space:]]+)$ ]]; then
+      printf 'invalid checksum line: %s\n' "$line" >&2
+      return 1
+    fi
+    checksum_subjects+=("${BASH_REMATCH[2]}")
+  done < <(printf '%s' "$contents")
+
+  expected_sorted="$(printf '%s\n' "${expected_subjects[@]}" | LC_ALL=C sort)"
+  checksum_sorted="$(printf '%s\n' "${checksum_subjects[@]}" | LC_ALL=C sort)"
+  if [[ "$expected_sorted" != "$checksum_sorted" ]]; then
+    printf 'checksums.txt does not contain exactly the expected archives and SBOMs\n' >&2
+    return 1
+  fi
+}
+
+# Allow focused checksum tests to use the same validation as the full verifier.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
+
 readonly dist="${1:-build/release}"
 readonly source_root="${2:-.}"
 readonly metadata="$dist/metadata.json"
@@ -88,22 +118,7 @@ for archive in "${archives[@]}"; do
   fi
 done
 
-checksum_subjects=()
-while IFS= read -r line; do
-  if [[ ! "$line" =~ ^([0-9a-f]{64})[[:space:]]{2}([^[:space:]]+)$ ]]; then
-    printf 'invalid checksum line: %s\n' "$line" >&2
-    exit 1
-  fi
-  checksum_subjects+=("${BASH_REMATCH[2]}")
-done <"$checksums"
-
-expected_sorted="$(printf '%s\n' "${expected_subjects[@]}" | LC_ALL=C sort)"
-checksum_sorted="$(printf '%s\n' "${checksum_subjects[@]}" | LC_ALL=C sort)"
-readonly expected_sorted checksum_sorted
-if [[ "$expected_sorted" != "$checksum_sorted" ]]; then
-  printf 'checksums.txt does not contain exactly the expected archives and SBOMs\n' >&2
-  exit 1
-fi
+validate_checksum_subjects "${expected_subjects[@]}" <"$checksums"
 
 (
   cd "$dist"

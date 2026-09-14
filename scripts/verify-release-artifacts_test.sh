@@ -1,10 +1,69 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+readonly verifier=scripts/verify-release-artifacts.sh
+source "$verifier"
+
+test_checksum_subjects() {
+  local archive=bargeboard_0.0.0_linux_amd64.tar.gz
+  local sbom="$archive.sbom.spdx.json"
+  local first last valid extra ending message
+  printf -v first '%064d  %s' 0 "$archive"
+  printf -v last '%064d  %s' 0 "$sbom"
+  valid="$first"$'\n'"$last"
+
+  assert_checksum_result() {
+    local description="$1" input="$2" expected_status="$3" expected_output="$4"
+    local output status=0
+    output="$(printf '%s' "$input" | validate_checksum_subjects "$archive" "$sbom" 2>&1)" || status=$?
+    if [[ "$status" != "$expected_status" || "$output" != "$expected_output" ]]; then
+      printf 'checksum test failed: %s\nexpected status %s, output <%s>\ngot status %s, output <%s>\n' \
+        "$description" "$expected_status" "$expected_output" "$status" "$output" >&2
+      exit 1
+    fi
+  }
+
+  message='checksums.txt does not contain exactly the expected archives and SBOMs'
+  for ending in '' $'\n'; do
+    for extra in "$first" \
+      "${first%  *}  unexpected.tar.gz" \
+      "${first%  *}  ./$archive" \
+      "${first%  *}  ../$archive"; do
+      assert_checksum_result "extra final record <$extra>, ending <$ending>" \
+        "$valid"$'\n'"$extra$ending" 1 "$message"
+    done
+    assert_checksum_result "malformed final record, ending <$ending>" \
+      "$valid"$'\n'"malformed$ending" 1 'invalid checksum line: malformed'
+    assert_checksum_result "valid final record, ending <$ending>" \
+      "$valid$ending" 0 ''
+  done
+  assert_checksum_result 'missing final subject' "$first"$'\n' 1 "$message"
+  assert_checksum_result 'blank final record' "$valid"$'\n\n' 1 'invalid checksum line: '
+
+  # Keep NULs in the producer's byte stream: Bash variables cannot store them.
+  local prefix suffix output status
+  for prefix in '' "$first" "$valid" "$valid"$'\n'; do
+    for suffix in '' $'\n'; do
+      status=0
+      output="$(printf '%s\0%s' "$prefix" "$suffix" |
+        validate_checksum_subjects "$archive" "$sbom" 2>&1)" || status=$?
+      if [[ "$status" != 1 || "$output" != 'checksums.txt contains a NUL byte' ]]; then
+        printf 'NUL-containing checksum input was not rejected: status=%s output=<%s>\n' \
+          "$status" "$output" >&2
+        exit 1
+      fi
+    done
+  done
+}
+
+test_checksum_subjects
+if [[ "${1:-}" == --checksums-only ]]; then
+  exit 0
+fi
+
 source_dist="${1:-build/release}"
 source_dist="$(cd -- "$source_dist" && pwd)"
 readonly source_dist
-readonly verifier=scripts/verify-release-artifacts.sh
 work="$(mktemp -d)"
 readonly work
 trap 'rm -rf "$work"' EXIT
