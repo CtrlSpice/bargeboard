@@ -154,14 +154,17 @@ func (c *signalRConnection) read(
 ) error {
 	buffered := c.pending
 	c.pending = nil
+	compactTail := true
 
 	for {
-		records, remaining, err := splitHubRecords(buffered)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		record, remaining, complete, err := splitHubRecord(buffered)
 		if err != nil {
 			return err
 		}
-		buffered = remaining
-		for _, record := range records {
+		if complete {
 			batch, err := decodeHubRecord(record, c.requestedTopics)
 			if err != nil {
 				return err
@@ -174,8 +177,17 @@ func (c *signalRConnection) read(
 					return fmt.Errorf("consume F1 live timing batch: %w", err)
 				}
 			}
+			buffered = remaining
+			compactTail = true
+			continue
 		}
 
+		// Release consumed records, but reuse the tail buffer across fragments
+		// until another record completes rather than copying it on every read.
+		if compactTail {
+			buffered = bytes.Clone(remaining)
+			compactTail = false
+		}
 		messageType, contents, err := c.conn.Read(ctx)
 		if err != nil {
 			if invalidWebSocketRead(err) {

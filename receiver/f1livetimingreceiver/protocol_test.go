@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -46,27 +47,94 @@ func TestEncodeSubscribeInvocationRejectsInvalidTopics(t *testing.T) {
 	}
 }
 
-func TestSplitHubRecords(t *testing.T) {
-	records, remaining, err := splitHubRecords([]byte("{\"type\":6}\x1e{\"type\":1}\x1e{"))
-	if err != nil {
-		t.Fatalf("splitHubRecords() error = %v", err)
-	}
-	wantRecords := [][]byte{[]byte(`{"type":6}`), []byte(`{"type":1}`)}
-	if !reflect.DeepEqual(records, wantRecords) {
-		t.Errorf("splitHubRecords() records = %q", records)
-	}
-	if string(remaining) != "{" {
-		t.Errorf("splitHubRecords() remaining = %q", remaining)
+func TestSplitHubRecord(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		contents  []byte
+		record    []byte
+		remaining []byte
+		complete  bool
+	}{
+		{name: "nil input"},
+		{name: "empty record", contents: []byte("\x1e{"), record: []byte{}, remaining: []byte("{"), complete: true},
+		{name: "first only", contents: []byte("{\"type\":6}\x1e{\"type\":1}\x1e{"), record: []byte(`{"type":6}`), remaining: []byte("{\"type\":1}\x1e{"), complete: true},
+		{name: "incomplete", contents: []byte("{"), remaining: []byte("{")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			before := bytes.Clone(test.contents)
+			record, remaining, complete, err := splitHubRecord(test.contents)
+			if err != nil || !reflect.DeepEqual(record, test.record) ||
+				!reflect.DeepEqual(remaining, test.remaining) || complete != test.complete {
+				t.Errorf("splitHubRecord() = %q, %q, %v, %v", record, remaining, complete, err)
+			}
+			if !bytes.Equal(test.contents, before) {
+				t.Error("framing mutated input")
+			}
+		})
 	}
 }
 
-func TestSplitHubRecordsRejectsOversizedRecord(t *testing.T) {
-	_, _, err := splitHubRecords(bytes.Repeat([]byte("x"), maxHubRecordSize+1))
-	if err == nil || !strings.Contains(err.Error(), "exceeds") {
-		t.Fatalf("splitHubRecords() error = %v, want size error", err)
+func TestSplitHubRecordSizeBoundary(t *testing.T) {
+	for _, size := range []int{maxHubRecordSize, maxHubRecordSize + 1} {
+		for _, terminated := range []bool{false, true} {
+			name := fmt.Sprintf("size=%d/terminated=%v", size, terminated)
+			t.Run(name, func(t *testing.T) {
+				contents := bytes.Repeat([]byte("x"), size)
+				if terminated {
+					contents = append(contents, recordSeparator, '{')
+				}
+				before := bytes.Clone(contents)
+				record, remaining, complete, err := splitHubRecord(contents)
+				if size > maxHubRecordSize {
+					if !errors.Is(err, errInvalidLiveTimingData) || record != nil || remaining != nil || complete {
+						t.Errorf("oversized result: record length %d, remaining length %d, complete %v, error %v", len(record), len(remaining), complete, err)
+					}
+				} else if terminated {
+					if err != nil || !complete || !bytes.Equal(record, before[:size]) || string(remaining) != "{" {
+						t.Errorf("complete boundary: lengths %d/%d, complete %v, error %v", len(record), len(remaining), complete, err)
+					}
+				} else if err != nil || complete || record != nil || !bytes.Equal(remaining, before) {
+					t.Errorf("incomplete boundary: lengths %d/%d, complete %v, error %v", len(record), len(remaining), complete, err)
+				}
+				if !bytes.Equal(contents, before) {
+					t.Error("framing mutated input")
+				}
+			})
+		}
 	}
-	if !errors.Is(err, errInvalidLiveTimingData) {
-		t.Errorf("splitHubRecords() error does not wrap errInvalidLiveTimingData")
+}
+
+func TestSplitHubRecordSeparatorDenseAllocations(t *testing.T) {
+	contents := bytes.Repeat([]byte{recordSeparator}, maxWebSocketMessage)
+	before := bytes.Clone(contents)
+	allocs := testing.AllocsPerRun(100, func() {
+		record, remaining, complete, err := splitHubRecord(contents)
+		if err != nil || !complete || len(record) != 0 || len(remaining) != len(contents)-1 ||
+			&remaining[0] != &contents[1] {
+			t.Fatal("framer did not return the first empty record and remaining input view")
+		}
+	})
+	if allocs != 0 {
+		t.Errorf("allocations = %v, want zero", allocs)
+	}
+	if !bytes.Equal(contents, before) {
+		t.Error("framing mutated input")
+	}
+}
+
+func BenchmarkSplitHubRecordSeparatorDense(b *testing.B) {
+	for _, size := range []int{64 * 1024, maxWebSocketMessage} {
+		b.Run(fmt.Sprintf("bytes=%d", size), func(b *testing.B) {
+			contents := bytes.Repeat([]byte{recordSeparator}, size)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				record, remaining, complete, err := splitHubRecord(contents)
+				if err != nil || !complete || len(record) != 0 || len(remaining) != size-1 {
+					b.Fatal("invalid first record")
+				}
+			}
+		})
 	}
 }
 
