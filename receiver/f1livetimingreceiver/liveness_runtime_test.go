@@ -384,6 +384,94 @@ func TestLivenessPingFailureInterruptsRead(t *testing.T) {
 	}
 }
 
+func TestLivenessPingFailureCancelsActiveCallback(t *testing.T) {
+	for _, timeout := range []bool{false, true} {
+		t.Run(map[bool]string{false: "peer error", true: "write timeout"}[timeout], func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				releaseCallback := make(chan struct{})
+				defer close(releaseCallback)
+				callbackCanceled := make(chan struct{})
+				writerExited := make(chan struct{})
+				socket := newLivenessSocket()
+				connection := &signalRConnection{conn: socket}
+				if err := connection.subscribe(ctx); err != nil {
+					t.Fatal(err)
+				}
+				subscribedAt := connection.subscribedAt
+				connection.pending = []byte(`{"type":3,"invocationId":"0"}` + "\x1e" + incrementalFeedA + incrementalFeedC)
+				socket.write = func(writeCtx context.Context, _ []byte) error {
+					defer close(writerExited)
+					if timeout {
+						<-writeCtx.Done()
+						return writeCtx.Err()
+					}
+					return errors.New("synthetic-confidential-ping-error")
+				}
+				var batches []liveTimingBatch
+				var callbackErr error
+				result := startLivenessRead(ctx, connection, func(callbackCtx context.Context, batch liveTimingBatch) error {
+					batches = append(batches, batch)
+					if batch.source == liveTimingUpdateSourceSnapshot {
+						return nil
+					}
+					<-callbackCtx.Done()
+					callbackErr = callbackCtx.Err()
+					close(callbackCanceled)
+					<-releaseCallback
+					return callbackErr
+				})
+				wait := 15 * time.Second
+				wantError := "write SignalR ping failed"
+				if timeout {
+					wait = 45 * time.Second
+					wantError = "write SignalR ping: context deadline exceeded"
+				}
+				time.Sleep(wait)
+				synctest.Wait()
+				select {
+				case <-callbackCanceled:
+				default:
+					t.Fatal("ping failure did not cancel the active callback")
+				}
+				if callbackErr != context.Canceled || ctx.Err() != nil {
+					t.Fatalf("callback error = %v, caller error = %v", callbackErr, ctx.Err())
+				}
+				time.Sleep(time.Minute)
+				requireLivenessRunning(t, result) // Cancellation must not abandon local work.
+				releaseCallback <- struct{}{}
+				synctest.Wait()
+				err := <-result
+				if err == nil || err.Error() != wantError || errors.Is(err, errInvalidLiveTimingData) {
+					t.Fatalf("read after callback completion = %v, want %q", err, wantError)
+				}
+				var wantCause error
+				if timeout {
+					wantCause = context.DeadlineExceeded
+				}
+				if errors.Unwrap(err) != wantCause {
+					t.Fatalf("error cause = %v, want %v", errors.Unwrap(err), wantCause)
+				}
+				select {
+				case <-writerExited:
+				default:
+					t.Fatal("read returned before the ping writer exited")
+				}
+				want := []liveTimingBatch{
+					{source: liveTimingUpdateSourceSnapshot, requestedTopics: subscriptionTopics(), presentTopics: []string{}, updates: []liveTimingUpdate{}},
+					incrementalWantFeed("Started", "2026-08-21T10:30:00Z"),
+				}
+				encoded, _ := encodeSubscribeInvocation(subscriptionTopics())
+				if !reflect.DeepEqual(batches, want) || !reflect.DeepEqual(socket.written(), []string{string(encoded)}) ||
+					ctx.Err() != nil || connection.pending != nil || connection.requestedTopics != nil || connection.subscribedAt != subscribedAt {
+					t.Fatal("unexpected delivery, writes, caller cancellation, or connection state")
+				}
+			})
+		})
+	}
+}
+
 func TestLivenessReadExitJoinsBlockedWriter(t *testing.T) {
 	consumerErr := errors.New("synthetic consumer failure")
 	for _, test := range []struct {

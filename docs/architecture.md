@@ -203,6 +203,9 @@ reset, completion, and exact 15/30-second boundaries. Shell tests MUST use
 ignored records, subscription expiry despite hub pings, successful-write clock
 boundaries, initial handoff accounting, paused local work with continuing pings,
 sanitized failures, cancellation precedence, and writer cleanup on every exit.
+An active cooperative callback MUST observe ping-failure cancellation while its
+caller context remains live; `read` MUST still await that callback's completion
+before returning the sanitized ping failure, with no later record delivery.
 Synthetic WebSocket tests MUST prove successful read-context cancellation leaves
 the connection usable, control Ping/Pong cannot extend receive liveness, and a
 bounded blocked ping interrupts the reader. The actual receiver lifecycle MUST
