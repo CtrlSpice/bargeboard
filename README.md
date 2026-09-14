@@ -58,9 +58,9 @@ environment. GoReleaser builds the release subjects without uploading them. The
 workflow independently reproduces and verifies every subject, and only then does
 it upload, reverify, and publish the draft. GitHub immutability then locks the tag
 and assets. At publication, the workflow also requires the tag as the title,
-empty notes, the expected prerelease state, and no change to GitHub's latest-
-release selection. GitHub still allows maintainers to edit those display fields
-later. CI authenticates the official Go
+empty notes, and the expected prerelease state. It sends `make_latest: "false"`
+to opt out of promoting the release to latest. GitHub still allows maintainers
+to edit those display fields later. CI authenticates the official Go
 1.26.8, Syft, GoReleaser Pro, and actionlint archives against SHA-256 digests
 pinned in the repository before extracting or executing them. Tags are limited
 to 131 ASCII characters so every wrapped archive path has one canonical USTAR
