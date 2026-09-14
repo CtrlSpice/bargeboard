@@ -9,6 +9,16 @@ These instructions supplement `/Users/moya/Workspace/AGENTS.md` for work in this
 - Prefer a functional core and imperative shell: keep deterministic transformations free of I/O and shared state where practical, and test pure functions directly.
 - Keep the result idiomatic Go; do not introduce abstractions solely to imitate functional programming.
 
+## Release Implementation
+
+- Privileged release workflows must execute from protected `main`; accept a
+  signed release tag as untrusted dispatch data rather than executing workflow
+  or script code selected by that tag.
+- Native release archives must include deterministic third-party notices and
+  pinned corresponding source for dependencies whose licenses require it.
+- Validate an archive's bounded canonical representation before extracting it
+  or passing it to an SBOM scanner.
+
 ## Development Workflow
 
 - Develop features on branches rather than directly on `main`.

@@ -1,0 +1,147 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/goreleaser/goreleaser/9fa2a65578f357f21fc3f3035ff96ba9e2890ad9/www/static/schema-pro.json
+version: 2
+pro: true
+project_name: bargeboard
+dist: build/release
+
+metadata:
+  license: Apache-2.0
+
+before:
+  hooks:
+    - go run -mod=readonly ./scripts/thirdparty -output build/compliance
+
+builds:
+  - id: bargeboard
+    main: .
+    binary: bargeboard
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -mod=readonly
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    targets:
+      - linux_amd64_v1
+      - linux_arm64_v8.0
+      - darwin_amd64_v1
+      - darwin_arm64_v8.0
+      - windows_amd64_v1
+
+archives:
+  - id: release
+    ids:
+      - bargeboard
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    wrap_in_directory: true
+    builds_info:
+      owner: root
+      group: root
+      mtime: "{{ .CommitDate }}"
+    files:
+      - src: LICENSE
+        dst: LICENSE
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
+          mode: 0644
+      - src: README.md
+        dst: README.md
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
+          mode: 0644
+      - src: config.yaml
+        dst: config.yaml
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
+          mode: 0644
+      - src: build/compliance/THIRD_PARTY_NOTICES
+        dst: THIRD_PARTY_NOTICES
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
+          mode: 0644
+      - src: build/compliance/SOURCE-go-version-v1.9.0.zip
+        dst: SOURCE-go-version-v1.9.0.zip
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
+          mode: 0644
+      - src: build/compliance/SOURCE-golang-lru-v2.0.7.zip
+        dst: SOURCE-golang-lru-v2.0.7.zip
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
+          mode: 0644
+      - src: build/compliance/SOURCE-public-suffix-list.dat
+        dst: SOURCE-public-suffix-list.dat
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
+          mode: 0644
+      - src: build/compliance/SOURCE-public-suffix-list-LICENSE.txt
+        dst: SOURCE-public-suffix-list-LICENSE.txt
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
+          mode: 0644
+
+sboms:
+  - id: archives
+    artifacts: archive
+    ids:
+      - release
+    documents:
+      - "{{ .ArtifactName }}.sbom.spdx.json"
+    cmd: bash
+    args:
+      - "{{ .Env.PWD }}/scripts/generate-release-sbom.sh"
+      - "${artifact}"
+      - "${document}"
+    env:
+      - SYFT_CHECK_FOR_APP_UPDATE=false
+      - SYFT_CACHE_DIR=
+      - SYFT_CACHE_TTL=0
+      - SYFT_CPP_VCPKG_ALLOW_GIT_CLONE=false
+      - SYFT_FILE_METADATA_SELECTION=owned-by-package
+      - SYFT_GOLANG_SEARCH_REMOTE_LICENSES=false
+      - SYFT_JAVA_USE_NETWORK=false
+      - SYFT_JAVASCRIPT_SEARCH_REMOTE_LICENSES=false
+      - SYFT_PYTHON_SEARCH_REMOTE_LICENSES=false
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+  ids:
+    - release
+    - archives
+
+changelog:
+  disable: true
+
+release:
+  draft: true
+  replace_existing_draft: false
+  use_existing_draft: false
+  replace_existing_artifacts: false
+  prerelease: auto
+  preflight:
+    fail_on_error: true

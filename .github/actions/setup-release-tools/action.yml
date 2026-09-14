@@ -1,0 +1,64 @@
+name: Set up authenticated release tools
+description: Install pinned release tools after authenticating their official archives
+
+inputs:
+  actionlint:
+    description: Install actionlint for workflow validation
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Install Syft and GoReleaser Pro
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ "$RUNNER_OS/$RUNNER_ARCH" != "Linux/X64" ]]; then
+          printf 'unsupported release-tools runner: %s/%s\n' "$RUNNER_OS" "$RUNNER_ARCH" >&2
+          exit 1
+        fi
+        readonly syft_archive=syft_1.51.1_linux_amd64.tar.gz
+        readonly syft_checksum=8fcb33017a0dc1058298c923c436d19dfa68ae93968e0b423248542e3afb9fc3
+        readonly goreleaser_archive=goreleaser-pro_Linux_x86_64.tar.gz
+        readonly goreleaser_checksum=8480fde5637af908722b40c4dd7b4400058d5bade28e2dcc41ef1f16886888bd
+        readonly install_root="$RUNNER_TEMP/authenticated-release-tools"
+        trap 'rm -f "$RUNNER_TEMP/$syft_archive" "$RUNNER_TEMP/$goreleaser_archive"' EXIT
+
+        curl --fail --location --proto '=https' --proto-redir '=https' \
+          --retry 3 --retry-all-errors --output "$RUNNER_TEMP/$syft_archive" \
+          "https://github.com/anchore/syft/releases/download/v1.51.1/$syft_archive"
+        curl --fail --location --proto '=https' --proto-redir '=https' \
+          --retry 3 --retry-all-errors --output "$RUNNER_TEMP/$goreleaser_archive" \
+          "https://github.com/goreleaser/goreleaser-pro/releases/download/v2.18.1/$goreleaser_archive"
+        bash "$GITHUB_WORKSPACE/scripts/verify-sha256.sh" \
+          "$RUNNER_TEMP/$syft_archive" "$syft_checksum"
+        bash "$GITHUB_WORKSPACE/scripts/verify-sha256.sh" \
+          "$RUNNER_TEMP/$goreleaser_archive" "$goreleaser_checksum"
+
+        rm -rf "$install_root"
+        mkdir -p "$install_root/syft" "$install_root/goreleaser"
+        tar -xzf "$RUNNER_TEMP/$syft_archive" -C "$install_root/syft"
+        tar -xzf "$RUNNER_TEMP/$goreleaser_archive" -C "$install_root/goreleaser"
+        printf '%s\n%s\n' \
+          "$install_root/syft" \
+          "$install_root/goreleaser" >>"$GITHUB_PATH"
+
+    - name: Install actionlint
+      if: inputs.actionlint == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        readonly archive=actionlint_1.7.12_linux_amd64.tar.gz
+        readonly checksum=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        readonly install_root="$RUNNER_TEMP/authenticated-release-tools/actionlint"
+        trap 'rm -f "$RUNNER_TEMP/$archive"' EXIT
+
+        curl --fail --location --proto '=https' --proto-redir '=https' \
+          --retry 3 --retry-all-errors --output "$RUNNER_TEMP/$archive" \
+          "https://github.com/rhysd/actionlint/releases/download/v1.7.12/$archive"
+        bash "$GITHUB_WORKSPACE/scripts/verify-sha256.sh" \
+          "$RUNNER_TEMP/$archive" "$checksum"
+        mkdir -p "$install_root"
+        tar -xzf "$RUNNER_TEMP/$archive" -C "$install_root"
+        printf '%s\n' "$install_root" >>"$GITHUB_PATH"
