@@ -51,11 +51,12 @@ func normalizeLiveTimingBatch(
 			return normalizedLiveTimingBatch{}, invalidLiveTimingData("F1 feed batch shape is invalid")
 		}
 	case liveTimingUpdateSourceSnapshot:
-		if len(batch.requestedTopics) == 0 || len(batch.presentTopics) != len(batch.updates) {
+		requestedTopicSet, ok := liveTimingTopicSet(batch.requestedTopics)
+		if len(batch.requestedTopics) == 0 || !ok || len(batch.presentTopics) != len(batch.updates) {
 			return normalizedLiveTimingBatch{}, invalidLiveTimingData("F1 snapshot batch manifest is invalid")
 		}
 		for index, topic := range batch.presentTopics {
-			if topic == "" || topic != batch.updates[index].topic {
+			if _, ok := requestedTopicSet[topic]; !ok || topic != batch.updates[index].topic {
 				return normalizedLiveTimingBatch{}, invalidLiveTimingData("F1 snapshot batch manifest is invalid")
 			}
 		}
