@@ -374,7 +374,10 @@ func exchangeHandshake(ctx context.Context, connection *websocket.Conn) ([]byte,
 	if err := connection.Write(ctx, websocket.MessageText, encodeHandshakeRequest()); err != nil {
 		return nil, sanitizedTransportError(ctx, "write SignalR handshake", err)
 	}
+	return readHandshakeResponse(ctx, connection)
+}
 
+func readHandshakeResponse(ctx context.Context, connection *websocket.Conn) ([]byte, error) {
 	var buffered []byte
 	for {
 		messageType, contents, err := connection.Read(ctx)

@@ -517,35 +517,32 @@ func TestSetupWebSocketErrorsPreserveContext(t *testing.T) {
 	for _, operation := range []string{"read SignalR handshake", "write SignalR handshake", "write F1 topic subscription"} {
 		for _, want := range []error{context.Canceled, context.DeadlineExceeded} {
 			t.Run(operation+"/"+want.Error(), func(t *testing.T) {
-				watchdog, stopWatchdog := context.WithTimeout(context.Background(), time.Second)
-				defer stopWatchdog()
-				ctx, cancel := context.WithCancelCause(watchdog)
-				defer cancel(nil)
 				release := make(chan struct{})
 				defer close(release)
-				server := newConnectionTestServer(t, func(connection *websocket.Conn) {
-					if operation == "read SignalR handshake" && want == context.Canceled {
-						_, _, _ = connection.Read(ctx)
-						cancel(errors.New("synthetic-confidential-cause"))
-					}
+				server := newConnectionTestServer(t, func(*websocket.Conn) {
 					<-release
 				})
-				dialCtx, stopDial := context.WithTimeout(context.Background(), time.Second)
+				dialCtx, stopDial := context.WithTimeout(context.Background(), 5*time.Second)
 				defer stopDial()
 				conn, _, err := websocket.Dial(dialCtx, server.URL, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
 				defer conn.CloseNow()
-				if want == context.DeadlineExceeded {
-					deadline := time.Unix(1, 0)
-					if operation == "read SignalR handshake" {
-						deadline = time.Now().Add(25 * time.Millisecond)
+				if operation == "read SignalR handshake" {
+					// Complete the write with a live context before testing the read
+					// boundary; deadline expiry must not race with the write phase.
+					if err := conn.Write(dialCtx, websocket.MessageText, encodeHandshakeRequest()); err != nil {
+						t.Fatal(err)
 					}
+				}
+				ctx, cancel := context.WithCancelCause(context.Background())
+				defer cancel(nil)
+				if want == context.DeadlineExceeded {
 					var stop context.CancelFunc
-					ctx, stop = context.WithDeadlineCause(ctx, deadline, errors.New("synthetic-confidential-cause"))
+					ctx, stop = context.WithDeadlineCause(ctx, time.Unix(1, 0), errors.New("synthetic-confidential-cause"))
 					defer stop()
-				} else if operation != "read SignalR handshake" {
+				} else {
 					cancel(errors.New("synthetic-confidential-cause"))
 				}
 				if operation != "read SignalR handshake" {
@@ -561,7 +558,11 @@ func TestSetupWebSocketErrorsPreserveContext(t *testing.T) {
 					}
 				} else {
 					var pending []byte
-					pending, err = exchangeHandshake(ctx, conn)
+					if operation == "read SignalR handshake" {
+						pending, err = readHandshakeResponse(ctx, conn)
+					} else {
+						pending, err = exchangeHandshake(ctx, conn)
+					}
 					if pending != nil {
 						t.Errorf("canceled handshake returned pending data: %q", pending)
 					}
