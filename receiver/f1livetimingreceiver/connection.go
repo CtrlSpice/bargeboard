@@ -152,16 +152,18 @@ func (c *signalRConnection) read(
 	ctx context.Context,
 	consume func(context.Context, liveTimingBatch) error,
 ) error {
-	buffered := c.pending
+	buffered := hubRecordBuffer{contents: c.pending, needsCompaction: true}
 	c.pending = nil
 
 	for {
-		records, remaining, err := splitHubRecords(buffered)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		record, complete, err := buffered.next()
 		if err != nil {
 			return err
 		}
-		buffered = remaining
-		for _, record := range records {
+		if complete {
 			batch, err := decodeHubRecord(record, c.requestedTopics)
 			if err != nil {
 				return err
@@ -174,6 +176,7 @@ func (c *signalRConnection) read(
 					return fmt.Errorf("consume F1 live timing batch: %w", err)
 				}
 			}
+			continue
 		}
 
 		messageType, contents, err := c.conn.Read(ctx)
@@ -186,7 +189,7 @@ func (c *signalRConnection) read(
 		if messageType != websocket.MessageText {
 			return invalidLiveTimingData("F1 live timing used a non-text WebSocket message")
 		}
-		buffered = append(buffered, contents...)
+		buffered.contents = append(buffered.contents, contents...)
 	}
 }
 

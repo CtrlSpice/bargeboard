@@ -310,6 +310,8 @@ func TestReceiverStopsWhenServerDisallowsReconnect(t *testing.T) {
 }
 
 func TestReceiverReportsPermanentInvalidServerData(t *testing.T) {
+	validCompressed := compressedJSONPayload(t, []byte(`{"Entries":[]}`))
+	invalidCompressed := compressedJSONPayload(t, []byte(`{`))
 	tests := []struct {
 		name      string
 		message   string
@@ -324,6 +326,11 @@ func TestReceiverReportsPermanentInvalidServerData(t *testing.T) {
 			name:      "invalid subscription snapshot",
 			message:   `{"type":3,"invocationId":"0","result":"sensitive-snapshot"}`,
 			sensitive: []string{"sensitive-snapshot"},
+		},
+		{
+			name: "snapshot with valid and invalid compressed siblings",
+			message: `{"type":3,"invocationId":"0","result":{"CarData.z":` + string(validCompressed) +
+				`,"Position.z":` + string(invalidCompressed) + `}}` + "\x1e" + incrementalFeedC,
 		},
 	}
 
@@ -346,6 +353,11 @@ func TestReceiverReportsPermanentInvalidServerData(t *testing.T) {
 			settings := receivertest.NewNopSettings(Type)
 			settings.Logger = zap.New(core)
 			receiver := newLiveTimingReceiver(connectionTestConfig(t, server.URL), settings)
+			var consumed []normalizedLiveTimingBatch
+			receiver.consume = func(_ context.Context, batch normalizedLiveTimingBatch) error {
+				consumed = append(consumed, batch)
+				return nil
+			}
 			receiver.retryDelay = func(int) time.Duration {
 				retries.Add(1)
 				return 0
@@ -365,6 +377,9 @@ func TestReceiverReportsPermanentInvalidServerData(t *testing.T) {
 			case <-done:
 			case <-time.After(time.Second):
 				t.Fatal("timed out waiting for receiver to stop")
+			}
+			if consumed != nil {
+				t.Errorf("invalid batch reached normalized consumer: %#v", consumed)
 			}
 			if got := connections.Load(); got != 1 {
 				t.Errorf("connection count = %d, want 1", got)
