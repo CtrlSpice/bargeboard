@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -256,6 +257,153 @@ func TestNormalizeLiveTimingBatchPreservesEmptySnapshot(t *testing.T) {
 	}
 	if !got.observationTime.Equal(observationTime) {
 		t.Errorf("observation time = %s, want %s", got.observationTime, observationTime)
+	}
+}
+
+func TestNormalizeLiveTimingBatchSnapshotWireMembership(t *testing.T) {
+	observationTime := time.Date(2026, 8, 21, 10, 30, 0, 0, time.UTC)
+	// Synthetic payloads isolate manifest validation from source semantics.
+	plainPayload := json.RawMessage(`{"Entries":[]}`)
+	compressedPayload := compressedJSONPayload(t, plainPayload)
+	tests := []struct {
+		name          string
+		requested     []string
+		present       []string
+		wantRequested []string
+		wantPresent   []string
+		wantErr       bool
+	}{
+		{
+			name:      "plain topic cannot satisfy compressed request",
+			requested: []string{"Position", "CarData.z"}, present: []string{"Position", "CarData"},
+			wantErr: true,
+		},
+		{
+			name:      "compressed topic cannot satisfy plain request",
+			requested: []string{"Position", "CarData"}, present: []string{"Position", "CarData.z"},
+			wantErr: true,
+		},
+		{
+			name:      "exact compressed match",
+			requested: []string{"CarData.z"}, present: []string{"CarData.z"},
+			wantRequested: []string{"CarData"}, wantPresent: []string{"CarData"},
+		},
+		{
+			name:      "exact plain match",
+			requested: []string{"CarData"}, present: []string{"CarData"},
+			wantRequested: []string{"CarData"}, wantPresent: []string{"CarData"},
+		},
+		{
+			name:      "partial snapshot preserves manifest order",
+			requested: []string{"Position.z", "CarData.z", "SessionInfo"}, present: []string{"CarData.z", "Position.z"},
+			wantRequested: []string{"Position", "CarData", "SessionInfo"}, wantPresent: []string{"CarData", "Position"},
+		},
+		{
+			name:          "nil empty snapshot",
+			requested:     []string{"CarData.z", "Position"},
+			wantRequested: []string{"CarData", "Position"}, wantPresent: []string{},
+		},
+		{
+			name:      "non-nil empty snapshot",
+			requested: []string{"CarData.z", "Position"}, present: []string{},
+			wantRequested: []string{"CarData", "Position"}, wantPresent: []string{},
+		},
+		{
+			name:      "duplicate requested topic",
+			requested: []string{"CarData.z", "CarData.z"}, present: []string{"CarData.z"},
+			wantErr: true,
+		},
+		{
+			name:      "duplicate requested topic in empty snapshot",
+			requested: []string{"CarData", "CarData"}, wantErr: true,
+		},
+		{
+			name:      "requested normalized collision",
+			requested: []string{"CarData.z", "CarData"}, present: []string{"CarData.z"},
+			wantErr: true,
+		},
+		{
+			name:      "requested normalized collision in empty snapshot",
+			requested: []string{"CarData.z", "CarData"}, wantErr: true,
+		},
+		{
+			name:      "present normalized collision",
+			requested: []string{"CarData.z", "CarData"}, present: []string{"CarData.z", "CarData"},
+			wantErr: true,
+		},
+		{
+			name:      "duplicate present topic",
+			requested: []string{"CarData.z"}, present: []string{"CarData.z", "CarData.z"},
+			wantErr: true,
+		},
+		{
+			name:      "empty requested topic",
+			requested: []string{""}, wantErr: true,
+		},
+		{
+			name:      "no requested topics",
+			requested: []string{}, wantErr: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			batch := liveTimingBatch{
+				source:          liveTimingUpdateSourceSnapshot,
+				requestedTopics: slices.Clone(test.requested),
+				presentTopics:   slices.Clone(test.present),
+			}
+			if test.present != nil {
+				batch.updates = make([]liveTimingUpdate, 0, len(test.present))
+			}
+			for _, topic := range test.present {
+				payload := plainPayload
+				if strings.HasSuffix(topic, ".z") {
+					payload = compressedPayload
+				}
+				batch.updates = append(batch.updates, liveTimingUpdate{
+					topic: topic, payload: bytes.Clone(payload), source: liveTimingUpdateSourceSnapshot,
+				})
+			}
+			before := batch
+			before.requestedTopics = slices.Clone(batch.requestedTopics)
+			before.presentTopics = slices.Clone(batch.presentTopics)
+			before.updates = slices.Clone(batch.updates)
+			for index := range before.updates {
+				before.updates[index].payload = bytes.Clone(batch.updates[index].payload)
+			}
+
+			got, err := normalizeLiveTimingBatch(batch, observationTime)
+			if !reflect.DeepEqual(batch, before) {
+				t.Errorf("input batch changed: got %#v, want %#v", batch, before)
+			}
+			if test.wantErr {
+				if !errors.Is(err, errInvalidLiveTimingData) {
+					t.Errorf("error = %v, want errInvalidLiveTimingData", err)
+				}
+				if !reflect.DeepEqual(got, normalizedLiveTimingBatch{}) {
+					t.Errorf("failed normalization returned %#v, want zero batch", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("normalizeLiveTimingBatch() error = %v", err)
+			}
+			want := normalizedLiveTimingBatch{
+				source:          liveTimingUpdateSourceSnapshot,
+				requestedTopics: test.wantRequested,
+				presentTopics:   test.wantPresent,
+				observationTime: observationTime,
+				updates:         make([]normalizedLiveTimingUpdate, 0, len(test.wantPresent)),
+			}
+			for _, topic := range test.wantPresent {
+				want.updates = append(want.updates, normalizedLiveTimingUpdate{
+					topic: topic, payload: plainPayload, source: liveTimingUpdateSourceSnapshot,
+				})
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("normalized batch = %#v, want %#v", got, want)
+			}
+		})
 	}
 }
 

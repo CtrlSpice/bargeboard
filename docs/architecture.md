@@ -412,12 +412,19 @@ payload normalization all-or-nothing. Semantic validation remains topic-local
 at the narrowest independently valid boundary. Synthesizing empty payloads for
 absent topics is forbidden.
 
-The transport batch retains exact wire topic identities. Before reduction,
+The transport batch retains exact wire topic identities; the pure normalization
+seam MUST validate snapshot present/update membership in the exact requested wire
+topic set before removing compression suffixes. Before reduction,
 normalization removes one terminal `.z` compression suffix from requested,
 present, and update topics together; a resulting alias collision invalidates the
 whole batch. The Collector observation `time.Time` retains its process-local
 monotonic reading for deadline arithmetic. Signal projection converts its wall
 component to UTC where required.
+
+Direct pure normalization tests MUST cover wire-alias mismatches in both
+directions, exact compressed and plain matches, duplicate requests, normalized
+collisions, empty and partial snapshots, complete zero-output failure, and input
+preservation.
 
 Snapshot reduction proceeds as one transaction:
 
