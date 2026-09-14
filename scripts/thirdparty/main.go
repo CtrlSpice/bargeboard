@@ -33,7 +33,7 @@ const (
 	maxNoticeMaterialSize = 64 << 20
 	packageCommandWait    = 5 * time.Second
 	packageCommandTimeout = 5 * time.Minute
-	approvedNoticesSHA256 = "4be6ba71b1153e0937f54f465c8a7110bdf56911e300ce4a20df5041498fb1a0" // Go 1.26.8 release graph
+	approvedNoticesSHA256 = "40ecd0bf944708aa75f9ea1b7db1d7d5e9dc4c296ebe9d214d97af489923011b" // Go 1.26.8; notices/README.md records the reviewed delta
 )
 
 type buildTarget struct {
@@ -354,6 +354,9 @@ func packageSourceFiles(pkg listedPackage) []string {
 func collectMaterials(components map[string]*component) error {
 	materialSize := 0
 	for _, current := range components {
+		if err := validateAttributionComponent(current); err != nil {
+			return err
+		}
 		legalFiles := 0
 		licenseFiles := 0
 		if current.path == "stdlib" {
@@ -415,9 +418,13 @@ func collectMaterials(components map[string]*component) error {
 			if err != nil {
 				return fmt.Errorf("read selected source notice %s: %w", filename, err)
 			}
+			relative = filepath.ToSlash(relative)
+			if err := validateAttributionGroups(current, relative, notices); err != nil {
+				return err
+			}
 			for index, notice := range notices {
-				label := fmt.Sprintf("source-header:%s#%d", filepath.ToSlash(relative), index+1)
-				requiresSource, err := classifySourceLicense(notice)
+				label := fmt.Sprintf("source-header:%s#%d", relative, index+1)
+				requiresSource, err := classifyAttributedSource(current, relative, notice)
 				if err != nil {
 					return fmt.Errorf("validate selected source notice %s: %w", filename, err)
 				}
@@ -426,6 +433,9 @@ func collectMaterials(components map[string]*component) error {
 					return err
 				}
 			}
+		}
+		if err := collectSupplementalMaterials(current, &materialSize); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -725,6 +735,7 @@ func isSourceLicenseLanguage(lower string) bool {
 	for _, marker := range []string{
 		"license", "licence", "permission", "permitted", "prohibit", "restrict", "rights", "commercial",
 		"redistribut", "may use", "may not", "allowed", "governed by", "source code form is subject",
+		"released under",
 	} {
 		if strings.Contains(lower, marker) {
 			return true
@@ -895,13 +906,22 @@ func goSourceNotices(filename string, contents []byte) ([][]byte, error) {
 	}
 	var notices [][]byte
 	for _, group := range parsed.Comments {
-		if group.Pos() > parsed.Name.Pos() {
-			break
-		}
 		start := files.Position(group.Pos()).Offset
-		end := files.Position(group.End()).Offset
-		if start < 0 || end < start || end > len(contents) {
+		last := files.Position(group.List[len(group.List)-1].Pos()).Offset
+		if start < 0 || last < start || last >= len(contents) {
 			return nil, fmt.Errorf("invalid comment offsets")
+		}
+		// ast.Comment.End uses text with CR removed. Locate the final comment's
+		// raw terminator instead, preserving CRLF and embedded CR until normalization.
+		end := len(contents)
+		if bytes.HasPrefix(contents[last:], []byte("/*")) {
+			closing := bytes.Index(contents[last:], []byte("*/"))
+			if closing < 0 {
+				return nil, fmt.Errorf("unterminated parsed comment")
+			}
+			end = last + closing + 2
+		} else if newline := bytes.IndexByte(contents[last:], '\n'); newline >= 0 {
+			end = last + newline + 1
 		}
 		notice := contents[start:end]
 		if !containsNoticeLanguage(notice) {
@@ -971,6 +991,9 @@ func containsNoticeLanguage(contents []byte) bool {
 	for _, phrase := range [][]byte{
 		[]byte("copyright"),
 		[]byte("licensed under"),
+		[]byte("released under"),
+		[]byte("mit license"),
+		[]byte("bsd license"),
 		[]byte("license:"),
 		[]byte("spdx-license-identifier"),
 		[]byte("source code form is subject to the terms"),

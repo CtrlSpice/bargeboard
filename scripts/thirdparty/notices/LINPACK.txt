@@ -1,0 +1,51 @@
+LINPACK provenance and licensing
+===============================
+
+Gonum v0.17.0, mat/cholesky.go, Cholesky.SymRankOne is based on
+LINPACK dchud.f and dchdd.f:
+https://www.netlib.org/linpack/dchud.f
+https://www.netlib.org/linpack/dchdd.f
+
+Original attribution in both routines:
+c     linpack. this version dated 08/14/78 .
+c     g.w. stewart, university of maryland, argonne national lab.
+
+The LINPACK readme credits:
+Developed by Jack Dongarra, Jim Bunch, Cleve Moler and Pete Stewart.
+ 1 Feb 84
+
+Licensing evidence:
+On 26 August 2013, Björn Esser's Fedora LINPACK package review quoted
+this response from Jack Dongarra:
+
+  LINPACK is licensed under the Modified 3 clause BSD license.
+  Hope this helps,
+  Jack Dongarra
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1000829#c13
+
+On 31 August 2013, the same packager recorded that upstream had confirmed
+the complete BSD-3-Clause text sent to them:
+https://bugzilla.redhat.com/show_bug.cgi?id=1000829#c25
+
+The evidence is a public packager's record of upstream correspondence.
+The original complete email has not been recovered for this notice.
+
+Standard BSD-3-Clause terms and disclaimer
+----------------------------------------
+The following standard text reproduces the specifically identified license
+from SPDX license-list-data v3.27.0, commit
+d46e94e2c78ceede1cfc63cfa0396472d2798d4c, text/BSD-3-Clause.txt.
+It is a supplemental reproduction, not a recovered LINPACK license file
+or a transcription of Dongarra's complete email. The template copyright
+line is omitted; the original source attribution is retained above.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

@@ -80,6 +80,13 @@ license terms, when a selected module lacks legal material, when a source licens
 needs explicit policy review, or when an MPL dependency lacks pinned corresponding
 source.
 
+Go attribution is collected from comment groups throughout each selected file,
+including after declarations. Reviewed source exceptions and supplemental notices
+are pinned to their owning module and source path; changed or missing attribution
+fails generation. The [attribution record](scripts/thirdparty/notices/README.md)
+documents the upstream evidence, including LINPACK's recorded BSD-3-Clause
+confirmation, and the complete reviewed notices-output delta.
+
 The final verified read of `main` immediately before publication is the release
 decision point. A later branch update does not invalidate that decision. A
 failed run before publication can leave an unpublished draft that maintainers
