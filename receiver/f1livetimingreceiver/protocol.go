@@ -110,21 +110,40 @@ func encodeSubscribeInvocation(topics []string) ([]byte, error) {
 	return append(encoded, recordSeparator), nil
 }
 
-func splitHubRecords(contents []byte) (records [][]byte, remaining []byte, err error) {
-	for {
-		separator := bytes.IndexByte(contents, recordSeparator)
-		if separator == -1 {
-			if len(contents) > maxHubRecordSize {
-				return nil, nil, invalidLiveTimingData(fmt.Sprintf("SignalR record exceeds %d bytes", maxHubRecordSize))
-			}
-			return records, contents, nil
-		}
-		if separator > maxHubRecordSize {
-			return nil, nil, invalidLiveTimingData(fmt.Sprintf("SignalR record exceeds %d bytes", maxHubRecordSize))
-		}
-		records = append(records, contents[:separator])
-		contents = contents[separator+1:]
+// splitHubRecord checks only the first record and returns views of contents.
+// Later records are framed only after the caller has processed this one.
+func splitHubRecord(contents []byte) (record, remaining []byte, complete bool, err error) {
+	record, remaining, complete = splitFirstRecord(contents)
+	if len(record) > maxHubRecordSize || (!complete && len(remaining) > maxHubRecordSize) {
+		return nil, nil, false, invalidLiveTimingData(fmt.Sprintf("SignalR record exceeds %d bytes", maxHubRecordSize))
 	}
+	return record, remaining, complete, nil
+}
+
+// hubRecordBuffer owns the compaction lifecycle between successful message reads.
+// Handshake pending data starts with needsCompaction set because it may retain
+// the consumed handshake prefix. The caller appends messages only after next
+// returns an incomplete record without error.
+type hubRecordBuffer struct {
+	contents        []byte
+	needsCompaction bool
+}
+
+func (b *hubRecordBuffer) next() (record []byte, complete bool, err error) {
+	record, remaining, complete, err := splitHubRecord(b.contents)
+	if err != nil {
+		return nil, false, err
+	}
+	if complete {
+		b.contents = remaining
+		b.needsCompaction = true
+	} else if b.needsCompaction {
+		// Detach the consumed prefix once, then reuse storage across fragments
+		// until another complete record creates a new compaction boundary.
+		b.contents = bytes.Clone(remaining)
+		b.needsCompaction = false
+	}
+	return record, complete, nil
 }
 
 func decodeHubRecord(record []byte, requestedTopics []string) (*liveTimingBatch, error) {
