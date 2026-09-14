@@ -1,0 +1,4 @@
+// Copyright 2019 Montgomery Edwards⁴⁴⁸ and Faye Amacker
+//
+// Special thanks to Kathryn Long for her Rust implementation
+// of float16 at github.com/starkat99/half-rs (MIT license)

@@ -1,0 +1,3 @@
+// Translated from Rust to Go by Montgomery Edwards⁴⁴⁸ (github.com/x448).
+	// All 4294967296 conversions with this were confirmed to be correct by x448.
+	// Original Rust implementation is by Kathryn Long (github.com/starkat99) with MIT license.

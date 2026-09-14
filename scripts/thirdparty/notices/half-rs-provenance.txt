@@ -1,0 +1,22 @@
+half-rs MIT notice provenance
+=============================
+
+github.com/x448/float16 v0.8.4, float16.go, credits Kathryn Long and
+github.com/starkat99/half-rs under the MIT license. The accompanying
+half-rs-LICENSE-MIT.txt retains Copyright (c) 2016 Kathryn Long and the
+complete MIT terms from half-rs v1.4.0:
+https://github.com/starkat99/half-rs/blob/5f01541c72030584f2160816b9b4c7ee45a4b657/LICENSE-MIT
+
+float16 does not record an exact half-rs import revision. This revision is
+a contemporary source/license witness, not a proven import pin. Its
+src/binary16/convert.rs:144-201 supplies the matching fallback conversion
+structure, bit masks, exponent handling, and ties-to-even rounding.
+https://github.com/starkat99/half-rs/blob/5f01541c72030584f2160816b9b4c7ee45a4b657/src/binary16/convert.rs#L144-L201
+
+The same MIT license bytes occur at half-rs v1.0.0:
+https://github.com/starkat99/half-rs/blob/dba6126dd4a7cdb637dc0d8882d30e3818e1d002/LICENSE-MIT
+
+Upstream LICENSE-MIT raw SHA-256:
+54c0366c7f8643c8502618e7f02b4176f28c834a6b0315b969477720b65e183f
+Retained text SHA-256 (CRLF normalized to LF, final LF supplied):
+02f1e4709f1c03c99e2cb4de81f694cc41fb26acc14c0e6f3ee74a4852f0e4e8

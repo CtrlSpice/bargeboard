@@ -156,6 +156,7 @@ func TestClassifySourceLicense(t *testing.T) {
 		{name: "unknown SPDX", notice: "// SPDX-License-Identifier: LicenseRef-Unknown\n", wantError: true},
 		{name: "unknown provenance", notice: "// Provenance-includes-license: LicenseRef-Unknown\n", wantError: true},
 		{name: "unknown prose", notice: "// Licensed under the Example Commercial License.\n", wantError: true},
+		{name: "unknown release terms", notice: "// Released under Example terms.\n", wantError: true},
 		{name: "additive restriction", notice: testMITLicense + "\nAdditional use requires written permission.\n", wantError: true},
 		{name: "implicit restriction", notice: "// Copyright 2026 Example Authors\n// Redistribution of this file is prohibited.\n", wantError: true},
 	}
@@ -171,7 +172,7 @@ func TestClassifySourceLicense(t *testing.T) {
 
 func TestSourceNoticesKeepsLeadingAttributionGroupsOnly(t *testing.T) {
 	filename := filepath.Join(t.TempDir(), "example.h")
-	contents := []byte("// Copyright 2026 Example Authors\n// Licensed under the MIT License.\n\n// Package documentation.\n\n// Copyright 2025 Upstream Authors\n// Derived from the upstream implementation.\n\n#include <stdint.h>\n")
+	contents := []byte("// Copyright 2026 Example Authors\n// Licensed under the MIT License.\n\n// Package documentation.\n\n// Copyright 2025 Upstream Authors\n// Derived from the upstream implementation.\n\n#include <stdint.h>\n// Copyright outside leading non-Go scope\n")
 	if err := os.WriteFile(filename, contents, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -610,10 +611,10 @@ func TestNormalizeNotice(t *testing.T) {
 	}
 }
 
-func TestSourceNoticesSelectsLeadingAttribution(t *testing.T) {
+func TestSourceNoticesSelectsAttributionAfterPackage(t *testing.T) {
 	directory := t.TempDir()
 	filename := filepath.Join(directory, "fixture.go")
-	contents := []byte("// Copyright Example Authors\n// Licensed under the Example License.\n\npackage fixture\n\n// Copyright ignored\n")
+	contents := []byte("// Copyright Example Authors\n// Licensed under the Example License.\n\npackage fixture\n\n// Copyright retained\n")
 	if err := os.WriteFile(filename, contents, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -621,7 +622,8 @@ func TestSourceNoticesSelectsLeadingAttribution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(notices) != 1 || string(notices[0]) != "// Copyright Example Authors\n// Licensed under the Example License.\n" {
+	want := [][]byte{[]byte("// Copyright Example Authors\n// Licensed under the Example License.\n"), []byte("// Copyright retained\n")}
+	if !reflect.DeepEqual(notices, want) {
 		t.Fatalf("sourceNotices() = %q", notices)
 	}
 }
@@ -643,12 +645,10 @@ func TestSourceNoticesSelectsLeadingAttributionFromData(t *testing.T) {
 
 func TestRenderNoticesIsDeterministicAndDeduplicatesText(t *testing.T) {
 	license := []byte("Example license\n")
-	digest := sha256.Sum256(license)
-	digestText := hex.EncodeToString(digest[:])
 	components := map[string]*component{
 		"example.com/b@v2.0.0": {
 			path: "example.com/b", version: "v2.0.0", sum: "h1:b", source: "source.zip", sourceHash: "abc",
-			materials: map[string][]byte{"LICENSE": license},
+			materials: map[string][]byte{"LICENSE": license, "supplemental:UPSTREAM.txt": license},
 		},
 		"example.com/a@v1.0.0": {
 			path: "example.com/a", version: "v1.0.0", sum: "h1:a",
@@ -666,16 +666,31 @@ func TestRenderNoticesIsDeterministicAndDeduplicatesText(t *testing.T) {
 	if !bytes.Equal(first, second) {
 		t.Fatal("renderNotices is nondeterministic")
 	}
-	text := string(first)
-	if strings.Count(text, "Example license\n") != 1 {
-		t.Fatalf("legal text was not deduplicated:\n%s", text)
-	}
-	if strings.Index(text, "Module\texample.com/a") > strings.Index(text, "Module\texample.com/b") {
-		t.Fatalf("components are not sorted:\n%s", text)
-	}
-	if !strings.Contains(text, "Legal text SHA-256: "+digestText) ||
-		!strings.Contains(text, "Source\tsource.zip\tabc") {
-		t.Fatalf("notice metadata is incomplete:\n%s", text)
+	want := `Bargeboard third-party notices
+
+This file is generated from the packages selected for every supported release target.
+Module records use tab-separated path, version, and authenticated Go checksum fields.
+
+Module	example.com/a	v1.0.0	h1:a
+Legal	bc2826aa98efbc4e96008986014adaa4315ebc742ac6577d64151178e952be0a	COPYING
+
+Module	example.com/b	v2.0.0	h1:b
+Legal	bc2826aa98efbc4e96008986014adaa4315ebc742ac6577d64151178e952be0a	LICENSE
+Legal	bc2826aa98efbc4e96008986014adaa4315ebc742ac6577d64151178e952be0a	supplemental:UPSTREAM.txt
+Source	source.zip	abc
+
+================================================================================
+Legal text SHA-256: bc2826aa98efbc4e96008986014adaa4315ebc742ac6577d64151178e952be0a
+Used by:
+- example.com/a@v1.0.0 COPYING
+- example.com/b@v2.0.0 LICENSE
+- example.com/b@v2.0.0 supplemental:UPSTREAM.txt
+--------------------------------------------------------------------------------
+Example license
+
+`
+	if string(first) != want {
+		t.Fatalf("complete notices =\n%s\nwant:\n%s", first, want)
 	}
 }
 

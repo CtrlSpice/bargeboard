@@ -1,0 +1,25 @@
+// Algorithms for updating and downdating the Cholesky factorization are
+	// described, for example, in
+	// - J. J. Dongarra, J. R. Bunch, C. B. Moler, G. W. Stewart: LINPACK
+	//   Users' Guide. SIAM (1979), pages 10.10--10.14
+	// or
+	// - P. E. Gill, G. H. Golub, W. Murray, and M. A. Saunders: Methods for
+	//   modifying matrix factorizations. Mathematics of Computation 28(126)
+	//   (1974), Method C3 on page 521
+	//
+	// The implementation is based on LINPACK code
+	// http://www.netlib.org/linpack/dchud.f
+	// http://www.netlib.org/linpack/dchdd.f
+	// and
+	// https://icl.cs.utk.edu/lapack-forum/viewtopic.php?f=2&t=2646
+	//
+	// According to http://icl.cs.utk.edu/lapack-forum/archives/lapack/msg00301.html
+	// LINPACK is released under BSD license.
+	//
+	// See also:
+	// - M. A. Saunders: Large-scale Linear Programming Using the Cholesky
+	//   Factorization. Technical Report Stanford University (1972)
+	//   http://i.stanford.edu/pub/cstr/reports/cs/tr/72/252/CS-TR-72-252.pdf
+	// - Matthias Seeger: Low rank updates for the Cholesky decomposition.
+	//   EPFL Technical Report 161468 (2004)
+	//   http://infoscience.epfl.ch/record/161468
