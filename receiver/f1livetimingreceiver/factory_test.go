@@ -243,6 +243,7 @@ func TestSharedReceiverReportsPermanentStatusToEverySignalHost(t *testing.T) {
 	if err := traces.Start(context.Background(), hosts[0]); err != nil {
 		t.Fatalf("traces Start() error = %v", err)
 	}
+	requireAwaitingInput(t, hosts[0])
 	shared := traces.(*sharedReceiver)
 	select {
 	case <-shared.receiver.done:

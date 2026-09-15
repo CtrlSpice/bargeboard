@@ -6,7 +6,7 @@ A custom OpenTelemetry Collector distribution for Formula 1 telemetry. Designed 
 
 ## Active implementation
 
-The Go Collector distribution is the active implementation. Its baseline accepts OTLP traces, metrics, and logs, batches them, and writes them to the Collector's `debug` exporter. The compiled F1 Live Timing receiver authenticates, subscribes, reconnects, decodes, validates, and normalizes the live feed. Pure SessionInfo parsing, state reduction, and aggregate identity gating are implemented but remain unwired; multi-topic reduction, runtime ownership, and OTLP projection are the next behavior slices. A Go OpenF1 receiver does not exist yet.
+The Go Collector distribution is the active implementation. Its baseline accepts OTLP traces, metrics, and logs, batches them, and writes them to the Collector's `debug` exporter. The compiled F1 Live Timing receiver authenticates, subscribes, reconnects, decodes, validates, and normalizes the live feed. It reports input activity and interruptions in the terminal and through Collector internal metrics. **F1 race export is not implemented:** the normalized-batch consumer is a no-op. Pure SessionInfo parsing, state reduction, and aggregate identity gating remain unwired; multi-topic reduction, runtime ownership, and OTLP projection are the next behavior slices. A Go OpenF1 receiver does not exist yet.
 
 The canonical design is the evolving [Bargeboard architecture](docs/architecture.md). It records accepted decisions, source limitations, pending candidates, implementation seams, and the required checks for future human and agent contributors.
 
@@ -139,6 +139,57 @@ It reconnects after 30 seconds of server wait without a complete accepted hub
 record, or without the initial subscription completion. Incoming pings keep the
 connection active but do not satisfy subscription completion. Local processing
 time is excluded from both server-wait budgets.
+
+### Watching Live Timing input
+
+Keep the Collector in the foreground to see its notices on stderr. **Press
+Ctrl-C to stop the Collector** and shut down gracefully. Retries have no attempt
+limit: the delay grows from one second to a maximum of 30 seconds.
+
+Startup reports a recoverable not-receiving status until the validated
+subscription and first normalized updates arrive. Waiting alone does not count
+as an outage.
+
+When the receiver detects an interruption, it warns immediately that updates
+may be missing. Progress notices include the actual reconnect attempt count,
+run elapsed time, current and total outage seconds, and seconds until the next
+scheduled attempt. A new connection alone does not mean input has recovered:
+the receiver waits for both
+a validated subscription completion and at least one normalized update on that
+connection. It then reports:
+
+> Live Timing updates resumed; missed updates may be unrecoverable
+
+The first input activity has its own notice, even if it closes an outage before
+any input was ready. A recovery notice reports the duration of the gap that just
+ended. Waiting for initial updates, unresolved outages, and a stopped input are
+reported every 30 process seconds.
+Pings and empty subscription snapshots do not count as updates. An idle feed
+does not create an additional failure or change the retry policy.
+
+Invalid source data or a server close that disallows reconnect stops the F1
+input and produces an error; the Collector can still run. The input run's final
+summary retains outage, recovery, reconnect-attempt, normalized-update, and
+consumer-failure totals, plus whether an outage remains unresolved. It also
+retains total outage duration, including any open gap as of that summary. These are
+input observations, not evidence that any F1 racing signals were exported.
+
+The shipped configuration exposes Collector internal metrics at
+[`http://127.0.0.1:8888/metrics`](http://127.0.0.1:8888/metrics):
+
+```bash
+curl http://127.0.0.1:8888/metrics
+```
+
+The `otelcol_f1livetiming_` metrics describe connection and subscription state,
+outages, retries, recoveries, normalized input envelopes, and consumer failures.
+`last_update_age` is seconds since the last locally accepted nonempty batch; it
+is absent before that first batch and does not measure source freshness.
+Internal input activity can be visible even though F1 race export is still
+unimplemented. See the [operational contract](docs/architecture.md#live-timing-operational-visibility)
+for names, units, and lifecycle semantics. Setting
+`service.telemetry.metrics.level` to `none` disables these metrics; terminal
+notices and per-run summary totals remain available.
 
 The packaged Windows configuration uses the same `HOME`-relative path.
 PowerShell does not normally export its `$HOME` value as an environment

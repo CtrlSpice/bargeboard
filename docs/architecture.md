@@ -79,9 +79,11 @@ The F1 Live Timing receiver currently authenticates, negotiates SignalR,
 subscribes, reconnects, decodes records, distinguishes feed updates from
 subscription snapshots, validates timestamps and JSON, and inflates compressed
 telemetry. Its reducer and OTLP projector are not implemented yet, so its
-normalized-batch consumer is currently a no-op. The transport shell treats a
-valid batch as connection activity even if that consumer fails, emits one
-sanitized failure log, and continues reading rather than reconnecting.
+normalized-batch consumer is currently a no-op. Input notices and Collector
+internal metrics are implemented under Live Timing Operational Visibility below;
+they MUST NOT imply racing projection or export. The transport shell retains its
+valid-batch backoff reset even if that consumer fails, emits one sanitized
+consumer warning per run, and continues reading rather than reconnecting.
 
 No Go OpenF1 receiver exists yet.
 
@@ -212,6 +214,193 @@ bounded blocked ping interrupts the reader. The actual receiver lifecycle MUST
 reconnect through backoff after liveness expiry and still honor a subsequent
 source close without reconnect. These tests MUST NOT wait for real 15- or
 30-second intervals or contact the live service.
+
+### Live Timing Operational Visibility
+
+**Status: GREEN**
+
+This contract promotes only bounded input-operation metrics and foreground
+notices. Source lag, payload sizes, validation-failure metrics, and other pending
+metric candidates remain **YELLOW**. Operational activity MUST NOT substitute
+for evidence of F1 racing emission. Startup notices MUST state that F1 race
+export is unimplemented while the normalized consumer and projector remain
+unwired.
+
+The receiver MUST distinguish established transport, validated subscription
+completion, normalized update observations, and actual racing export. After an
+outage, input recovery requires both successful normalization of the current
+connection's Subscribe completion and at least one normalized update on that
+connection. Either can arrive first; a nonempty snapshot supplies both. An empty
+completion, a Subscribe write, a connection, a ping, or an ignored hub record
+alone cannot establish recovery. Initial input remains waiting until the same
+condition and has a distinct first-data notice. `opStart` MUST report one
+`StatusRecoverableError` identifying that input is not yet receiving while it
+awaits validated subscription and first normalized updates. This is waiting,
+not a counted outage. Periodic waiting notices MUST NOT repeat status events.
+The pinned Collector reports automatic OK only while its component FSM is still
+Starting, so this explicit transition prevents startup success from implying
+input readiness. Each signal host receives the latest state during its own
+Start, after the Collector's Starting event. OK is reported only when the input
+condition is met, including when replayed to a later signal host.
+The whole batch MUST normalize
+before any input count or subscription confirmation changes. Update counts count
+envelopes, including snapshot topic envelopes, never nested cars or metric
+points. A failed sibling invalidates the complete snapshot's observations.
+
+The existing receiver retry loop remains the sole retry owner. Its normalized
+batch backoff-reset rule, including an empty completion, is separate from this
+stricter recovery condition. A detected runtime failure MUST produce one stable,
+sanitized outage warning before scheduling backoff, identify possible missing
+updates, and say `Press Ctrl-C to stop the Collector.` It reports
+`StatusRecoverableError`. Repeated failed setup or flapping connections before
+recovery remain one outage episode. `attempt` counts actual reconnect calls over
+the run and increments immediately before each call, never merely for scheduling
+or canceling a wait. Progress before a wait and before an attempt includes
+numeric `attempt`, `run_elapsed_seconds`, `outage_duration_seconds`,
+`total_outage_duration_seconds`, and `next_delay_seconds` fields. Run elapsed is
+time since runtime reporting began. Outage duration is the active episode's age,
+or the just-closed gap on its recovery/first-data notice; it is zero otherwise.
+Total outage duration is the fixed-size cumulative duration of closed episodes
+plus any active gap as of that notice. Next delay is time remaining to a
+scheduled attempt, or zero when none is scheduled.
+Backoff remains unlimited, with its existing 30-second delay cap.
+
+If input was ready before the outage, recovery MUST produce exactly one notice:
+`Live Timing updates resumed; missed updates may be unrecoverable`.
+If input has never met the readiness condition before this outage,
+closing the gap MUST use the distinct first-data notice rather than claiming
+updates "resumed". Both cases report `StatusOK` for input, increment recovery
+statistics, and add the gap's duration to the closed total. Neither claims
+complete coverage, replay of missed updates, downstream delivery, or racing
+export. Consumer failures count separately, retain a sanitized warning without
+the downstream error, and MUST NOT reconnect, create an input outage, or erase
+accepted input observations.
+Invalid server data and source close without reconnect stop reading as before;
+both MUST produce terminal-visible errors and `StatusPermanentError`, explicitly
+stating that the Collector can still run. They MUST NOT broadcast a fatal event.
+Initial synchronous Start failure still returns its error without entering the
+runtime reporting or retry lifecycle.
+
+One periodic reporter runs every 30 process seconds while the receiver waits
+for initial updates, has an unresolved outage, or has stopped its input. A
+ping-only session with a valid empty completion therefore remains visibly
+waiting. Periodic observation MUST NOT infer another source failure, use source
+timestamps, or change liveness or retry. Active idle input after first data does
+not create a new outage. The Collector retains ownership of Ctrl-C/SIGTERM and
+graceful shutdown; the receiver adds no stdin prompt, signal handler, automatic
+stop, or health extension.
+
+`operational.go` is a deterministic value-state reducer with explicit process
+times and durations. It retains fixed-size run totals, cumulative closed outage
+duration, and current episode and connection evidence, never a history list or
+source payload. The reporting
+adapter uses only supplied `settings.Logger` and `settings.MeterProvider`.
+A mutex serializes state publication, notices, and status effects so an old
+periodic warning cannot follow recovery. A separate delivery lock orders shared
+status broadcasts and late-host replay; the broadcaster's state mutex is released
+before calling external reporters or `GetExtensions`.
+
+The metric scope is
+`github.com/CtrlSpice/bargeboard/receiver/f1livetimingreceiver`. The receiver adds
+no version or custom scope attributes; Collector-injected component identity may
+remain in the scope. The receiver follows builtin OTLP's structural
+`DropInjectedAttributes(...string)` interface to remove the first-created
+pipeline's injected `otelcol.signal` from the shared meter provider and logger;
+it MUST NOT import a Collector internal package. Every metric name below has
+the explicit prefix `otelcol_f1livetiming_`; the supplied provider does not add
+it. The only datapoint attribute is `receiver=settings.ID.String()`.
+
+| Suffix | Instrument | Unit | Meaning |
+|---|---|---|---|
+| `connection_active` | Int64 observable gauge | `1` | 1 while the established, subscribed-write transport is owned by the input loop; 0 before connection or after disconnect/stop. |
+| `subscription_active` | Int64 observable gauge | `1` | 1 after the current completion has fully normalized; 0 on a new connection, disconnect, or stop. |
+| `outage_active` | Int64 observable gauge | `1` | 1 from the first detected runtime input failure until qualified recovery; terminal failures leave it active. |
+| `outages` | Int64 counter | `{outage}` | New detected interruption episodes, including terminal failures; repeated failures in one episode add nothing. |
+| `reconnect_attempts` | Int64 counter | `{attempt}` | Actual reconnect calls; initial Start is excluded. |
+| `recoveries` | Int64 counter | `{recovery}` | Outage episodes cleared by current-connection completion plus updates. |
+| `outage_duration` | Float64 observable gauge | `s` | Current unresolved episode's elapsed process seconds; zero without an active episode. |
+| `normalized_updates` | Int64 counter | `{update}` | Update envelopes in fully normalized nonempty batches, independent of consumer success. |
+| `last_update_age` | Float64 observable gauge | `s` | Process seconds since acceptance of the last normalized nonempty batch; omitted until one exists. |
+| `consumer_failures` | Int64 counter | `{failure}` | Failed normalized-batch consumer calls; this is not a count of failed racing signals. |
+
+Every instrument MUST have a concise description identifying its input count or
+state and its limits, including local acceptance age versus source freshness
+and normalized observations versus actual racing export. Verification compares
+descriptions against an independent metadata oracle.
+
+Duration and age use the process-monotonic clock, independently of `r.now` and
+racing observation/source time. Last-update age measures local acceptance age,
+not source freshness or lag. When reading stops but the Collector remains
+running, the terminal gauges remain observable: an unresolved episode's duration
+and last-update age keep advancing. Recovery resets episode duration to zero;
+it never clears historical counts. Graceful cancellation itself creates no
+outage.
+
+Instruments and one callback MUST be created once per shared receiver, with
+construction errors propagated through the factory and no failed receiver
+cached. A non-nil registration returned together with an error MUST be
+unregistered, and both construction and cleanup errors MUST remain available to
+the caller. Callbacks stay disabled until registration succeeds. Callbacks load
+an immutable atomic snapshot and do no logging, state mutation, or counter
+updates, allowing repeated, concurrent, multi-reader, and
+reentrant collection. A separate callback-lifetime read lock covers observations;
+disabling takes its write lock to drain already admitted callbacks. Shutdown
+disables observations before attempting unregistration exactly once; failed
+unregistration produces a sanitized warning but cannot let a retained callback
+emit under a recreated receiver ID. Failed-start cleanup follows the same rule.
+The receiver MUST NOT create a private production SDK, replace global providers,
+or shut down the supplied SDK. Synchronous counter
+deltas retain provider-level history if the same receiver ID is recreated with
+that provider; new per-run totals start at zero independently. Counter
+temporality is selected by the supplied SDK (cumulative in the shipped
+Prometheus reader). Random run-ID labels and resetting a provider's historical
+counter via newly zeroed observable totals are forbidden.
+
+The run owner emits one final input summary only after reading and every
+synchronous consumer callback finish. It retains attempts, outages, recoveries,
+normalized updates, consumer failures, any unresolved outage, and closed plus
+current outage duration as of the summary, including after successful recovery.
+A shutdown deadline MUST NOT produce a falsely completed summary. Shutdown
+cancels periodic reporting and unregisters the
+callback; if the run is still finishing, it owns its eventual summary and its
+factory cache entry remains reserved until completion. Factory requests for that
+reserved configuration and attempts to restart the stopping shared receiver MUST
+return an error rather than report a successful start of an inactive receiver.
+Stopped state cannot
+accept later input events. Summary totals remain available when internal metrics
+are disabled and do not depend on reader collection.
+
+The shipped `service.telemetry.metrics` uses `level: basic` and an explicit
+`readers.pull.exporter.prometheus` reader on `127.0.0.1:8888`, with
+`without_scope_info`, `without_units`, and `without_type_suffix` true, matching
+the pinned defaults. `level: none` disables metrics, not terminal reporting.
+No extension is required. The internal metrics endpoint is separate from the
+configured racing pipelines and their debug exporter.
+
+Verification MUST compare complete pure state and notices for initial waiting,
+first data, flapping, scheduled versus attempted retries, empty and nonempty
+recovery, consumer failure, terminal state, and idempotent summary. Synthetic
+transport and `testing/synctest` tests MUST cover periodic waiting and outage
+progress before backoff, cancellation and active-callback shutdown deadlines,
+whole-batch invalidation, terminal visibility, and serialized recovery output.
+Barrier tests MUST reproduce concurrent late replay and broadcast ordering.
+ManualReader tests MUST assert complete metric names, scope, types, units,
+temporality, values, and attributes; two receiver IDs and three shared signal
+factories; repeated and multi-reader collection without effects; instrument
+and callback construction failures, including registration-plus-error;
+unregistration failure with retained callbacks, recreation, and timed-out
+shutdown. Pure and reporting tests MUST cover an outage long after startup,
+closed duration retained across recovery, and a later unresolved gap at summary.
+Actual pinned Collector integration MUST exercise Basic and None,
+real Prometheus exposition on private ports, the pipeline-telemetry gate,
+default stderr notices, all three signal hosts' Starting/Recoverable/OK sequences,
+and Collector-owned graceful stop using synthetic F1
+input only. Internal input activity MUST never mask absent racing emission.
+The subprocess harness MUST cancel blocked output sends, close pipes before
+joining readers during early failure, drain output before joining on normal
+exit, and reap the child once. Basic/None coverage uses portable test-only stdin
+EOF cancellation; a separate SIGINT case may skip only where sending SIGINT to
+a child is unsupported. This adds no production stdin or OS handler.
 
 ## Source Ownership
 
@@ -3985,7 +4174,9 @@ implementation:
 - Retirement and individual finish-crossing events; result and points metrics;
   grids; historical reconciliation; and championship facts.
 - Explainable pace, consistency, degradation, and pit-loss analysis.
-- Receiver lag, payload size, reconnects, and validation failures.
+- Receiver source lag, payload size, and validation-failure metrics. The bounded
+  input-operation metrics accepted under Live Timing Operational Visibility are
+  the sole operational promotion from this list.
 
 Pending candidates MUST NOT be inferred from the historical TypeScript metrics.
 

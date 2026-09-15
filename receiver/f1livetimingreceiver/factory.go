@@ -79,5 +79,5 @@ func (m *receiverMap) receiver(config component.Config, settings receiver.Settin
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	return m.loadOrStore(cfg, settings), nil
+	return m.loadOrStore(cfg, settings)
 }

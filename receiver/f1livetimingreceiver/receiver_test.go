@@ -3,6 +3,7 @@ package f1livetimingreceiver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -17,7 +18,6 @@ import (
 	"go.opentelemetry.io/collector/component/componentstatus"
 	"go.opentelemetry.io/collector/receiver/receivertest"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 )
 
@@ -107,8 +107,8 @@ func TestReceiverReconnectsAfterLivenessExpiry(t *testing.T) {
 			messages = append(messages, entry.Message)
 		}
 		if !reflect.DeepEqual(messages, []string{
-			"F1 live timing connection lost; reconnecting",
-			"F1 live timing server closed the connection without reconnect",
+			outageMessage,
+			errSourceStopped.Error(),
 		}) {
 			t.Fatalf("receiver logs = %q", messages)
 		}
@@ -310,7 +310,7 @@ func TestReceiverContinuesAfterConsumeFailure(t *testing.T) {
 		_, _, _ = connection.Read(ctx)
 	})
 
-	core, observedLogs := observer.New(zap.ErrorLevel)
+	core, observedLogs := observer.New(zap.WarnLevel)
 	settings := receivertest.NewNopSettings(Type)
 	settings.Logger = zap.New(core)
 	receiver := newLiveTimingReceiver(connectionTestConfig(t, server.URL), settings)
@@ -354,7 +354,7 @@ func TestReceiverContinuesAfterConsumeFailure(t *testing.T) {
 		t.Errorf("retry count = %d, want 0", got)
 	}
 	logs := observedLogs.All()
-	if len(logs) != 1 || logs[0].Message != "F1 live timing batch consumer failed" {
+	if len(logs) != 1 || logs[0].Message != "F1 live timing batch consumer failed; input observation does not imply export" {
 		t.Fatalf("consumer failure logs = %#v", logs)
 	}
 	if strings.Contains(logs[0].Message, "sensitive downstream failure") {
@@ -457,10 +457,11 @@ func TestReceiverReportsPermanentInvalidServerData(t *testing.T) {
 				retries.Add(1)
 				return 0
 			}
-			host := &statusHost{events: make(chan *componentstatus.Event, 1)}
+			host := &statusHost{events: make(chan *componentstatus.Event, 4)}
 			if err := receiver.Start(context.Background(), host); err != nil {
 				t.Fatalf("Start() error = %v", err)
 			}
+			requireAwaitingInput(t, host)
 			done := receiver.done
 			t.Cleanup(func() {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -475,6 +476,9 @@ func TestReceiverReportsPermanentInvalidServerData(t *testing.T) {
 			}
 			if consumed != nil {
 				t.Errorf("invalid batch reached normalized consumer: %#v", consumed)
+			}
+			if s := receiver.operational.state.Load(); s.updates != 0 || !s.lastUpdate.IsZero() || s.subscription || s.recoveries != 0 {
+				t.Errorf("invalid whole batch manufactured operational input: %+v", s)
 			}
 			if got := connections.Load(); got != 1 {
 				t.Errorf("connection count = %d, want 1", got)
@@ -604,10 +608,11 @@ func TestReceiverStopsOnInvalidReconnectSetup(t *testing.T) {
 				retries.Add(1)
 				return 0
 			}
-			host := &statusHost{events: make(chan *componentstatus.Event, 1)}
+			host := &statusHost{events: make(chan *componentstatus.Event, 4)}
 			if err := receiver.Start(context.Background(), host); err != nil {
 				t.Fatalf("Start() error = %v", err)
 			}
+			requireAwaitingInput(t, host)
 			done := receiver.done
 			t.Cleanup(func() {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -634,6 +639,10 @@ func TestReceiverStopsOnInvalidReconnectSetup(t *testing.T) {
 			}
 			select {
 			case event := <-host.events:
+				if event.Status() != componentstatus.StatusRecoverableError {
+					t.Fatalf("first status = %v", event.Status())
+				}
+				event = <-host.events
 				if event.Status() != componentstatus.StatusPermanentError ||
 					!errors.Is(event.Err(), errPermanentLiveTimingFailure) {
 					t.Errorf("reported event = %s, %v, want permanent live timing failure", event.Status(), event.Err())
@@ -704,15 +713,22 @@ func TestReceiverSanitizesHandshakeCloseOutcomes(t *testing.T) {
 					return 0
 				}
 				done := make(chan struct{})
-				r.run(ctx, connection, host, done)
+				r.operational, err = newOperationalReporter(settings)
+				if err != nil {
+					t.Fatal(err)
+				}
+				r.operational.start(host)
+				requireAwaitingInput(t, host)
+				defer r.operational.stop()
+				r.run(ctx, connection, done)
 				wantAttempts := []int{0, 1}
-				wantLogs := []observer.LoggedEntry{
-					{Entry: zapcore.Entry{Level: zap.WarnLevel, Message: "F1 live timing connection lost; reconnecting"}, Context: []zap.Field{}},
-					{Entry: zapcore.Entry{Level: zap.WarnLevel, Message: "F1 live timing reconnect failed: read SignalR handshake failed"}, Context: []zap.Field{}},
+				wantMessages := []string{outageMessage}
+				if event := <-host.events; event.Status() != componentstatus.StatusRecoverableError {
+					t.Fatalf("first status = %v", event.Status())
 				}
 				if permanent {
 					wantAttempts = []int{0}
-					wantLogs[1] = observer.LoggedEntry{Entry: zapcore.Entry{Level: zap.ErrorLevel, Message: errPermanentLiveTimingFailure.Error()}, Context: []zap.Field{}}
+					wantMessages = append(wantMessages, errPermanentLiveTimingFailure.Error())
 					select {
 					case event := <-host.events:
 						if event.Status() != componentstatus.StatusPermanentError || event.Err() != errPermanentLiveTimingFailure {
@@ -722,8 +738,15 @@ func TestReceiverSanitizesHandshakeCloseOutcomes(t *testing.T) {
 						t.Error("missing permanent failure status")
 					}
 				}
-				if !reflect.DeepEqual(logs.AllUntimed(), wantLogs) {
-					t.Errorf("logs = %#v, want %#v", logs.AllUntimed(), wantLogs)
+				var messages []string
+				for _, entry := range logs.All() {
+					messages = append(messages, entry.Message)
+					if strings.Contains(entry.Message+fmt.Sprint(entry.ContextMap()), "synthetic-confidential") {
+						t.Error("confidential error exposed")
+					}
+				}
+				if !reflect.DeepEqual(messages, wantMessages) {
+					t.Errorf("logs = %#v, want %#v", messages, wantMessages)
 				}
 				if connections.Load() != 2 || !reflect.DeepEqual(attempts, wantAttempts) || len(host.events) != 0 {
 					t.Errorf("connections=%d, retries=%v, remaining statuses=%d", connections.Load(), attempts, len(host.events))
@@ -760,6 +783,18 @@ func TestReconnectDelay(t *testing.T) {
 
 type statusHost struct {
 	events chan *componentstatus.Event
+}
+
+func requireAwaitingInput(t *testing.T, host *statusHost) {
+	t.Helper()
+	select {
+	case event := <-host.events:
+		if event.Status() != componentstatus.StatusRecoverableError || event.Err() != errAwaitingInput {
+			t.Fatalf("initial input status = %v, %v", event.Status(), event.Err())
+		}
+	default:
+		t.Fatal("missing initial not-receiving status")
+	}
 }
 
 func (h *statusHost) GetExtensions() map[component.ID]component.Component {
