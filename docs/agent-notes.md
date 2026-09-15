@@ -9,7 +9,7 @@ landing. Notes, issue assignments, and milestones cannot override either source.
 
 ### U-POLICY — Layered Unicode and input quality
 
-**Approved policy; implementation pending.** The user approved the strategy and
+**Approved policy; U1 implemented, U2/U3 pending.** The user approved the strategy and
 requested persistence in the repository. The exact contract and required tests
 are in [Layered Unicode and Input Quality](architecture.md#layered-unicode-and-input-quality).
 
@@ -50,14 +50,40 @@ It groups the implementation work; issue text links back to the canonical policy
 
 | ID | State | Scope and completion evidence |
 |---|---|---|
-| U-POLICY | Approved; documented | Canonical policy, this handoff, and the AGENTS resume pointer. Documentation validation checks approval fidelity, existing-contract consistency, links, and required future verification. |
-| [U1 / #34](https://github.com/CtrlSpice/bargeboard/issues/34) | Approved; not implemented | Lossless quoted-string tokens and raw object keys; scoped control-string integration; valid Unicode and opaque payload preservation; direct boundary/duplicate/key tests. |
+| U-POLICY | Approved; landed in PR #37 | Canonical policy, this handoff, and the AGENTS resume pointer. Documentation validation checks approval fidelity, existing-contract consistency, links, and required future verification. |
+| [U1 / #34](https://github.com/CtrlSpice/bargeboard/issues/34) | Implemented; landing tracked in #34 | Lossless quoted-string tokens and source-order raw object-member visitor; scoped negotiation/capability/handshake/hub/feed/manifest controls; descriptive error metadata; opaque plain/inflated payload preservation. Focused scalar, duplicate/key/null/casing, setup prevention, A/B/C, snapshot atomicity, and runtime-stop regressions. |
 | [U2 / #35](https://github.com/CtrlSpice/bargeboard/issues/35) | Approved; not implemented | SessionInfo classification isolation and bounded issue propagation; synthetic malformed-name fixture; full independent-bundle/gate state and no-replay tests. |
 | [U3 / #36](https://github.com/CtrlSpice/bargeboard/issues/36) | Approved; not implemented | Nonfatal plain/inflated payload-quality findings, bounded terminal cadence, receiver-only internal affected-update counts, and final summaries. Report actual input findings, not unimplemented projection outcomes. |
 
-No Unicode implementation is present as of the implementation baseline below.
-Do not infer implementation from a GREEN policy heading: its implementation status
-is FORMATION LAP until verified code lands.
+U1 is implemented from the policy baseline in PR #37,
+`b222a3c305a8e3b03ad0eae03b98de5c1b1a978e`; #34 tracks its implementation and landing.
+The approved policy remains GREEN with partial
+FORMATION LAP implementation until all stages are complete. U2 owns SessionInfo
+string/key integration and issue propagation; U3 owns nonfatal payload-quality
+findings and runtime diagnostics/counters. Neither is implemented by U1.
+
+### U1 Resume Details
+
+- `json_tokens.go` provides a pure single-decode scalar validator and a raw-member
+  visitor. The latter exposes original key/value views without a universal
+  duplicate policy, nested string decoding, or a full custom JSON parser.
+- Negotiation preserves case-insensitive assignment, duplicates, null no-ops,
+  and capability slice reuse; handshake preserves case-sensitive keys and last
+  raw error value. Hub and manifest policies remain strict. Invalid control keys
+  cannot become unknown keys or collide through U+FFFD repair.
+- Error descriptions use presence/string-shape/empty metadata only. Control
+  failures retain setup rejection and runtime stop; scalar-invalid opaque payload
+  bytes remain deliverable, including inflated JSON and all snapshot siblings.
+- Current Grid semantics remain input-only: no-op normalized consumer, unwired
+  SessionInfo helpers, no racing projection. U1 adds no quality counters or
+  claims about semantic quarantine, dropped signals, or recovery.
+- Local verification passed with repository-pinned Go 1.26.8 and
+  `GOTOOLCHAIN=local`: `make check`,
+  `go test -race -count=1 ./receiver/f1livetimingreceiver`, and
+  `go test -race -count=20 ./receiver/f1livetimingreceiver -run 'Test(LosslessJSONString|RawJSONObject|NullableControlString|UnicodeControls)'`.
+  `npm run typecheck` and `git diff --check` also passed. The initial focused
+  regressions failed on repaired controls before implementation. Inspect #34 and
+  its linked PR for final candidate, CI, review, and landing evidence.
 
 ## Landed Cleanup Baseline
 

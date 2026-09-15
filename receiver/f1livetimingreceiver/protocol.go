@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -55,7 +54,7 @@ type hubMessage struct {
 	Target         string            `json:"target"`
 	Arguments      []json.RawMessage `json:"arguments"`
 	Result         json.RawMessage   `json:"result"`
-	Error          string            `json:"error"`
+	ErrorEmpty     bool              `json:"-"`
 	HasError       bool              `json:"-"`
 	AllowReconnect bool              `json:"allowReconnect"`
 }
@@ -176,23 +175,15 @@ func decodeHubMessage(record []byte) (hubMessage, error) {
 	if !utf8.Valid(record) {
 		return hubMessage{}, invalidLiveTimingData("SignalR hub message is not UTF-8")
 	}
-	decoder := json.NewDecoder(bytes.NewReader(record))
-	token, err := decoder.Token()
-	objectStart, ok := token.(json.Delim)
-	if err != nil || !ok || objectStart != '{' {
-		return hubMessage{}, invalidLiveTimingData("decode SignalR hub message")
-	}
-
 	var message hubMessage
 	seen := make(map[string]struct{})
-	for decoder.More() {
-		token, err := decoder.Token()
-		field, ok := token.(string)
-		if err != nil || !ok {
-			return hubMessage{}, invalidLiveTimingData("decode SignalR hub message")
+	err := visitRawJSONObject(record, func(key, raw json.RawMessage) error {
+		field, err := decodeLosslessJSONString(key)
+		if err != nil {
+			return invalidLiveTimingData("decode SignalR hub message key")
 		}
 		if _, exists := seen[field]; exists {
-			return hubMessage{}, invalidLiveTimingData("SignalR hub message contains a duplicate field")
+			return invalidLiveTimingData("SignalR hub message contains a duplicate field")
 		}
 		seen[field] = struct{}{}
 
@@ -201,38 +192,35 @@ func decodeHubMessage(record []byte) (hubMessage, error) {
 		case "type":
 			destination = &message.Type
 		case "invocationId":
-			destination = &message.InvocationID
+			return unmarshalControlString(raw, &message.InvocationID)
 		case "target":
-			destination = &message.Target
+			return unmarshalControlString(raw, &message.Target)
 		case "arguments":
 			destination = &message.Arguments
 		case "result":
 			destination = &message.Result
 		case "error":
 			message.HasError = true
-			var rawError json.RawMessage
-			if err := decoder.Decode(&rawError); err != nil ||
-				bytes.Equal(bytes.TrimSpace(rawError), []byte("null")) ||
-				json.Unmarshal(rawError, &message.Error) != nil {
-				return hubMessage{}, invalidLiveTimingData("decode SignalR hub message")
+			isString, empty := jsonStringShape(raw)
+			if !isString {
+				return invalidLiveTimingData("decode SignalR hub message")
 			}
-			continue
+			message.ErrorEmpty = empty
+			return nil
 		case "allowReconnect":
 			destination = &message.AllowReconnect
 		default:
 			if isHubMessageFieldAlias(field) {
-				return hubMessage{}, invalidLiveTimingData("SignalR hub message field names are case-sensitive")
+				return invalidLiveTimingData("SignalR hub message field names are case-sensitive")
 			}
-			destination = new(json.RawMessage)
+			return nil // Unknown values remain opaque, including nested keys.
 		}
-		if err := decoder.Decode(destination); err != nil {
-			return hubMessage{}, invalidLiveTimingData("decode SignalR hub message")
+		return json.Unmarshal(raw, destination)
+	})
+	if err != nil {
+		if errors.Is(err, errInvalidLiveTimingData) {
+			return hubMessage{}, err
 		}
-	}
-	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
-		return hubMessage{}, invalidLiveTimingData("decode SignalR hub message")
-	}
-	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return hubMessage{}, invalidLiveTimingData("decode SignalR hub message")
 	}
 	return message, nil
@@ -258,11 +246,11 @@ func decodeFeedInvocation(message hubMessage) (*liveTimingBatch, error) {
 	}
 
 	var topic string
-	if err := json.Unmarshal(message.Arguments[0], &topic); err != nil || topic == "" {
+	if err := unmarshalControlString(message.Arguments[0], &topic); err != nil || topic == "" {
 		return nil, invalidLiveTimingData("decode F1 feed topic")
 	}
 	var timestamp string
-	if err := json.Unmarshal(message.Arguments[2], &timestamp); err != nil {
+	if err := unmarshalControlString(message.Arguments[2], &timestamp); err != nil {
 		return nil, invalidLiveTimingData("decode F1 feed timestamp")
 	}
 	return &liveTimingBatch{
@@ -285,7 +273,7 @@ func decodeSubscriptionCompletion(message hubMessage, requestedTopics []string) 
 	if hasResult && hasError {
 		return nil, invalidLiveTimingData("SignalR completion contains both result and error")
 	}
-	if hasError && message.Error == "" {
+	if hasError && message.ErrorEmpty {
 		return nil, invalidLiveTimingData("SignalR completion error is invalid")
 	}
 	if message.InvocationID != subscribeInvocationID {
@@ -328,39 +316,27 @@ func decodeSubscriptionSnapshot(
 		return []string{}, map[string]json.RawMessage{}, nil
 	}
 
-	decoder := json.NewDecoder(bytes.NewReader(result))
-	token, err := decoder.Token()
-	objectStart, ok := token.(json.Delim)
-	if err != nil || !ok || objectStart != '{' {
-		return nil, nil, invalidLiveTimingData("decode F1 subscription snapshot")
-	}
-
 	topics := make([]string, 0)
 	payloads := make(map[string]json.RawMessage)
-	for decoder.More() {
-		token, err := decoder.Token()
-		topic, ok := token.(string)
-		if err != nil || !ok || topic == "" {
-			return nil, nil, invalidLiveTimingData("decode F1 subscription snapshot manifest")
+	err := visitRawJSONObject(result, func(key, payload json.RawMessage) error {
+		topic, err := decodeLosslessJSONString(key)
+		if err != nil || topic == "" {
+			return invalidLiveTimingData("decode F1 subscription snapshot manifest")
 		}
 		if _, exists := requestedTopics[topic]; !exists {
-			return nil, nil, invalidLiveTimingData("F1 subscription snapshot contains an unrequested topic")
+			return invalidLiveTimingData("F1 subscription snapshot contains an unrequested topic")
 		}
 		if _, exists := payloads[topic]; exists {
-			return nil, nil, invalidLiveTimingData("F1 subscription snapshot contains a duplicate topic")
-		}
-
-		var payload json.RawMessage
-		if err := decoder.Decode(&payload); err != nil {
-			return nil, nil, invalidLiveTimingData("decode F1 subscription snapshot payload")
+			return invalidLiveTimingData("F1 subscription snapshot contains a duplicate topic")
 		}
 		topics = append(topics, topic)
-		payloads[topic] = payload
-	}
-	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
-		return nil, nil, invalidLiveTimingData("decode F1 subscription snapshot")
-	}
-	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
+		payloads[topic] = bytes.Clone(payload)
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, errInvalidLiveTimingData) {
+			return nil, nil, err
+		}
 		return nil, nil, invalidLiveTimingData("decode F1 subscription snapshot")
 	}
 

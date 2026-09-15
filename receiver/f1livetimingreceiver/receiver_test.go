@@ -423,6 +423,16 @@ func TestReceiverReportsPermanentInvalidServerData(t *testing.T) {
 			sensitive: []string{"sensitive-snapshot"},
 		},
 		{
+			name:      "scalar-invalid routing control",
+			message:   `{"type":1,"target":"feed","arguments":["sensitive-\uD800",{},"2026-08-21T10:30:00Z"]}`,
+			sensitive: []string{"sensitive-", `\uD800`, "�"},
+		},
+		{
+			name:      "scalar-invalid control key",
+			message:   `{"type":6,"sensitive-\uD800":true}`,
+			sensitive: []string{"sensitive-", `\uD800`, "�"},
+		},
+		{
 			name: "snapshot with valid and invalid compressed siblings",
 			message: `{"type":3,"invocationId":"0","result":{"CarData.z":` + string(validCompressed) +
 				`,"Position.z":` + string(invalidCompressed) + `}}` + "\x1e" + incrementalFeedC,

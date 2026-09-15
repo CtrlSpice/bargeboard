@@ -205,8 +205,8 @@ func validRFC3339Offset(raw string) bool {
 }
 
 func decompressLiveTimingPayload(payload json.RawMessage) (json.RawMessage, error) {
-	var encoded string
-	if err := json.Unmarshal(payload, &encoded); err != nil || encoded == "" {
+	encoded, err := decodeLosslessJSONString(payload)
+	if err != nil || encoded == "" {
 		return nil, fmt.Errorf("compressed payload must be a non-empty JSON string")
 	}
 	if len(encoded) > maxEncodedPayloadSize {

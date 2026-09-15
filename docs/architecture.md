@@ -64,7 +64,7 @@ as the behavior and its tests.
 
 ## Layered Unicode and Input Quality
 
-**Status: GREEN policy; FORMATION LAP implementation**
+**Status: GREEN policy; partial FORMATION LAP implementation (U1 implemented; U2/U3 pending)**
 
 The approved policy preserves independently useful input, never silently repairs
 identity, and makes resulting uncertainty visible. Blanket rejection of every
@@ -204,6 +204,68 @@ The first approved implementation sequence is:
 3. Nonfatal payload-quality reporting at the runtime input boundary, including
    plain and inflated JSON, without changing existing normalized-input counts.
 
+#### U1 Lossless Control Seams
+
+U1 implements `decodeLosslessJSONString` and `visitRawJSONObject` in
+`receiver/f1livetimingreceiver/json_tokens.go`. The string decoder checks raw
+UTF-8, JSON grammar, quoted-string shape, and surrogate pairing before decoding
+once. Its errors distinguish these layers without including source content.
+Intentional U+FFFD, valid pairs, and literal backslash-u text are accepted;
+field grammars still apply.
+
+The raw-member visitor validates the complete object's UTF-8 and JSON syntax
+before calling its visitor with each original quoted key token and raw value in
+source order. The views are read-only; callers copy bytes they retain. A linear,
+nonrecursive boundary walk locates already syntax-validated tokens without
+building an AST, decoding nested strings, or collecting members. Existing shell
+byte limits and `encoding/json`'s nesting limit bound processing. The visitor
+keeps no key set and imposes no universal scalar or duplicate policy. In
+particular, `Decoder.Token` followed by validation would be too late: it already
+repairs the key. SessionInfo will reuse the raw seam under its own policy in U2.
+
+Negotiation keys, capability-object keys, handshake keys, hub-envelope keys, and
+snapshot manifest keys are validated before matching or map insertion. Every
+assigned negotiation control string is validated, including connection ID/token,
+URL/access-token controls, transport names, and every transfer format. This
+includes assignments later overwritten by a duplicate and v0's unused token
+field: accepting such assignments through a repairing decoder is not lossless.
+Hub invocation IDs and targets, consumed feed topics and timestamps, and the
+compressed payload's outer base64 string use the same lossless string decoder.
+The base64, DEFLATE, UTF-8, JSON, timestamp, and size grammars retain their
+existing rejection boundaries.
+
+U1 preserves the pre-existing negotiation decoder's case-insensitive matching,
+ordered repeated assignments, scalar-null no-ops, and slice-element reuse across
+repeated capability arrays. Handshake keys remain case-sensitive, with the last
+raw value for a repeated `error` and presence-based rejection of `type`. Hub keys
+retain strict duplicate and case-alias rejection; snapshots retain exact wire
+membership and decoded-key duplicate rejection before `.z` normalization.
+Escaped-equivalent valid keys follow those owning policies. Broader negotiation
+and handshake duplicate/casing/null tightening is a separate audit, not U1.
+
+Server error descriptions are never decoded: validated token shape, presence,
+and emptiness suffice for the existing handshake/negotiation rejection and hub
+completion/close decisions. A scalar-invalid description cannot turn a valid
+`allowReconnect:true` close into a terminal protocol failure. Unknown extension
+values, feed payloads, and snapshot payloads remain raw, including scalar-invalid
+strings and nested keys. Inflated JSON retains its exact inflated bytes. U1 does
+not inspect those payload scalars for quality findings or integrate SessionInfo
+classification; U2 and U3 remain pending.
+
+Invalid control input retains startup failure and the current runtime stop
+policy. A valid A followed by control-invalid B commits A and stops before C;
+payload-scalar-invalid B with a valid envelope remains deliverable between A and
+C. Invalid snapshot keys return no batch, while valid manifests retain all
+opaque payload siblings in one atomic batch. These are input-delivery claims,
+not implemented semantic disposition or racing projection.
+
+Focused synthetic tests cover the scalar ranges and boundaries, repair-key
+collisions, owning duplicate/null/casing policies, all control assignments,
+unchanged payload bytes and retained-copy ownership, error-description decisions,
+visitor storage/nesting bounds, URL/upgrade prevention, and ordered/atomic batch
+results. Existing framing, decompression, size, and receiver-stop tests remain
+required alongside them. These fixtures are boundary probes, not live F1 samples.
+
 Field/entry/topic integration for unimplemented reducers follows in their own
 slices. Broader reconnect/resubscription after protocol corruption, same-connection
 resubscription, whole-topic salvage of structurally invalid payloads, durable
@@ -261,6 +323,13 @@ internal metrics are implemented under Live Timing Operational Visibility below;
 they MUST NOT imply racing projection or export. The transport shell retains its
 valid-batch backoff reset even if that consumer fails, emits one sanitized
 consumer warning per run, and continues reading rather than reconnecting.
+
+U1 lossless JSON controls and raw manifest-key handling are implemented. Opaque
+plain and inflated payloads may still contain scalar-invalid strings; delivery
+continues under valid envelopes without repairing those bytes. SessionInfo's
+scoped Unicode integration (U2) and payload-quality diagnostics/counters (U3)
+remain pending. Existing input activity metrics therefore do not claim Unicode
+quality assessment, semantic quarantine, or racing-signal delivery.
 
 No Go OpenF1 receiver exists yet.
 
