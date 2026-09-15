@@ -48,9 +48,7 @@ func TestReduceSessionInfoBatchAppliesCompressedSemanticTopic(t *testing.T) {
 	if err != nil || !authoritative {
 		t.Fatalf("reduceSessionInfoBatch() = authoritative %t, error %v", authoritative, err)
 	}
-	if got.disposition != sessionInfoDispositionInstalled || got.state.routeKey != 6594 {
-		t.Fatalf("compressed SessionInfo reduction = %#v", got)
-	}
+	assertSessionInfoReduction(t, got, expectedSessionInfoBatchReductionA(t))
 }
 
 func TestReduceSessionInfoBatchIgnoresNonAuthoritativeBatches(t *testing.T) {
@@ -148,14 +146,16 @@ func TestReduceSessionInfoBatchTreatsPresentSemanticFailuresAsAuthoritative(t *t
 	payloads := []struct {
 		name    string
 		payload json.RawMessage
+		issues  sessionInfoIssueSet
 	}{
-		{name: "null", payload: json.RawMessage(`null`)},
-		{name: "array", payload: json.RawMessage(`[]`)},
-		{name: "scalar", payload: json.RawMessage(`42`)},
-		{name: "empty object", payload: json.RawMessage(`{}`)},
+		{name: "null", payload: json.RawMessage(`null`), issues: sessionInfoIssueShape},
+		{name: "array", payload: json.RawMessage(`[]`), issues: sessionInfoIssueShape},
+		{name: "scalar", payload: json.RawMessage(`42`), issues: sessionInfoIssueShape},
+		{name: "empty object", payload: json.RawMessage(`{}`), issues: sessionInfoIssueIdentity | sessionInfoIssueRoute | sessionInfoIssueSchedule},
 		{
 			name:    "optional bundles without identity",
 			payload: json.RawMessage(`{"Key":99,"StartDate":"2025-01-01T12:00:00","EndDate":"2025-01-01T13:00:00","GmtOffset":"00:00:00"}`),
+			issues:  sessionInfoIssueIdentity,
 		},
 	}
 
@@ -187,6 +187,7 @@ func TestReduceSessionInfoBatchTreatsPresentSemanticFailuresAsAuthoritative(t *t
 				assertSessionInfoReduction(t, got, sessionInfoReduction{
 					state:       wantState,
 					disposition: sessionInfoDispositionUnresolved,
+					issues:      payload.issues,
 				})
 			})
 		}
@@ -221,6 +222,7 @@ func TestReduceSessionInfoBatchDoesNotInheritOptionalBundles(t *testing.T) {
 		state:           wantState,
 		disposition:     sessionInfoDispositionRefreshed,
 		routeTransition: true,
+		issues:          sessionInfoIssueRoute | sessionInfoIssueSchedule,
 	})
 }
 

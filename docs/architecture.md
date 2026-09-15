@@ -64,7 +64,7 @@ as the behavior and its tests.
 
 ## Layered Unicode and Input Quality
 
-**Status: GREEN policy; partial FORMATION LAP implementation (U1 implemented; U2/U3 pending)**
+**Status: GREEN policy; partial FORMATION LAP implementation (U1 landed; U2 implemented; U3 pending)**
 
 The approved policy preserves independently useful input, never silently repairs
 identity, and makes resulting uncertainty visible. Blanket rejection of every
@@ -246,8 +246,8 @@ snapshot bound.
 
 The visitors keep no key set and impose no universal scalar or duplicate policy.
 In particular, `Decoder.Token` followed by validation would be too late: it
-already repairs the key. SessionInfo will reuse the raw seam under its own policy
-in U2.
+already repairs the key. SessionInfo reuses the whole-object raw seam under its
+own policy in U2 below.
 
 Negotiation keys, capability-object keys, handshake keys, hub-envelope keys, and
 snapshot manifest keys are validated before matching or map insertion. Every
@@ -275,8 +275,8 @@ completion/close decisions. A scalar-invalid description cannot turn a valid
 `allowReconnect:true` close into a terminal protocol failure. Unknown extension
 values, feed payloads, and snapshot payloads remain raw, including scalar-invalid
 strings and nested keys. Inflated JSON retains its exact inflated bytes. U1 does
-not inspect those payload scalars for quality findings or integrate SessionInfo
-classification; U2 and U3 remain pending.
+not inspect those payload scalars for quality findings. U2 adds the pure
+SessionInfo integration below; U3 runtime payload-quality reporting remains pending.
 
 Invalid control input retains startup failure and the current runtime stop
 policy. A valid A followed by control-invalid B commits A and stops before C;
@@ -302,6 +302,76 @@ slices. Broader reconnect/resubscription after protocol corruption, same-connect
 resubscription, whole-topic salvage of structurally invalid payloads, durable
 capture, and placeholder output require separate approval. They MUST NOT be
 introduced as incidental Unicode fixes.
+
+#### U2 SessionInfo Isolation and Issue Results
+
+U2 implements lossless SessionInfo string and key handling in the existing pure
+parser, descriptor reducer, normalized-batch adapter, and aggregate identity gate.
+`parseJSONString` delegates to U1's token helper and returns decoded text, validity,
+and a fixed Unicode issue bit. Recognized scalar occurrences are decoded once,
+including duplicates, before typed grammar or classification. Malformed identity
+text therefore cannot enter the Grand Prix suffix, testing, or 2020 Imola rules.
+Literal/escaped U+FFFD and paired scalars remain Unicode-valid; exact field grammar
+still decides classification, dates, and offsets. Numeric route and meeting keys
+continue to use the original raw positive-integer grammar, even when a quoted
+wrong-type value contains valid escaped digits.
+
+The root and each recognized `Meeting` object use `visitRawJSONObject`. The entire
+SessionInfo payload retains its pre-U1 10,000-depth limit, including enclosing
+objects; the former visitor's per-value `Decode` never relaxed the initial
+whole-payload validation. Original key/value views are read-only. Each key is
+decoded losslessly before case-sensitive matching. An unpaired surrogate cannot
+name a recognized ASCII key, so that member is skipped with the Unicode bit set.
+Required members thereby absent still produce the normal unresolved bundle.
+Escaped-equivalent recognized keys count as duplicates and invalidate their owning
+bundle; duplicate unknown metadata remains tolerated. Each duplicate `Meeting`
+object is inspected for scoped findings, although it cannot supply identity.
+Unknown values, including their nested keys, remain opaque. Unsupported nested
+shapes are not recursively searched; U3 owns payload-wide quality detection.
+Null, delete metadata, `_kf`, unsupported-root shape, and complete-replacement
+policies retain their existing meanings.
+
+`sessionInfoIssueSet` remains a `uint8`: U2 adds `sessionInfoIssueUnicode` to shape,
+identity, classification, route, schedule, and keyframe bits. It records bounded
+occurrences, not source text, paths, labels, or history. Scalar-invalid
+`Meeting.Name`, `Type`, or `Name` sets Unicode plus identity; scalar-invalid
+`StartDate` also sets schedule. Scalar-invalid `EndDate` or `GmtOffset` sets Unicode
+plus schedule without invalidating `E`.
+A scalar-invalid quoted route key sets Unicode plus route, while routing remains
+subject to raw integer grammar. Invalid scalar content is a semantic result, never
+`errInvalidLiveTimingData` or a transport-stop instruction. Invalid UTF-8, JSON
+grammar, and depth remain normalized-payload invariant errors with zero results.
+
+The descriptor reduction carries `issues` through every disposition, including
+unresolved, stale, and token-exhausted results. The normalized-batch adapter
+preserves those bits, and the aggregate result exposes them as `sessionInfoIssues`
+alongside state, authority, disposition, route transition, and admission. Neither
+state type stores issues. Requested omission has no parsed occurrence and returns
+zero issues; no-update and invariant-error results likewise contain no findings.
+The implemented normalized contract accepts one feed update, or an atomic snapshot
+with at most one SessionInfo. A caller combining successive feed results MUST OR
+their issue sets independently of the last state/disposition: a later coherent
+SessionInfo can restore identity without erasing an earlier occurrence. Supporting
+multiple feed updates inside one normalized batch is outside this slice.
+
+Identity failure retains exact `E`, `K_route`, schedule, generation, routing epoch,
+and the retired-tuple FIFO as recovery state, changing only synchronization. It
+cannot apply independently parsed replacement metadata. Route-only and
+schedule-only failures keep the existing independent scopes and counter rules.
+The aggregate gate retains no payload or delayed update queue. Restoring its
+identity admission decision does not establish topic resynchronization or replay
+earlier input. These helpers remain unwired; they emit no counters, logs, semantic
+quarantine effects, or racing projection.
+
+Focused tests mutate attributed SessionInfo fixtures synthetically, including
+`"\uD800 Grand Prix"`, and compare complete parse/reduction/gate results. They cover
+independent bundles, escaped and malformed keys, duplicate occurrence unions,
+opaque unknown values, whole-payload depth boundaries, source-byte ownership,
+snapshot order/atomicity, feed-order recovery, idempotence, retired tuples, and
+counter exhaustion. Structural result/state field assertions require explicit
+oracle review when a field is added. U3 and future topic implementations must
+complete their own integration and verification before the overall policy leaves
+partial FORMATION LAP.
 
 ### Required Verification
 
@@ -358,8 +428,9 @@ consumer warning per run, and continues reading rather than reconnecting.
 U1 lossless JSON controls and raw manifest-key handling are implemented. Opaque
 plain and inflated payloads may still contain scalar-invalid strings; delivery
 continues under valid envelopes without repairing those bytes. SessionInfo's
-scoped Unicode integration (U2) and payload-quality diagnostics/counters (U3)
-remain pending. Existing input activity metrics therefore do not claim Unicode
+scoped Unicode integration and bounded pure issue propagation (U2) are implemented
+but remain unwired. Payload-quality diagnostics/counters (U3) remain pending.
+Existing input activity metrics therefore do not claim Unicode
 quality assessment, semantic quarantine, or racing-signal delivery.
 
 No Go OpenF1 receiver exists yet.
@@ -1265,20 +1336,21 @@ synchronization recovery, unseen-tuple replacement, retained-tuple rejection,
 and the exact 256-tuple FIFO horizon. The batch adapter locates exact
 `SessionInfo` updates independent of snapshot order, distinguishes feed or
 unrequested-snapshot no-update from requested snapshot omission, and composes
-parsing with descriptor reduction. It returns value state and transition
-metadata only. It has no runtime wiring and cannot stage or clear other topic
-state, return effects or commands, emit diagnostics, or project telemetry. No
-diagnostic-frequency or latching policy is accepted by this slice. The full
+parsing with descriptor reduction. It returns value state, transition metadata,
+and bounded parse-issue occurrences as defined by U2. It has no runtime wiring
+and cannot stage or clear other topic state, return effects or commands, emit
+diagnostics, or project telemetry. No diagnostic-frequency or latching policy is
+accepted by this slice. The full
 transactional coordinator and all cross-topic projection remain disabled until
 that coordinator lands.
 
 The pure aggregate identity gate is also implemented. It owns SessionInfo state
 inside aggregate value state, reduces SessionInfo before calculating whether the
 remaining session-scoped outcomes are eligible for future staging, and preserves
-the descriptor disposition and routing-transition metadata. Eligibility requires
-synchronized `E`; route and schedule availability do not decide it. The gate
-retains no normalized update or payload, so an ineligible batch cannot replay
-after recovery. It implements the admission decision after steps 1 and 2 above,
+the descriptor disposition, routing-transition metadata, and bounded issue set.
+Eligibility requires synchronized `E`; route and schedule availability do not
+decide it. The gate retains no normalized update or payload, so an ineligible batch
+cannot replay after recovery. It implements the admission decision after steps 1 and 2 above,
 not steps 3 through 5, and remains unwired from the receiver.
 
 End-to-end reducer and projection verification still requires testing with no

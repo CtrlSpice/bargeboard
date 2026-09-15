@@ -60,6 +60,7 @@ const (
 	sessionInfoIssueRoute
 	sessionInfoIssueSchedule
 	sessionInfoIssueKeyframe
+	sessionInfoIssueUnicode
 )
 
 type sessionInfoParseResult struct {
@@ -73,13 +74,20 @@ type sessionInfoParseResult struct {
 }
 
 type sessionInfoMember struct {
-	raw   json.RawMessage
-	count uint8
+	raw       json.RawMessage
+	count     uint8
+	text      string
+	textValid bool
 }
 
-func (member *sessionInfoMember) capture(raw json.RawMessage) {
+func (member *sessionInfoMember) capture(raw json.RawMessage, issues *sessionInfoIssueSet) {
+	// Inspect every recognized scalar occurrence, including duplicates. Nested
+	// content of unsupported shapes remains opaque; U3 owns payload-wide findings.
+	text, valid, stringIssues := parseJSONString(raw)
+	*issues |= stringIssues
 	if member.count == 0 {
 		member.raw = raw
+		member.text, member.textValid = text, valid
 	}
 	if member.count < 2 {
 		member.count++
@@ -103,24 +111,29 @@ func parseSessionInfo(payload json.RawMessage) (sessionInfoParseResult, error) {
 	var endDate sessionInfoMember
 	var gmtOffset sessionInfoMember
 	var keyframe sessionInfoMember
-	isObject, err := visitJSONObject(payload, func(name string, raw json.RawMessage) {
+	var result sessionInfoParseResult
+	meetingKey, meetingName, meetingValid := int64(0), "", false
+	isObject, err := visitSessionInfoObject(payload, &result.issues, func(name string, raw json.RawMessage) {
 		switch name {
 		case "Key":
-			key.capture(raw)
+			key.capture(raw, &result.issues)
 		case "Meeting":
-			meeting.capture(raw)
+			meeting.capture(raw, &result.issues)
+			// Visit each recognized Meeting occurrence for bounded findings, even
+			// when a duplicate prevents the logical bundle from being accepted.
+			meetingKey, meetingName, meetingValid = parseSessionInfoMeeting(raw, &result.issues)
 		case "Type":
-			sourceType.capture(raw)
+			sourceType.capture(raw, &result.issues)
 		case "Name":
-			sourceName.capture(raw)
+			sourceName.capture(raw, &result.issues)
 		case "StartDate":
-			startDate.capture(raw)
+			startDate.capture(raw, &result.issues)
 		case "EndDate":
-			endDate.capture(raw)
+			endDate.capture(raw, &result.issues)
 		case "GmtOffset":
-			gmtOffset.capture(raw)
+			gmtOffset.capture(raw, &result.issues)
 		case "_kf":
-			keyframe.capture(raw)
+			keyframe.capture(raw, &result.issues)
 		}
 	})
 	if err != nil {
@@ -130,7 +143,6 @@ func parseSessionInfo(payload json.RawMessage) (sessionInfoParseResult, error) {
 		return sessionInfoParseResult{issues: sessionInfoIssueShape}, nil
 	}
 
-	var result sessionInfoParseResult
 	if key.unique() {
 		result.routeKey, result.routeAvailable = parsePositiveCanonicalInt64(key.raw)
 	}
@@ -139,28 +151,17 @@ func parseSessionInfo(payload json.RawMessage) (sessionInfoParseResult, error) {
 	}
 
 	startLocal, startValid := time.Time{}, false
-	if startDate.unique() {
-		startLocal, startValid = parseSessionInfoLocalTime(startDate.raw)
+	if startDate.unique() && startDate.textValid {
+		startLocal, startValid = parseSessionInfoLocalTimeValue(startDate.text)
 	}
-	meetingKey, meetingName, meetingValid := int64(0), "", false
-	if meeting.unique() {
-		meetingKey, meetingName, meetingValid = parseSessionInfoMeeting(meeting.raw)
-	}
-	typeValue, typeValid := "", false
-	if sourceType.unique() {
-		typeValue, typeValid = parseJSONString(sourceType.raw)
-	}
-	nameValue, nameValid := "", false
-	if sourceName.unique() {
-		nameValue, nameValid = parseJSONString(sourceName.raw)
-	}
-	if startValid && meetingValid && typeValid && nameValid {
+	if startValid && meeting.unique() && meetingValid &&
+		sourceType.unique() && sourceType.textValid && sourceName.unique() && sourceName.textValid {
 		classification, ok := classifySessionInfo(
 			int64(startLocal.Year()),
 			meetingKey,
 			meetingName,
-			typeValue,
-			nameValue,
+			sourceType.text,
+			sourceName.text,
 		)
 		if ok {
 			result.identity = sessionInfoIdentity{
@@ -178,12 +179,12 @@ func parseSessionInfo(payload json.RawMessage) (sessionInfoParseResult, error) {
 	}
 
 	endLocal, endValid := time.Time{}, false
-	if endDate.unique() {
-		endLocal, endValid = parseSessionInfoLocalTime(endDate.raw)
+	if endDate.unique() && endDate.textValid {
+		endLocal, endValid = parseSessionInfoLocalTimeValue(endDate.text)
 	}
 	offset, offsetValid := time.Duration(0), false
-	if gmtOffset.unique() {
-		offset, offsetValid = parseSessionInfoGMTOffset(gmtOffset.raw)
+	if gmtOffset.unique() && gmtOffset.textValid {
+		offset, offsetValid = parseSessionInfoGMTOffsetValue(gmtOffset.text)
 	}
 	if startValid && endValid && offsetValid {
 		startUTC := startLocal.Add(-offset)
@@ -286,58 +287,50 @@ func testingDay(season int64, meetingName string, sourceName string) (canonicalS
 	}
 }
 
-func parseSessionInfoMeeting(raw json.RawMessage) (int64, string, bool) {
+func parseSessionInfoMeeting(raw json.RawMessage, issues *sessionInfoIssueSet) (int64, string, bool) {
 	var key sessionInfoMember
 	var name sessionInfoMember
-	isObject, err := visitJSONObject(raw, func(field string, value json.RawMessage) {
+	isObject, err := visitSessionInfoObject(raw, issues, func(field string, value json.RawMessage) {
 		switch field {
 		case "Key":
-			key.capture(value)
+			key.capture(value, issues)
 		case "Name":
-			name.capture(value)
+			name.capture(value, issues)
 		}
 	})
 	if err != nil || !isObject || !key.unique() || !name.unique() {
 		return 0, "", false
 	}
 	meetingKey, keyValid := parsePositiveCanonicalInt64(key.raw)
-	meetingName, nameValid := parseJSONString(name.raw)
-	return meetingKey, meetingName, keyValid && nameValid
+	return meetingKey, name.text, keyValid && name.textValid
 }
 
-func visitJSONObject(
+func visitSessionInfoObject(
 	raw json.RawMessage,
+	issues *sessionInfoIssueSet,
 	visit func(string, json.RawMessage),
 ) (bool, error) {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	token, err := decoder.Token()
-	if err != nil {
-		return false, err
-	}
-	delimiter, ok := token.(json.Delim)
-	if !ok || delimiter != '{' {
-		return false, nil
-	}
-	for decoder.More() {
-		token, err := decoder.Token()
+	// SessionInfo already validated the entire payload before its former
+	// Token/Decode visitor. Keep that whole-payload depth profile, not the hub's
+	// per-member budget. Decode keys before exact ASCII matching, never via repair.
+	err := visitRawJSONObject(raw, func(key, value json.RawMessage) error {
+		name, err := decodeLosslessJSONString(key)
+		if errors.Is(err, errJSONScalar) {
+			// Every recognized key is ASCII: an unpaired surrogate cannot name
+			// one. Skip this member without inspecting its opaque value.
+			*issues |= sessionInfoIssueUnicode
+			return nil
+		}
 		if err != nil {
-			return false, err
-		}
-		name, ok := token.(string)
-		if !ok {
-			return false, errInvalidNormalizedSessionInfo
-		}
-		var value json.RawMessage
-		if err := decoder.Decode(&value); err != nil {
-			return false, err
+			return err
 		}
 		visit(name, value)
+		return nil
+	})
+	if errors.Is(err, errJSONObject) {
+		return false, nil
 	}
-	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
-		return false, errInvalidNormalizedSessionInfo
-	}
-	return true, nil
+	return err == nil, err
 }
 
 func parsePositiveCanonicalInt64(raw json.RawMessage) (int64, bool) {
@@ -357,21 +350,24 @@ func parsePositiveCanonicalInt64(raw json.RawMessage) (int64, bool) {
 	return value, true
 }
 
-func parseJSONString(raw json.RawMessage) (string, bool) {
-	raw = bytes.TrimSpace(raw)
-	if len(raw) < 2 || raw[0] != '"' {
-		return "", false
+func parseJSONString(raw json.RawMessage) (string, bool, sessionInfoIssueSet) {
+	value, err := decodeLosslessJSONString(raw)
+	if errors.Is(err, errJSONScalar) {
+		return "", false, sessionInfoIssueUnicode
 	}
-	var value string
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return "", false
-	}
-	return value, true
+	return value, err == nil, 0
 }
 
 func parseSessionInfoLocalTime(raw json.RawMessage) (time.Time, bool) {
-	value, ok := parseJSONString(raw)
-	if !ok || len(value) != len("YYYY-MM-DDTHH:MM:SS") ||
+	value, ok, _ := parseJSONString(raw)
+	if !ok {
+		return time.Time{}, false
+	}
+	return parseSessionInfoLocalTimeValue(value)
+}
+
+func parseSessionInfoLocalTimeValue(value string) (time.Time, bool) {
+	if len(value) != len("YYYY-MM-DDTHH:MM:SS") ||
 		value[4] != '-' || value[7] != '-' || value[10] != 'T' ||
 		value[13] != ':' || value[16] != ':' {
 		return time.Time{}, false
@@ -397,10 +393,14 @@ func parseSessionInfoLocalTime(raw json.RawMessage) (time.Time, bool) {
 }
 
 func parseSessionInfoGMTOffset(raw json.RawMessage) (time.Duration, bool) {
-	value, ok := parseJSONString(raw)
+	value, ok, _ := parseJSONString(raw)
 	if !ok {
 		return 0, false
 	}
+	return parseSessionInfoGMTOffsetValue(value)
+}
+
+func parseSessionInfoGMTOffsetValue(value string) (time.Duration, bool) {
 	negative := strings.HasPrefix(value, "-")
 	if negative {
 		value = value[1:]
