@@ -35,16 +35,17 @@ type metricResult struct {
 
 // Independent metadata oracle: do not read descriptions from instrument specs.
 var expectedOperationalDescriptions = map[string]string{
-	"otelcol_f1livetiming_connection_active":   "Established Live Timing transport with Subscribe written (1 or 0); not confirmed input or export.",
-	"otelcol_f1livetiming_subscription_active": "Current connection has a fully normalized Subscribe completion (1 or 0); updates may still be absent.",
-	"otelcol_f1livetiming_outage_active":       "Unresolved detected input interruption (1 or 0), including a terminally stopped input.",
-	"otelcol_f1livetiming_outages":             "Detected Live Timing input interruption episodes, including terminal failures.",
-	"otelcol_f1livetiming_reconnect_attempts":  "Actual Live Timing reconnect calls, excluding initial startup and canceled waits.",
-	"otelcol_f1livetiming_recoveries":          "Input outages closed by validated subscription and normalized updates; not racing export success.",
-	"otelcol_f1livetiming_outage_duration":     "Process seconds in the current unresolved input outage; zero after recovery.",
-	"otelcol_f1livetiming_normalized_updates":  "Envelopes in fully normalized input batches, not cars, datapoints, or exported racing signals.",
-	"otelcol_f1livetiming_last_update_age":     "Process seconds since local acceptance of a nonempty normalized batch; omitted before first input, not source freshness.",
-	"otelcol_f1livetiming_consumer_failures":   "Failed normalized-batch consumer calls, counted independently of input outages.",
+	"otelcol_f1livetiming_connection_active":       "Established Live Timing transport with Subscribe written (1 or 0); not confirmed input or export.",
+	"otelcol_f1livetiming_subscription_active":     "Current connection has a fully normalized Subscribe completion (1 or 0); updates may still be absent.",
+	"otelcol_f1livetiming_outage_active":           "Unresolved detected input interruption (1 or 0), including a terminally stopped input.",
+	"otelcol_f1livetiming_outages":                 "Detected Live Timing input interruption episodes, including terminal failures.",
+	"otelcol_f1livetiming_reconnect_attempts":      "Actual Live Timing reconnect calls, excluding initial startup and canceled waits.",
+	"otelcol_f1livetiming_recoveries":              "Input outages closed by validated subscription and normalized updates; not racing export success.",
+	"otelcol_f1livetiming_outage_duration":         "Process seconds in the current unresolved input outage; zero after recovery.",
+	"otelcol_f1livetiming_normalized_updates":      "Envelopes in fully normalized input batches, not cars, datapoints, or exported racing signals.",
+	"otelcol_f1livetiming_last_update_age":         "Process seconds since local acceptance of a nonempty normalized batch; omitted before first input, not source freshness.",
+	"otelcol_f1livetiming_consumer_failures":       "Failed normalized-batch consumer calls, counted independently of input outages.",
+	"otelcol_f1livetiming_invalid_unicode_updates": "Envelopes with malformed Unicode scalar escapes in fully normalized payloads; not rejected input or dropped racing signals.",
 }
 
 func collectOperational(t *testing.T, reader *sdkmetric.ManualReader) map[string]metricResult {
@@ -110,6 +111,7 @@ func zeroOperationalMetrics(id string) map[string]metricResult {
 		{"outage_duration", "s", "Float64Gauge"},
 		{"outages", "{outage}", "Int64Counter"}, {"reconnect_attempts", "{attempt}", "Int64Counter"},
 		{"recoveries", "{recovery}", "Int64Counter"}, {"normalized_updates", "{update}", "Int64Counter"}, {"consumer_failures", "{failure}", "Int64Counter"},
+		{"invalid_unicode_updates", "{update}", "Int64Counter"},
 	} {
 		result[metricPrefix+spec.name] = metricResult{spec.unit, spec.kind, []metricPoint{{id, 0}}}
 	}
@@ -151,8 +153,9 @@ func TestOperationalMetricsLifecycle(t *testing.T) {
 		r.apply(operationalInput{event: opBatch, snapshot: true})
 		set("subscription_active", 1)
 		check()
-		r.apply(operationalInput{event: opBatch, updates: 2})
+		r.apply(operationalInput{event: opBatch, updates: 2, invalidUnicodeUpdates: 2})
 		set("normalized_updates", 2)
+		set("invalid_unicode_updates", 2)
 		want[metricPrefix+"last_update_age"] = metricResult{"s", "Float64Gauge", []metricPoint{{"f1livetiming", 0}}}
 		check()
 		r.apply(operationalInput{event: opOutage})
@@ -172,10 +175,11 @@ func TestOperationalMetricsLifecycle(t *testing.T) {
 		set("connection_active", 1)
 		set("subscription_active", 1)
 		check() // empty completion has not recovered
-		r.apply(operationalInput{event: opBatch, updates: 1})
+		r.apply(operationalInput{event: opBatch, updates: 1, invalidUnicodeUpdates: 1})
 		r.apply(operationalInput{event: opConsumerFailure})
 		set("recoveries", 1)
 		set("normalized_updates", 3)
+		set("invalid_unicode_updates", 3)
 		set("consumer_failures", 1)
 		set("outage_active", 0)
 		set("outage_duration", 0)
@@ -570,7 +574,7 @@ func TestOperationalMetricsConstructionAndFailedStartCleanup(t *testing.T) {
 }
 
 func TestOperationalInstrumentErrorsDoNotCache(t *testing.T) {
-	for _, name := range []string{"outages", "subscription_active", "last_update_age"} {
+	for _, name := range []string{"outages", "invalid_unicode_updates", "subscription_active", "last_update_age"} {
 		t.Run(name, func(t *testing.T) {
 			provider := &failingMeterProvider{meter: failingMeter{failInstrument: name}}
 			settings := receivertest.NewNopSettings(Type)

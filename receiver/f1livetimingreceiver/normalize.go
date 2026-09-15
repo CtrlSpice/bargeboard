@@ -35,6 +35,8 @@ type normalizedLiveTimingBatch struct {
 	presentTopics   []string
 	observationTime time.Time
 	updates         []normalizedLiveTimingUpdate
+	// Count affected envelopes only after the complete batch validates.
+	invalidUnicodeUpdates int
 }
 
 func normalizeLiveTimingBatch(
@@ -87,12 +89,19 @@ func normalizeLiveTimingBatch(
 			return normalizedLiveTimingBatch{}, invalidLiveTimingData("F1 normalized snapshot batch manifest is invalid")
 		}
 	}
+	invalidUnicodeUpdates := 0
+	for _, update := range updates {
+		if hasInvalidJSONScalars(update.payload) {
+			invalidUnicodeUpdates++
+		}
+	}
 	return normalizedLiveTimingBatch{
-		source:          batch.source,
-		requestedTopics: requestedTopics,
-		presentTopics:   presentTopics,
-		observationTime: observationTime,
-		updates:         updates,
+		source:                batch.source,
+		requestedTopics:       requestedTopics,
+		presentTopics:         presentTopics,
+		observationTime:       observationTime,
+		updates:               updates,
+		invalidUnicodeUpdates: invalidUnicodeUpdates,
 	}, nil
 }
 

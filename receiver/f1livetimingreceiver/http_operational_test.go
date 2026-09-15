@@ -195,6 +195,7 @@ func TestHTTPOperationalRetryAndQualifiedRecovery(t *testing.T) {
 		checkState()
 		fields["connection_active"], fields["subscription_active"], fields["outage_duration_seconds"] = false, false, float64(0)
 		fields["outages"], fields["recoveries"], fields["consumer_failures"], fields["unresolved_outage"] = int64(1), int64(1), int64(0), false
+		fields["invalid_unicode_updates"] = int64(0)
 		summary := logs.FilterMessageSnippet("interruption summary").All()
 		if len(summary) != 1 || !reflect.DeepEqual(summary[0].ContextMap(), fields) || len(host.events) != 0 {
 			t.Fatalf("summary=%+v", summary)
@@ -292,6 +293,7 @@ func TestHTTPOperationalTerminalSetup(t *testing.T) {
 						delete(fields, "setup_stage")
 						delete(fields, "http_status")
 						fields["outages"], fields["recoveries"], fields["consumer_failures"], fields["unresolved_outage"] = int64(1), int64(0), int64(0), true
+						fields["invalid_unicode_updates"] = int64(0)
 						summary := logs.FilterMessageSnippet("interruption summary").All()
 						if len(summary) != 1 || !reflect.DeepEqual(summary[0].ContextMap(), fields) {
 							t.Fatalf("summary=%+v", summary)
@@ -404,6 +406,7 @@ func TestHTTPOperationalRetryAfterLoggingAndCancellation(t *testing.T) {
 				}
 				fields := httpProgressFields(want.attempts, time.Since(origin).Seconds(), time.Since(origin).Seconds(), 0, 0)
 				fields["outages"], fields["recoveries"], fields["consumer_failures"], fields["unresolved_outage"] = int64(1), int64(0), int64(0), true
+				fields["invalid_unicode_updates"] = int64(0)
 				summary := logs.FilterMessageSnippet("interruption summary").All()
 				if len(summary) != 1 || !reflect.DeepEqual(summary[0].ContextMap(), fields) {
 					t.Fatalf("summary=%+v", summary)

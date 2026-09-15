@@ -29,7 +29,22 @@ func decodeLosslessJSONString(raw []byte) (string, error) {
 	if raw[0] != '"' {
 		return "", errJSONString
 	}
-	for i := 1; i < len(raw)-1; i++ {
+	if hasInvalidJSONScalars(raw) {
+		return "", errJSONScalar
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", errJSONSyntax
+	}
+	return value, nil
+}
+
+// hasInvalidJSONScalars scans a UTF-8 and grammar-validated JSON value without
+// decoding strings or keys. In valid JSON every backslash belongs to a string;
+// skipping each complete escape also keeps literal backslash-u text opaque.
+// This linear, constant-space scan imposes no additional nesting profile.
+func hasInvalidJSONScalars(raw []byte) bool {
+	for i := 0; i < len(raw); i++ {
 		if raw[i] != '\\' {
 			continue
 		}
@@ -41,23 +56,19 @@ func decodeLosslessJSONString(raw []byte) (string, error) {
 		i += 4
 		switch {
 		case unit >= 0xDC00 && unit <= 0xDFFF:
-			return "", errJSONScalar
+			return true
 		case unit >= 0xD800 && unit <= 0xDBFF:
-			if i+6 >= len(raw)-1 || raw[i+1] != '\\' || raw[i+2] != 'u' {
-				return "", errJSONScalar
+			if i+6 >= len(raw) || raw[i+1] != '\\' || raw[i+2] != 'u' {
+				return true
 			}
 			low := jsonHexUnit(raw[i+3 : i+7])
 			if low < 0xDC00 || low > 0xDFFF {
-				return "", errJSONScalar
+				return true
 			}
 			i += 6
 		}
 	}
-	var value string
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return "", errJSONSyntax
-	}
-	return value, nil
+	return false
 }
 
 // jsonHexUnit is only used after encoding/json has validated escape grammar.

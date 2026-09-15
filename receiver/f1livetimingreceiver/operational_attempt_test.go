@@ -125,6 +125,7 @@ func TestOperationalPreAttemptLoggingCancellation(t *testing.T) {
 				}
 				wantFields["run_elapsed_seconds"], wantFields["outage_duration_seconds"], wantFields["total_outage_duration_seconds"] = elapsed, elapsed, elapsed
 				wantFields["outages"], wantFields["recoveries"], wantFields["consumer_failures"], wantFields["unresolved_outage"] = int64(1), int64(0), int64(0), true
+				wantFields["invalid_unicode_updates"] = int64(0)
 				summary := logs.FilterMessageSnippet("interruption summary").All()
 				if len(summary) != 1 || !reflect.DeepEqual(summary[0].ContextMap(), wantFields) {
 					t.Fatalf("summary = %+v, want %+v", summary, wantFields)

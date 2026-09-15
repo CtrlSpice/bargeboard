@@ -22,6 +22,7 @@ const operationalScope = "github.com/CtrlSpice/bargeboard/receiver/f1livetimingr
 const metricPrefix = "otelcol_f1livetiming_"
 const outageMessage = "Live Timing input interrupted; updates may be missing. Press Ctrl-C to stop the Collector."
 const recoveryMessage = "Live Timing updates resumed; missed updates may be unrecoverable"
+const invalidUnicodeMessage = "Live Timing payload contains malformed Unicode scalar escapes; normalized payload bytes preserved; no F1 race export is implemented"
 
 var errInputOutage = errors.New("Live Timing input interrupted; updates may be missing")
 var errAwaitingInput = errors.New("Live Timing input not receiving: awaiting validated subscription and first normalized updates")
@@ -35,7 +36,7 @@ type operationalReporter struct {
 	logger       *zap.Logger
 	host         component.Host
 	attrs        metric.MeasurementOption
-	counters     [5]metric.Int64Counter
+	counters     [6]metric.Int64Counter
 	registration metric.Registration
 	// Separate from reporting state: disabling drains admitted callbacks before
 	// recreation, even when the supplied provider cannot unregister its callback.
@@ -77,6 +78,7 @@ func newOperationalReporter(ctx context.Context, settings receiver.Settings) (*o
 		{"recoveries", "{recovery}", "Input outages closed by validated subscription and normalized updates; not racing export success."},
 		{"normalized_updates", "{update}", "Envelopes in fully normalized input batches, not cars, datapoints, or exported racing signals."},
 		{"consumer_failures", "{failure}", "Failed normalized-batch consumer calls, counted independently of input outages."},
+		{"invalid_unicode_updates", "{update}", "Envelopes with malformed Unicode scalar escapes in fully normalized payloads; not rejected input or dropped racing signals."},
 	} {
 		var err error
 		r.counters[i], err = meter.Int64Counter(metricPrefix+spec.name, metric.WithUnit(spec.unit), metric.WithDescription(spec.description))
@@ -166,7 +168,7 @@ func (r *operationalReporter) start(host component.Host) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				r.apply(operationalInput{event: opTick})
+				r.apply(operationalInput{event: opPeriodicTick})
 			}
 		}
 	}()
@@ -250,10 +252,15 @@ func (r *operationalReporter) applyLocked(in operationalInput) operationalState 
 	old := *r.state.Load()
 	s, notice := reduceOperational(old, in)
 	r.state.Store(&s)
-	for i, delta := range [...]int64{s.outages - old.outages, s.attempts - old.attempts, s.recoveries - old.recoveries, s.updates - old.updates, s.consumerFailures - old.consumerFailures} {
+	for i, delta := range [...]int64{s.outages - old.outages, s.attempts - old.attempts, s.recoveries - old.recoveries, s.updates - old.updates, s.consumerFailures - old.consumerFailures, s.invalidUnicodeUpdates - old.invalidUnicodeUpdates} {
 		if delta != 0 {
 			r.counters[i].Add(context.Background(), delta, r.attrs)
 		}
+	}
+	if delta := s.reportedInvalidUnicodeUpdates - old.reportedInvalidUnicodeUpdates; delta > 0 {
+		r.logger.Warn(invalidUnicodeMessage,
+			zap.Int64("invalid_unicode_updates", s.invalidUnicodeUpdates),
+			zap.Int64("new_invalid_unicode_updates", delta))
 	}
 	if notice == noticeNone {
 		return s
@@ -304,7 +311,8 @@ func (r *operationalReporter) applyLocked(in operationalInput) operationalState 
 		componentstatus.ReportStatus(r.host, componentstatus.NewPermanentErrorEvent(err))
 	case noticeSummary:
 		fields = append(fields, zap.Int64("outages", s.outages), zap.Int64("recoveries", s.recoveries),
-			zap.Int64("consumer_failures", s.consumerFailures), zap.Bool("unresolved_outage", s.outage))
+			zap.Int64("consumer_failures", s.consumerFailures), zap.Bool("unresolved_outage", s.outage),
+			zap.Int64("invalid_unicode_updates", s.invalidUnicodeUpdates))
 		r.logger.Info("Live Timing input run ended; interruption summary (not an export summary)", fields...)
 	case noticeStopped:
 		r.logger.Warn("Live Timing input stopped; Collector can still run. Press Ctrl-C to stop the Collector.", fields...)

@@ -111,6 +111,7 @@ func TestOperationalPeriodicWaitingAndOutage(t *testing.T) {
 		summary := logs.FilterMessageSnippet("interruption summary").All()
 		wantFields["next_delay_seconds"] = float64(0)
 		wantFields["outages"], wantFields["recoveries"], wantFields["consumer_failures"], wantFields["unresolved_outage"] = int64(1), int64(0), int64(0), true
+		wantFields["invalid_unicode_updates"] = int64(0)
 		if len(summary) != 1 || !reflect.DeepEqual(summary[0].ContextMap(), wantFields) {
 			t.Fatalf("summary = %#v", summary)
 		}
@@ -437,6 +438,7 @@ func TestOperationalRecoveryAndSummaryDurationFields(t *testing.T) {
 		want["run_elapsed_seconds"], want["outage_duration_seconds"], want["total_outage_duration_seconds"] = float64(7225), float64(25), float64(35)
 		want["connection_active"], want["subscription_active"] = false, false
 		want["outages"], want["recoveries"], want["consumer_failures"], want["unresolved_outage"] = int64(2), int64(1), int64(0), true
+		want["invalid_unicode_updates"] = int64(0)
 		summary := logs.FilterMessageSnippet("interruption summary").All()
 		if len(summary) != 1 || !reflect.DeepEqual(summary[0].ContextMap(), want) {
 			t.Fatalf("summary fields = %+v; want %+v", summary, want)

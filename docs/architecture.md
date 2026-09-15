@@ -64,7 +64,7 @@ as the behavior and its tests.
 
 ## Layered Unicode and Input Quality
 
-**Status: GREEN policy; partial FORMATION LAP implementation (U1 landed; U2 implemented; U3 pending)**
+**Status: GREEN policy; partial FORMATION LAP implementation (U1/U2 landed; U3 implemented; topic integrations pending)**
 
 The approved policy preserves independently useful input, never silently repairs
 identity, and makes resulting uncertainty visible. Blanket rejection of every
@@ -276,7 +276,7 @@ completion/close decisions. A scalar-invalid description cannot turn a valid
 values, feed payloads, and snapshot payloads remain raw, including scalar-invalid
 strings and nested keys. Inflated JSON retains its exact inflated bytes. U1 does
 not inspect those payload scalars for quality findings. U2 adds the pure
-SessionInfo integration below; U3 runtime payload-quality reporting remains pending.
+SessionInfo integration below; U3 adds runtime payload-quality reporting separately.
 
 Invalid control input retains startup failure and the current runtime stop
 policy. A valid A followed by control-invalid B commits A and stops before C;
@@ -369,9 +369,75 @@ independent bundles, escaped and malformed keys, duplicate occurrence unions,
 opaque unknown values, whole-payload depth boundaries, source-byte ownership,
 snapshot order/atomicity, feed-order recovery, idempotence, retired tuples, and
 counter exhaustion. Structural result/state field assertions require explicit
-oracle review when a field is added. U3 and future topic implementations must
-complete their own integration and verification before the overall policy leaves
-partial FORMATION LAP.
+oracle review when a field is added. Future topic implementations must complete
+their own integration and verification before the overall policy leaves partial
+FORMATION LAP.
+
+#### U3 Normalized Payload Quality and Runtime Reporting
+
+`hasInvalidJSONScalars` is a pure scan of original, already UTF-8- and
+grammar-validated JSON. It detects unpaired surrogate escapes in values and keys,
+including unknown content and duplicate members. Valid JSON confines backslashes
+to quoted strings: skipping complete escapes distinguishes surrogate escapes from
+literal backslash-u text without decoding strings or building an AST. The scan
+shares U1's scalar-pairing check, uses constant storage, and takes linear time in
+the bounded payload size. It imposes no additional JSON validation or depth profile.
+The owning validators retain all existing UTF-8, grammar, depth, decompression,
+base64, timestamp, manifest, and hard-limit failure policies.
+
+After every update and both manifests validate, `normalizeLiveTimingBatch` scans
+each normalized payload and sets `invalidUnicodeUpdates` to the number of affected
+envelopes. An envelope contributes at most one, regardless of the number of bad
+keys or strings. Plain and inflated payloads retain their exact JSON bytes and
+owned storage. Requested/present manifests and all snapshot siblings remain in
+the same atomic result. An empty snapshot contributes zero; any normalization
+error returns the zero batch, including zero quality findings. Detecting quality
+only after complete validation prevents partial observations from rejected batches.
+
+The production run passes this count to `opBatch` alongside the existing envelope
+count, before calling the normalized consumer. `operationalState` retains two
+fixed-size integers: the run's affected-envelope total and its reported-total
+watermark. The first affected batch advances both immediately. Later batches add
+only to the total; the existing 30-second ticker advances the watermark and emits
+one coalesced warning when there are new findings. The timer uses
+`opPeriodicTick`; retry progress's `opTick` cannot flush quality warnings. Cadence
+is anchored to the existing reporter start, so a first finding at second 29 warns
+immediately and repetitions can coalesce at second 30. No second timer or per-input
+diagnostic history is introduced.
+
+An advancing watermark produces this bounded warning independently of the existing
+readiness/outage notice, under the same reporting mutex:
+
+> Live Timing payload contains malformed Unicode scalar escapes; normalized payload bytes preserved; no F1 race export is implemented
+
+Its only receiver-added fields are `invalid_unicode_updates` (run total) and
+`new_invalid_unicode_updates` (envelopes since the preceding quality warning).
+Neither the warning nor internal telemetry includes payload content, topics, keys,
+paths, offsets, tokens, URLs, hashes, or dynamic categories. Quality findings do not
+change component status, create outages or consumer failures, or establish semantic
+recovery. A clean batch does not clear historical counts. First-data and transport
+recovery notices still reflect only their existing input-readiness conditions.
+
+The synchronous `otelcol_f1livetiming_invalid_unicode_updates` counter follows the
+instrument contract below and records accepted input independently of consumer
+success. The final input summary includes `invalid_unicode_updates`, including any
+findings pending at shutdown or permanent stop. Summary emission still waits for
+the consumer callback to finish; a shutdown timeout cannot manufacture completion.
+After summary, periodic stopped notices do not reissue pending quality warnings.
+Metrics-None retains the same terminal notices and per-run totals. The production
+consumer remains a no-op and U2 remains unwired; these findings establish no actual
+projection, quarantine, dropped signals, or semantic recovery.
+
+Focused synthetic tests compare complete scanner/normalization and operational
+results, plain/inflated byte ownership, duplicate/nested keys, full depth and
+inflated-size boundaries, and rejected sibling/manifest atomicity. Controlled
+transport and `testing/synctest` verify actual production-run wiring, A/B/C
+continuation, first/coalesced/exact-boundary warnings, clean intervals, metrics
+enabled/None, terminal rejection, and callback-delayed summaries. Independent
+metric oracles cover names, descriptions, units, types, values, temporality, scope,
+receiver-only labels, repeated/multi-reader collection, shared factories, provider
+history on recreation, and instrument construction failure. Distinct synthetic
+topics, keys, and text must still produce one series per receiver.
 
 ### Required Verification
 
@@ -429,9 +495,10 @@ U1 lossless JSON controls and raw manifest-key handling are implemented. Opaque
 plain and inflated payloads may still contain scalar-invalid strings; delivery
 continues under valid envelopes without repairing those bytes. SessionInfo's
 scoped Unicode integration and bounded pure issue propagation (U2) are implemented
-but remain unwired. Payload-quality diagnostics/counters (U3) remain pending.
-Existing input activity metrics therefore do not claim Unicode
-quality assessment, semantic quarantine, or racing-signal delivery.
+but remain unwired. Payload-quality diagnostics/counters (U3) detect malformed
+scalar escapes in fully normalized payloads, with bounded warnings and affected
+envelope totals. These input findings do not claim semantic quarantine or
+racing-signal delivery.
 
 No Go OpenF1 receiver exists yet.
 
@@ -778,8 +845,9 @@ stating that the Collector can still run. They MUST NOT broadcast a fatal event.
 Initial synchronous Start failure still returns its error without entering the
 runtime reporting or retry lifecycle.
 
-One periodic reporter runs every 30 process seconds while the receiver waits
-for initial updates, has an unresolved outage, or has stopped its input. A
+One periodic reporter runs every 30 process seconds to report waiting for initial
+updates, unresolved outages, stopped input, or new coalesced payload-quality
+findings. After the final summary it emits only the existing stopped notice. A
 ping-only session with a valid empty completion therefore remains visibly
 waiting. Periodic observation MUST NOT infer another source failure, use source
 timestamps, or change liveness or retry. Active idle input after first data does
@@ -817,6 +885,7 @@ it. The only datapoint attribute is `receiver=settings.ID.String()`.
 | `recoveries` | Int64 counter | `{recovery}` | Outage episodes cleared by current-connection completion plus updates. |
 | `outage_duration` | Float64 observable gauge | `s` | Current unresolved episode's elapsed process seconds; zero without an active episode. |
 | `normalized_updates` | Int64 counter | `{update}` | Update envelopes in fully normalized nonempty batches, independent of consumer success. |
+| `invalid_unicode_updates` | Int64 counter | `{update}` | Envelopes containing one or more malformed Unicode scalar escapes in plain or inflated normalized payload keys/values; once per affected envelope in a fully accepted batch, independent of consumer success. No contribution from rejected batches; not a count of rejected input or dropped racing signals. |
 | `last_update_age` | Float64 observable gauge | `s` | Process seconds since acceptance of the last normalized nonempty batch; omitted until one exists. |
 | `consumer_failures` | Int64 counter | `{failure}` | Failed normalized-batch consumer calls; this is not a count of failed racing signals. |
 
@@ -824,6 +893,13 @@ Every instrument MUST have a concise description identifying its input count or
 state and its limits, including local acceptance age versus source freshness
 and normalized observations versus actual racing export. Verification compares
 descriptions against an independent metadata oracle.
+
+The `invalid_unicode_updates` description is exactly: `Envelopes with malformed
+Unicode scalar escapes in fully normalized payloads; not rejected input or dropped
+racing signals.` Like the other counters, it records synchronous nonnegative
+deltas, is monotonic, uses the supplied SDK's temporality, and has only the
+`receiver=settings.ID.String()` datapoint attribute. No topic, issue, field, or
+source-derived dimension is authorized.
 
 Duration and age use the process-monotonic clock, independently of `r.now` and
 racing observation/source time. Last-update age measures local acceptance age,
@@ -860,8 +936,9 @@ counter via newly zeroed observable totals are forbidden.
 
 The run owner emits one final input summary only after reading and every
 synchronous consumer callback finish. It retains attempts, outages, recoveries,
-normalized updates, consumer failures, any unresolved outage, and closed plus
-current outage duration as of the summary, including after successful recovery.
+normalized updates, affected Unicode update envelopes, consumer failures, any
+unresolved outage, and closed plus current outage duration as of the summary,
+including after successful recovery.
 A shutdown deadline MUST NOT produce a falsely completed summary. Shutdown
 immediately requests input and periodic-reporting cancellation, then starts one
 once-owned asynchronous cleanup worker. Initiation MUST NOT wait for the
