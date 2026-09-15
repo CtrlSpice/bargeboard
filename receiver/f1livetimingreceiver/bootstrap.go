@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 const (
@@ -67,11 +68,16 @@ func bootstrapConnection(ctx context.Context, client *http.Client, cfg *Config) 
 		return connectionCredentials{}, sanitizedTransportError(ctx, "perform negotiation preflight", err)
 	}
 	defer response.Body.Close()
-	if err := ctx.Err(); err != nil {
+	now := time.Now()
+	if err := setupContextError(ctx, now); err != nil {
 		return connectionCredentials{}, sanitizedTransportError(ctx, "perform negotiation preflight", err)
 	}
 
-	return credentialsFromPreflight(token, response.StatusCode, response.Cookies())
+	credentials, err := credentialsFromPreflight(token, response.StatusCode, response.Cookies())
+	if failure := asSetupHTTPError(err); failure != nil {
+		err = setupHTTPFailure(failure.stage, failure.status, response.Header.Get("Retry-After"), now)
+	}
+	return credentials, err
 }
 
 func readTokenFile(path string) (string, error) {
@@ -112,9 +118,7 @@ func credentialsFromPreflight(
 		}
 	}
 	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
-		return connectionCredentials{}, invalidLiveTimingData(
-			fmt.Sprintf("negotiation preflight returned HTTP %d without %s cookie", statusCode, affinityCookieName),
-		)
+		return connectionCredentials{}, setupHTTPFailure(stagePreflight, statusCode, "", time.Time{})
 	}
 	return connectionCredentials{}, invalidLiveTimingData(
 		fmt.Sprintf("negotiation preflight did not return %s cookie", affinityCookieName),

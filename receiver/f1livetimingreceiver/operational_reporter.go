@@ -3,6 +3,8 @@ package f1livetimingreceiver
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -290,6 +292,16 @@ func (r *operationalReporter) applyLocked(in operationalInput) operationalState 
 	case noticeSourceStopped:
 		r.logger.Error(errSourceStopped.Error())
 		componentstatus.ReportStatus(r.host, componentstatus.NewPermanentErrorEvent(errSourceStopped))
+	case noticeSetupStopped:
+		failure := setupHTTPFailure(in.setupStage, in.httpStatus, "", time.Time{})
+		guidance := ""
+		if failure.status == http.StatusUnauthorized || failure.status == http.StatusForbidden {
+			guidance = " Check the F1 TV token and access."
+		}
+		err := fmt.Errorf("Live Timing input stopped: %w; Collector can still run.%s Press Ctrl-C to stop the Collector.", failure, guidance)
+		fields = append(fields, zap.String("setup_stage", failure.stage.String()), zap.Int("http_status", failure.status))
+		r.logger.Error(err.Error(), fields...)
+		componentstatus.ReportStatus(r.host, componentstatus.NewPermanentErrorEvent(err))
 	case noticeSummary:
 		fields = append(fields, zap.Int64("outages", s.outages), zap.Int64("recoveries", s.recoveries),
 			zap.Int64("consumer_failures", s.consumerFailures), zap.Bool("unresolved_outage", s.outage))

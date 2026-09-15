@@ -147,9 +147,10 @@ func (r *liveTimingReceiver) run(
 		}
 		r.operational.apply(operationalInput{event: opOutage})
 
+		var notBefore time.Time
 		for {
 			delay := r.retryDelay(attempt)
-			scheduled := r.operational.apply(operationalInput{event: opSchedule, delay: delay})
+			scheduled := r.operational.apply(operationalInput{event: opSchedule, delay: delay, notBefore: notBefore})
 			if !waitForReconnect(ctx, time.Until(scheduled.retryAt)) || ctx.Err() != nil {
 				return
 			}
@@ -169,6 +170,14 @@ func (r *liveTimingReceiver) run(
 			if errors.Is(err, errInvalidLiveTimingData) {
 				r.operational.apply(operationalInput{event: opInvalid})
 				return
+			}
+			notBefore = time.Time{}
+			if failure := asSetupHTTPError(err); failure != nil {
+				if failure.permanent() {
+					r.operational.apply(operationalInput{event: opSetupStopped, setupStage: failure.stage, httpStatus: failure.status})
+					return
+				}
+				notBefore = failure.retryAt
 			}
 			r.operational.apply(operationalInput{event: opOutage})
 		}
