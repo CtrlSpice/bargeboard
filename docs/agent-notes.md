@@ -67,6 +67,15 @@ findings and runtime diagnostics/counters. Neither is implemented by U1.
 - `json_tokens.go` provides a pure single-decode scalar validator and a raw-member
   visitor. The latter exposes original key/value views without a universal
   duplicate policy, nested string decoding, or a full custom JSON parser.
+- U1's depth compatibility fix keeps two explicit profiles: whole-object
+  validation for negotiation/handshake and per-member-value validation for
+  hub/snapshot objects. The latter restores the pre-U1 outer-Token/per-value-Decode
+  10,000-depth budget. A complete grammar-validation pass precedes callbacks;
+  bounded raw token location handles malformed/truncated input without an AST.
+  Regression tests reproduce the rejected boundary at U1 head `edf973f`, check
+  accepted and limit-plus-one depths against the pre-U1 decoding pattern, and
+  verify A/deep-valid-B/C continuation, snapshot atomicity, and shallow grammar
+  equivalence with raw-view/input preservation.
 - Negotiation preserves case-insensitive assignment, duplicates, null no-ops,
   and capability slice reuse; handshake preserves case-sensitive keys and last
   raw error value. Hub and manifest policies remain strict. Invalid control keys
@@ -84,6 +93,11 @@ findings and runtime diagnostics/counters. Neither is implemented by U1.
   `npm run typecheck` and `git diff --check` also passed. The initial focused
   regressions failed on repaired controls before implementation. Inspect #34 and
   its linked PR for final candidate, CI, review, and landing evidence.
+- The same local checks passed after the depth compatibility fix, including the
+  new boundary/grammar regressions in the 20-repeat race run. A bounded fuzz run
+  also passed: `go test ./receiver/f1livetimingreceiver -run '^$' -fuzz '^FuzzRawJSONObjectMembersGrammar$' -fuzztime=15s -parallel=2`
+  (72 synthetic seeds; 253,814 executions). No source acquisition is needed to
+  reproduce these tests.
 
 ## Landed Cleanup Baseline
 

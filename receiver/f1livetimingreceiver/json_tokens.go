@@ -80,9 +80,9 @@ func jsonHexUnit(raw []byte) uint16 {
 // visitRawJSONObject visits source-order members without decoding keys, inserting
 // them into a map, or materializing nested strings. Key and value are read-only
 // views of raw; callers own scalar validation, duplicate policy, and any copies.
-// Full UTF-8 and encoding/json syntax validation precede all callbacks. The shell
-// bounds input bytes; this walk is linear, nonrecursive, and uses constant space
-// beyond encoding/json's bounded syntax stack. It builds no AST or member list.
+// Full UTF-8 and encoding/json syntax validation precede all callbacks. This
+// profile charges the entire object against encoding/json's 10,000-depth limit,
+// preserving negotiation/handshake's whole-value Unmarshal contract.
 func visitRawJSONObject(raw []byte, visit func(key, value json.RawMessage) error) error {
 	if !utf8.Valid(raw) {
 		return errJSONUTF8
@@ -90,27 +90,94 @@ func visitRawJSONObject(raw []byte, visit func(key, value json.RawMessage) error
 	if !json.Valid(raw) {
 		return errJSONSyntax
 	}
-	raw = bytes.TrimSpace(raw)
-	if raw[0] != '{' {
-		return errJSONObject
-	}
-	for i := skipJSONSpace(raw, 1); raw[i] != '}'; {
-		keyEnd := jsonStringEnd(raw, i)
-		valueStart := skipJSONSpace(raw, skipJSONSpace(raw, keyEnd)+1) // colon
-		valueEnd := jsonValueEnd(raw, valueStart)
-		if err := visit(raw[i:keyEnd], raw[valueStart:valueEnd]); err != nil {
-			return err
-		}
-		i = skipJSONSpace(raw, valueEnd)
-		if raw[i] == ',' {
-			i = skipJSONSpace(raw, i+1)
-		}
-	}
-	return nil
+	return walkRawJSONObject(raw, false, visit)
 }
 
-// The boundary helpers below require valid JSON. They locate tokens only;
-// encoding/json remains the grammar validator, including its nesting limit.
+// visitRawJSONObjectMembers has the same lossless view/callback contract, but
+// gives each member value its own encoding/json nesting budget. Hub and snapshot
+// parsing previously used Token for the outer object and Decode for each value;
+// charging the outer object too would reject previously accepted deep payloads.
+// A complete first pass validates outer punctuation and every original key/value
+// token before any caller callback. Both passes are linear and nonrecursive,
+// with constant space beyond encoding/json's bounded syntax stack. The shell
+// bounds bytes; no AST, decoded keys, or member list is built by either profile.
+func visitRawJSONObjectMembers(raw []byte, visit func(key, value json.RawMessage) error) error {
+	if !utf8.Valid(raw) {
+		return errJSONUTF8
+	}
+	if err := walkRawJSONObject(raw, true, nil); err != nil {
+		return err
+	}
+	return walkRawJSONObject(raw, false, visit)
+}
+
+// walkRawJSONObject checks outer grammar and optionally validates member tokens.
+// With validateMembers false, the complete input must already be validated under
+// the owning depth profile. A nil visitor performs only the validation pass.
+func walkRawJSONObject(raw []byte, validateMembers bool, visit func(key, value json.RawMessage) error) error {
+	i := skipJSONSpace(raw, 0)
+	if i == len(raw) {
+		return errJSONSyntax
+	}
+	if raw[i] != '{' {
+		if !json.Valid(raw) {
+			return errJSONSyntax
+		}
+		return errJSONObject
+	}
+	i = skipJSONSpace(raw, i+1)
+	if i < len(raw) && raw[i] == '}' {
+		if skipJSONSpace(raw, i+1) != len(raw) {
+			return errJSONSyntax
+		}
+		return nil
+	}
+	for {
+		if i >= len(raw) || raw[i] != '"' {
+			return errJSONSyntax
+		}
+		keyEnd := jsonStringEnd(raw, i)
+		if validateMembers && !json.Valid(raw[i:keyEnd]) {
+			return errJSONSyntax
+		}
+		colon := skipJSONSpace(raw, keyEnd)
+		if colon == len(raw) || raw[colon] != ':' {
+			return errJSONSyntax
+		}
+		valueStart := skipJSONSpace(raw, colon+1)
+		valueEnd := jsonValueEnd(raw, valueStart)
+		if validateMembers && !json.Valid(raw[valueStart:valueEnd]) {
+			return errJSONSyntax
+		}
+		if visit != nil {
+			if err := visit(raw[i:keyEnd], raw[valueStart:valueEnd]); err != nil {
+				return err
+			}
+		}
+		i = skipJSONSpace(raw, valueEnd)
+		if i == len(raw) {
+			return errJSONSyntax
+		}
+		switch raw[i] {
+		case '}':
+			if skipJSONSpace(raw, i+1) != len(raw) {
+				return errJSONSyntax
+			}
+			return nil
+		case ',':
+			i = skipJSONSpace(raw, i+1)
+		default:
+			return errJSONSyntax
+		}
+	}
+}
+
+// The boundary helpers locate candidate tokens, not validate them. They are
+// bounds-safe even for truncated/malformed input: jsonStringEnd requires an
+// opening quote at start, and jsonValueEnd accepts start == len(raw). Unterminated
+// candidates end at len(raw); encoding/json rejects their grammar in the first
+// pass. Nesting uses only a counter here; encoding/json checks delimiter pairing
+// and its unchanged nesting limit for each token in the owning profile.
 func skipJSONSpace(raw []byte, i int) int {
 	for i < len(raw) && (raw[i] == ' ' || raw[i] == '\t' || raw[i] == '\r' || raw[i] == '\n') {
 		i++

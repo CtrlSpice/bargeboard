@@ -206,22 +206,48 @@ The first approved implementation sequence is:
 
 #### U1 Lossless Control Seams
 
-U1 implements `decodeLosslessJSONString` and `visitRawJSONObject` in
+U1 implements `decodeLosslessJSONString`, `visitRawJSONObject`, and
+`visitRawJSONObjectMembers` in
 `receiver/f1livetimingreceiver/json_tokens.go`. The string decoder checks raw
 UTF-8, JSON grammar, quoted-string shape, and surrogate pairing before decoding
 once. Its errors distinguish these layers without including source content.
 Intentional U+FFFD, valid pairs, and literal backslash-u text are accepted;
 field grammars still apply.
 
-The raw-member visitor validates the complete object's UTF-8 and JSON syntax
-before calling its visitor with each original quoted key token and raw value in
-source order. The views are read-only; callers copy bytes they retain. A linear,
-nonrecursive boundary walk locates already syntax-validated tokens without
-building an AST, decoding nested strings, or collecting members. Existing shell
-byte limits and `encoding/json`'s nesting limit bound processing. The visitor
-keeps no key set and imposes no universal scalar or duplicate policy. In
-particular, `Decoder.Token` followed by validation would be too late: it already
-repairs the key. SessionInfo will reuse the raw seam under its own policy in U2.
+Both raw-member visitor profiles validate the complete object's UTF-8 and JSON
+syntax before any caller callback receives original quoted key tokens and raw
+values in source order. The views are read-only; callers copy bytes they retain.
+The profiles preserve the owning decoder's pre-U1 nesting budget:
+
+- `visitRawJSONObject` uses whole-object `json.Valid`, including the outer object
+  in Go's 10,000-depth budget. Negotiation and handshake retain this profile and
+  their existing byte caps; in particular, the handshake's 16 KiB cap is tighter
+  than the bytes needed to reach the JSON nesting limit.
+- `visitRawJSONObjectMembers` gives each member value the full 10,000-depth
+  budget, matching hub and snapshot parsing's former outer `Token` followed by
+  per-value `Decode`. Its first pass checks outer braces, quoted-key shape,
+  colons, commas, ASCII JSON whitespace, and complete input consumption, then
+  uses `json.Valid` on every original key/value token. A second pass invokes
+  callbacks only after the entire first pass succeeds. Malformed suffixes or
+  over-depth later values cannot deliver earlier members to the caller.
+
+A shared bounds-checked, nonrecursive walk locates candidate token boundaries,
+including truncated/malformed input during member validation. `encoding/json`
+still validates token grammar, nested delimiter pairing, and the unchanged
+nesting limit. Neither profile builds an AST, decodes nested strings, collects
+members, nor raises Go's global limit. Work is linear in the shell-bounded input;
+walk storage is constant beyond the bounded JSON syntax stack. Charging the hub
+outer object against each value's budget would incorrectly reject existing valid
+input: feed payload depth 9,999 and snapshot payload depth 9,999 already use the
+full 10,000 through their enclosing `arguments` array or `result` object. A direct
+hub extension can use depth 10,000. The standalone snapshot visitor also accepts
+member depth 10,000, while the enclosing hub result imposes the tighter end-to-end
+snapshot bound.
+
+The visitors keep no key set and impose no universal scalar or duplicate policy.
+In particular, `Decoder.Token` followed by validation would be too late: it
+already repairs the key. SessionInfo will reuse the raw seam under its own policy
+in U2.
 
 Negotiation keys, capability-object keys, handshake keys, hub-envelope keys, and
 snapshot manifest keys are validated before matching or map insertion. Every
@@ -263,8 +289,13 @@ Focused synthetic tests cover the scalar ranges and boundaries, repair-key
 collisions, owning duplicate/null/casing policies, all control assignments,
 unchanged payload bytes and retained-copy ownership, error-description decisions,
 visitor storage/nesting bounds, URL/upgrade prevention, and ordered/atomic batch
-results. Existing framing, decompression, size, and receiver-stop tests remain
-required alongside them. These fixtures are boundary probes, not live F1 samples.
+results. Depth regressions verify each profile's exact accepted limit and
+limit-plus-one, the pre-U1 Token/Decode budget, and A/deep-valid-B/C continuation.
+Adversarial outer-grammar, truncation, byte-mutation, and shallow fuzz cases compare
+both profiles with `encoding/json` and the pre-U1 decoding pattern, including
+original views, input preservation, and zero callbacks on malformed input.
+Existing framing, decompression, size, and receiver-stop tests remain required
+alongside them. These fixtures are boundary probes, not live F1 samples.
 
 Field/entry/topic integration for unimplemented reducers follows in their own
 slices. Broader reconnect/resubscription after protocol corruption, same-connection

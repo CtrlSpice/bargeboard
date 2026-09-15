@@ -177,7 +177,7 @@ func decodeHubMessage(record []byte) (hubMessage, error) {
 	}
 	var message hubMessage
 	seen := make(map[string]struct{})
-	err := visitRawJSONObject(record, func(key, raw json.RawMessage) error {
+	err := visitRawJSONObjectMembers(record, func(key, raw json.RawMessage) error {
 		field, err := decodeLosslessJSONString(key)
 		if err != nil {
 			return invalidLiveTimingData("decode SignalR hub message key")
@@ -318,7 +318,7 @@ func decodeSubscriptionSnapshot(
 
 	topics := make([]string, 0)
 	payloads := make(map[string]json.RawMessage)
-	err := visitRawJSONObject(result, func(key, payload json.RawMessage) error {
+	err := visitRawJSONObjectMembers(result, func(key, payload json.RawMessage) error {
 		topic, err := decodeLosslessJSONString(key)
 		if err != nil || topic == "" {
 			return invalidLiveTimingData("decode F1 subscription snapshot manifest")
