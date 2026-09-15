@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -37,16 +38,89 @@ func (negotiation) GoString() string {
 }
 
 type negotiateResponse struct {
-	ConnectionID        string `json:"connectionId"`
-	ConnectionToken     string `json:"connectionToken"`
-	NegotiateVersion    int    `json:"negotiateVersion"`
-	URL                 string `json:"url"`
-	AccessToken         string `json:"accessToken"`
-	Error               string `json:"error"`
-	AvailableTransports []struct {
-		Transport       string   `json:"transport"`
-		TransferFormats []string `json:"transferFormats"`
-	} `json:"availableTransports"`
+	ConnectionID        jsonControlString
+	ConnectionToken     jsonControlString
+	NegotiateVersion    int
+	URL                 jsonControlString
+	AccessToken         jsonControlString
+	ErrorNonempty       bool
+	AvailableTransports []negotiateTransport
+}
+
+type negotiateTransport struct {
+	Transport       jsonControlString
+	TransferFormats []jsonControlString
+}
+
+// Keep the prior struct decoder's case-insensitive matching, ordered repeated
+// assignments, scalar-null no-ops, and slice-element reuse. Each assignment sees
+// the raw string first, even if a later duplicate overwrites it. Unknown values
+// are skipped rather than decoded; all keys at these control levels are strict.
+func (transport *negotiateTransport) UnmarshalJSON(raw []byte) error {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil
+	}
+	return visitRawJSONObject(raw, func(key, value json.RawMessage) error {
+		field, err := decodeLosslessJSONString(key)
+		if err != nil {
+			return err
+		}
+		switch {
+		case strings.EqualFold(field, "transport"):
+			return json.Unmarshal(value, &transport.Transport)
+		case strings.EqualFold(field, "transferFormats"):
+			return json.Unmarshal(value, &transport.TransferFormats)
+		default:
+			return nil
+		}
+	})
+}
+
+func decodeNegotiateResponse(raw []byte) (negotiateResponse, error) {
+	var response negotiateResponse
+	// A top-level null previously decoded as the zero response, then failed the
+	// missing-token check. Preserve that policy as well as member-null behavior.
+	if bytes.Equal(bytes.Trim(raw, " \t\r\n"), []byte("null")) {
+		return response, nil
+	}
+	err := visitRawJSONObject(raw, func(key, value json.RawMessage) error {
+		field, err := decodeLosslessJSONString(key)
+		if err != nil {
+			return err
+		}
+		var destination any
+		switch {
+		case strings.EqualFold(field, "connectionId"):
+			destination = &response.ConnectionID
+		case strings.EqualFold(field, "connectionToken"):
+			destination = &response.ConnectionToken
+		case strings.EqualFold(field, "negotiateVersion"):
+			destination = &response.NegotiateVersion
+		case strings.EqualFold(field, "url"):
+			destination = &response.URL
+		case strings.EqualFold(field, "accessToken"):
+			destination = &response.AccessToken
+		case strings.EqualFold(field, "availableTransports"):
+			destination = &response.AvailableTransports
+		case strings.EqualFold(field, "error"):
+			if bytes.Equal(value, []byte("null")) {
+				return nil
+			}
+			isString, empty := jsonStringShape(value)
+			if !isString {
+				return errJSONString
+			}
+			response.ErrorNonempty = !empty
+			return nil
+		default:
+			return nil
+		}
+		return json.Unmarshal(value, destination)
+	})
+	if err != nil {
+		return negotiateResponse{}, err
+	}
+	return response, nil
 }
 
 // signalRSocket is the message-level I/O boundary. Tests use channel-backed I/O
@@ -341,11 +415,11 @@ func parseNegotiateResponse(contents []byte) (negotiation, error) {
 	if !utf8.Valid(contents) {
 		return negotiation{}, invalidLiveTimingData("SignalR negotiation response is not UTF-8")
 	}
-	var response negotiateResponse
-	if err := json.Unmarshal(contents, &response); err != nil {
+	response, err := decodeNegotiateResponse(contents)
+	if err != nil {
 		return negotiation{}, invalidLiveTimingData("decode SignalR negotiation response")
 	}
-	if response.Error != "" {
+	if response.ErrorNonempty {
 		return negotiation{}, invalidLiveTimingData("SignalR negotiation rejected the connection")
 	}
 	if response.URL != "" || response.AccessToken != "" {
@@ -374,7 +448,7 @@ func parseNegotiateResponse(contents []byte) (negotiation, error) {
 		}
 		for _, format := range transport.TransferFormats {
 			if format == "Text" {
-				return negotiation{connectionToken: connectionToken}, nil
+				return negotiation{connectionToken: string(connectionToken)}, nil
 			}
 		}
 	}
@@ -508,19 +582,32 @@ func parseHandshakeResponse(record []byte) error {
 	if !utf8.Valid(record) {
 		return invalidLiveTimingData("SignalR handshake response is not UTF-8")
 	}
-	var response map[string]json.RawMessage
-	if err := json.Unmarshal(record, &response); err != nil || response == nil {
+	var hasType bool
+	var encodedError json.RawMessage
+	err := visitRawJSONObject(record, func(key, value json.RawMessage) error {
+		field, err := decodeLosslessJSONString(key)
+		if err != nil {
+			return err
+		}
+		switch field {
+		case "type":
+			hasType = true
+		case "error":
+			encodedError = value // Preserve the map decoder's last-value policy.
+		}
+		return nil
+	})
+	if err != nil {
 		return invalidLiveTimingData("decode SignalR handshake response")
 	}
-	if _, ok := response["type"]; ok {
+	if hasType {
 		return invalidLiveTimingData("expected a SignalR handshake response")
 	}
-	encodedError, ok := response["error"]
-	if !ok {
+	if encodedError == nil {
 		return nil
 	}
-	var message string
-	if err := json.Unmarshal(encodedError, &message); err != nil || message == "" {
+	isString, empty := jsonStringShape(encodedError)
+	if !isString || empty {
 		return invalidLiveTimingData("decode SignalR handshake error")
 	}
 	return invalidLiveTimingData("SignalR handshake rejected the connection")
