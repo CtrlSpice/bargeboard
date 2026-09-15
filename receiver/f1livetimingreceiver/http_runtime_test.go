@@ -42,11 +42,6 @@ func TestHTTPSetupResponseBoundary(t *testing.T) {
 						t.Error("redirect attempted")
 						return http.ErrUseLastResponse
 					}
-					// Production preflight and negotiate use the receiver's non-following
-					// client policy; upgrade rejects before http.Client's redirect hook.
-					if stage != stageUpgrade {
-						client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-					}
 					now := time.Now()
 					connection, err := connectSignalR(t.Context(), client, connectionTestConfig(t, "http://synthetic.test/private-route"))
 					want := setupHTTPError{stage: stage, status: status}
@@ -232,36 +227,82 @@ func TestHTTPUpgradeTransportNetworkFailure(t *testing.T) {
 	}
 }
 
-func TestHTTPUpgradeTransportEmptyResponses(t *testing.T) {
-	for _, test := range []struct {
-		name     string
-		response *http.Response
-		wantHTTP bool
-	}{
-		{name: "nil response remains a client error"},
-		{name: "rejected response without body", response: &http.Response{StatusCode: http.StatusServiceUnavailable}, wantHTTP: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			client := livenessWebSocketClient(t, func(*websocket.Conn) { t.Error("unexpected upgrade") })
-			base := client.Transport
-			client.Transport = roundTripperFunc(func(request *http.Request) (*http.Response, error) {
-				if request.Method != http.MethodGet {
-					return base.RoundTrip(request)
+func TestHTTPSetupTransportEmptyResponses(t *testing.T) {
+	for _, stage := range []setupStage{stagePreflight, stageNegotiate, stageUpgrade} {
+		for _, test := range []struct {
+			name     string
+			response *http.Response
+			wantHTTP bool
+		}{
+			{name: "nil response remains a client error"},
+			{name: "rejected response without body", response: &http.Response{StatusCode: http.StatusServiceUnavailable}, wantHTTP: true},
+		} {
+			t.Run(stage.String()+"/"+test.name, func(t *testing.T) {
+				client := livenessWebSocketClient(t, func(*websocket.Conn) { t.Error("unexpected upgrade") })
+				base := client.Transport
+				client.Transport = roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+					method := map[setupStage]string{stagePreflight: http.MethodOptions, stageNegotiate: http.MethodPost, stageUpgrade: http.MethodGet}[stage]
+					if request.Method != method {
+						return base.RoundTrip(request)
+					}
+					return test.response, nil
+				})
+				connection, err := connectSignalR(t.Context(), client, connectionTestConfig(t, "http://synthetic.test/private-route"))
+				if connection != nil || err == nil || errors.Is(err, errInvalidLiveTimingData) || errors.Unwrap(err) != nil {
+					t.Fatalf("connection=%v error=%v", connection, err)
 				}
-				return test.response, nil
+				if test.wantHTTP {
+					failure := asSetupHTTPError(err)
+					if failure == nil || *failure != (setupHTTPError{stage: stage, status: http.StatusServiceUnavailable}) {
+						t.Fatalf("HTTP failure=%#v", failure)
+					}
+				} else {
+					operation := stage.String()
+					if stage != stageUpgrade {
+						operation = "perform " + operation
+					}
+					if asSetupHTTPError(err) != nil || err.Error() != operation+" failed" {
+						t.Fatalf("client error=%v", err)
+					}
+				}
 			})
-			connection, err := connectSignalR(t.Context(), client, connectionTestConfig(t, "http://synthetic.test/private-route"))
-			if connection != nil || err == nil || errors.Is(err, errInvalidLiveTimingData) || errors.Unwrap(err) != nil {
-				t.Fatalf("connection=%v error=%v", connection, err)
-			}
-			if test.wantHTTP {
-				failure := asSetupHTTPError(err)
-				if failure == nil || *failure != (setupHTTPError{stage: stageUpgrade, status: http.StatusServiceUnavailable}) {
-					t.Fatalf("HTTP failure=%#v", failure)
+		}
+	}
+}
+
+func TestHTTPSetupClientTimeoutAtHeaders(t *testing.T) {
+	for _, stage := range []setupStage{stagePreflight, stageNegotiate, stageUpgrade} {
+		t.Run(stage.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				client := livenessWebSocketClient(t, func(*websocket.Conn) { t.Error("unexpected upgrade") })
+				client.Timeout = time.Second
+				base := client.Transport
+				calls := 0
+				body := &preflightTestBody{}
+				client.Transport = roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+					calls++
+					if calls != int(stage) {
+						return base.RoundTrip(request)
+					}
+					<-request.Context().Done()
+					return &http.Response{StatusCode: 302, Header: http.Header{"Location": {"%"}, "Set-Cookie": {"AWSALBCORS=synthetic-affinity"}}, Body: body}, nil
+				})
+				started := time.Now()
+				connection, err := connectSignalR(t.Context(), client, connectionTestConfig(t, "http://synthetic.test"))
+				operation := stage.String()
+				if stage != stageUpgrade {
+					operation = "perform " + operation
 				}
-			} else if asSetupHTTPError(err) != nil || err.Error() != "SignalR WebSocket upgrade failed" {
-				t.Fatalf("client error=%v", err)
-			}
+				if connection != nil || !errors.Is(err, context.DeadlineExceeded) || errors.Unwrap(err) != context.DeadlineExceeded || err.Error() != operation+": context deadline exceeded" || asSetupHTTPError(err) != nil {
+					t.Fatalf("client timeout=%v", err)
+				}
+				if time.Since(started) != time.Second || t.Context().Err() != nil || calls != int(stage) || *body != (preflightTestBody{closes: 1}) || client.Timeout != time.Second {
+					t.Fatal("client timeout or body ownership changed")
+				}
+				if _, ok := client.Transport.(roundTripperFunc); !ok {
+					t.Fatal("original client transport replaced")
+				}
+			})
 		})
 	}
 }

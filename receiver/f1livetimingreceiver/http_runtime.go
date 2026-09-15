@@ -6,13 +6,15 @@ import (
 	"time"
 )
 
-// coder/websocket v1.8.15 otherwise reads rejected bodies for diagnostics before
-// closing them. Intercept non-101 responses before Dial can read irrelevant data
-// or http.Client can follow a redirect. Successful upgrades retain the original
-// writable body and the codec's handshake validation/cleanup ownership.
-type upgradeHTTPTransport struct{ base http.RoundTripper }
+// Classify before http.Client parses Location (which precedes CheckRedirect) or
+// coder/websocket v1.8.15 reads rejected bodies for diagnostics. Accepted bodies
+// retain their existing setup/codec ownership, including writable 101 transports.
+type setupHTTPTransport struct {
+	base  http.RoundTripper
+	stage setupStage
+}
 
-func (t upgradeHTTPTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+func (t setupHTTPTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	response, err := t.base.RoundTrip(request)
 	if err != nil || response == nil {
 		return response, err
@@ -24,8 +26,22 @@ func (t upgradeHTTPTransport) RoundTrip(request *http.Request) (*http.Response, 
 		}
 		return nil, err
 	}
-	if response.StatusCode != http.StatusSwitchingProtocols {
-		err := setupHTTPFailure(stageUpgrade, response.StatusCode, response.Header.Get("Retry-After"), now)
+	if t.stage == stagePreflight {
+		if _, err := credentialsFromPreflight("", response.StatusCode, response.Cookies()); err == nil {
+			if response.StatusCode >= 300 && response.StatusCode < 400 {
+				// Cookie acceptance is authoritative. Location has no authority to
+				// redirect or invalidate it; hide it only from http.Client, retaining
+				// the original status, cookies, body, and caller-owned headers.
+				clone := *response
+				clone.Header = response.Header.Clone()
+				clone.Header.Del("Location")
+				return &clone, nil
+			}
+			return response, nil
+		}
+	}
+	if classifySetupHTTP(t.stage, response.StatusCode) != httpAccept {
+		err := setupHTTPFailure(t.stage, response.StatusCode, response.Header.Get("Retry-After"), now)
 		if response.Body != nil {
 			_ = response.Body.Close()
 		}
@@ -34,13 +50,13 @@ func (t upgradeHTTPTransport) RoundTrip(request *http.Request) (*http.Response, 
 	return response, nil
 }
 
-func upgradeHTTPClient(client *http.Client) *http.Client {
+func setupHTTPClient(client *http.Client, stage setupStage) *http.Client {
 	clone := *client
 	transport := clone.Transport
 	if transport == nil {
 		transport = http.DefaultTransport
 	}
-	clone.Transport = upgradeHTTPTransport{base: transport}
+	clone.Transport = setupHTTPTransport{base: transport, stage: stage}
 	return &clone
 }
 

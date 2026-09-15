@@ -63,8 +63,14 @@ func bootstrapConnection(ctx context.Context, client *http.Client, cfg *Config) 
 		return connectionCredentials{}, fmt.Errorf("create negotiation preflight: %w", err)
 	}
 
-	response, err := client.Do(request)
+	response, err := setupHTTPClient(client, stagePreflight).Do(request)
 	if err != nil {
+		if callerErr := setupContextError(ctx, time.Now()); callerErr != nil {
+			return connectionCredentials{}, sanitizedTransportError(ctx, "perform negotiation preflight", callerErr)
+		}
+		if failure := asSetupHTTPError(err); failure != nil {
+			return connectionCredentials{}, failure // Discard http.Client's URL-bearing wrapper.
+		}
 		return connectionCredentials{}, sanitizedTransportError(ctx, "perform negotiation preflight", err)
 	}
 	defer response.Body.Close()
@@ -73,11 +79,7 @@ func bootstrapConnection(ctx context.Context, client *http.Client, cfg *Config) 
 		return connectionCredentials{}, sanitizedTransportError(ctx, "perform negotiation preflight", err)
 	}
 
-	credentials, err := credentialsFromPreflight(token, response.StatusCode, response.Cookies())
-	if failure := asSetupHTTPError(err); failure != nil {
-		err = setupHTTPFailure(failure.stage, failure.status, response.Header.Get("Retry-After"), now)
-	}
-	return credentials, err
+	return credentialsFromPreflight(token, response.StatusCode, response.Cookies())
 }
 
 func readTokenFile(path string) (string, error) {

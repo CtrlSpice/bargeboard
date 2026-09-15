@@ -224,74 +224,95 @@ func TestHTTPOperationalTerminalSetup(t *testing.T) {
 			if stage == stageUpgrade && status == 404 {
 				continue
 			}
-			t.Run(fmt.Sprintf("%s/%d", stage, status), func(t *testing.T) {
-				synctest.Test(t, func(t *testing.T) {
-					host := &statusHost{events: make(chan *componentstatus.Event, 8)}
-					r, socket, logs := operationalTestRun(t, host)
-					origin := time.Now()
-					r.config = connectionTestConfig(t, "http://synthetic.test/private-route")
-					client := livenessWebSocketClient(t, func(*websocket.Conn) { t.Error("unexpected upgrade") })
-					base := client.Transport
-					calls := 0
-					body := &preflightTestBody{}
-					client.Transport = roundTripperFunc(func(request *http.Request) (*http.Response, error) {
-						calls++
-						if calls != int(stage) {
-							return base.RoundTrip(request)
+			locations := []string{""}
+			if status == 302 {
+				locations = append(locations, "%", "http://[::1", "https://private.test/redirect")
+			}
+			for _, location := range locations {
+				t.Run(fmt.Sprintf("%s/%d/%q", stage, status, location), func(t *testing.T) {
+					synctest.Test(t, func(t *testing.T) {
+						host := &statusHost{events: make(chan *componentstatus.Event, 8)}
+						r, socket, logs := operationalTestRun(t, host)
+						origin := time.Now()
+						r.config = connectionTestConfig(t, "http://synthetic.test/private-route")
+						client := livenessWebSocketClient(t, func(*websocket.Conn) { t.Error("unexpected upgrade") })
+						base := client.Transport
+						calls := 0
+						redirects := 0
+						client.CheckRedirect = func(*http.Request, []*http.Request) error {
+							redirects++
+							return http.ErrUseLastResponse
 						}
-						return &http.Response{StatusCode: status, Header: http.Header{"Retry-After": {"999999"}}, Body: body}, nil
+						body := &preflightTestBody{}
+						client.Transport = roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+							calls++
+							if calls != int(stage) {
+								return base.RoundTrip(request)
+							}
+							header := http.Header{"Retry-After": {"999999"}}
+							if location != "" {
+								header.Set("Location", location)
+							}
+							return &http.Response{StatusCode: status, Header: header, Body: body}, nil
+						})
+						r.client = client
+						socket.reads <- livenessRead{contents: `{"type":3,"invocationId":"0","result":{}}` + "\x1e" + incrementalFeedA}
+						synctest.Wait()
+						requireAwaitingInput(t, host)
+						requireHTTPStatus(t, host, componentstatus.StatusOK, nil)
+						socket.reads <- livenessRead{err: errors.New("private-transport")}
+						time.Sleep(time.Second)
+						synctest.Wait()
+						select {
+						case <-r.done:
+						default:
+							t.Fatal("terminal HTTP response did not stop the run after its first reconnect")
+						}
+						requireHTTPStatus(t, host, componentstatus.StatusRecoverableError, errInputOutage)
+						event := <-host.events
+						guidance := ""
+						if status == 401 || status == 403 {
+							guidance = " Check the F1 TV token and access."
+						}
+						message := fmt.Sprintf("Live Timing input stopped: %s returned HTTP %d; Collector can still run.%s Press Ctrl-C to stop the Collector.", stage, status, guidance)
+						failure := asSetupHTTPError(event.Err())
+						if event.Status() != componentstatus.StatusPermanentError || failure == nil || *failure != (setupHTTPError{stage: stage, status: status}) || event.Err().Error() != message || errors.Is(event.Err(), errInvalidLiveTimingData) {
+							t.Fatalf("terminal=%v / %v", event.Status(), event.Err())
+						}
+						want := operationalState{started: origin, lastUpdate: origin, ready: true, outage: true, outageStarted: origin, outages: 1, attempts: 1, updates: 1, stopped: true, summarized: true}
+						if got := *r.operational.state.Load(); got != want {
+							t.Fatalf("terminal state=%+v, want %+v", got, want)
+						}
+						fields := httpProgressFields(1, 1, 1, 0, 1)
+						fields["setup_stage"], fields["http_status"] = stage.String(), int64(status)
+						entries := logs.FilterMessage(message).All()
+						if len(entries) != 1 || entries[0].Level != zap.ErrorLevel || !reflect.DeepEqual(entries[0].ContextMap(), fields) {
+							t.Fatalf("terminal log=%+v, want %+v", entries, fields)
+						}
+						delete(fields, "setup_stage")
+						delete(fields, "http_status")
+						fields["outages"], fields["recoveries"], fields["consumer_failures"], fields["unresolved_outage"] = int64(1), int64(0), int64(0), true
+						summary := logs.FilterMessageSnippet("interruption summary").All()
+						if len(summary) != 1 || !reflect.DeepEqual(summary[0].ContextMap(), fields) {
+							t.Fatalf("summary=%+v", summary)
+						}
+						time.Sleep(59 * time.Second)
+						synctest.Wait()
+						if calls != int(stage) || redirects != 0 || *body != (preflightTestBody{closes: 1}) || *r.operational.state.Load() != want || len(host.events) != 0 {
+							t.Fatal("terminal setup retried or changed status/state")
+						}
+						stopped := logs.FilterMessageSnippet("Live Timing input stopped;").All()
+						if len(stopped) != 2 {
+							t.Fatalf("stopped notices=%+v", stopped)
+						}
+						for i, entry := range stopped {
+							if want := httpProgressFields(1, float64((i+1)*30), float64((i+1)*30), 0, 1); !reflect.DeepEqual(entry.ContextMap(), want) {
+								t.Fatalf("stopped fields=%+v, want %+v", entry.ContextMap(), want)
+							}
+						}
 					})
-					r.client = client
-					socket.reads <- livenessRead{contents: `{"type":3,"invocationId":"0","result":{}}` + "\x1e" + incrementalFeedA}
-					synctest.Wait()
-					requireAwaitingInput(t, host)
-					requireHTTPStatus(t, host, componentstatus.StatusOK, nil)
-					socket.reads <- livenessRead{err: errors.New("private-transport")}
-					<-r.done
-					requireHTTPStatus(t, host, componentstatus.StatusRecoverableError, errInputOutage)
-					event := <-host.events
-					guidance := ""
-					if status == 401 || status == 403 {
-						guidance = " Check the F1 TV token and access."
-					}
-					message := fmt.Sprintf("Live Timing input stopped: %s returned HTTP %d; Collector can still run.%s Press Ctrl-C to stop the Collector.", stage, status, guidance)
-					failure := asSetupHTTPError(event.Err())
-					if event.Status() != componentstatus.StatusPermanentError || failure == nil || *failure != (setupHTTPError{stage: stage, status: status}) || event.Err().Error() != message || errors.Is(event.Err(), errInvalidLiveTimingData) {
-						t.Fatalf("terminal=%v / %v", event.Status(), event.Err())
-					}
-					want := operationalState{started: origin, lastUpdate: origin, ready: true, outage: true, outageStarted: origin, outages: 1, attempts: 1, updates: 1, stopped: true, summarized: true}
-					if got := *r.operational.state.Load(); got != want {
-						t.Fatalf("terminal state=%+v, want %+v", got, want)
-					}
-					fields := httpProgressFields(1, 1, 1, 0, 1)
-					fields["setup_stage"], fields["http_status"] = stage.String(), int64(status)
-					entries := logs.FilterMessage(message).All()
-					if len(entries) != 1 || entries[0].Level != zap.ErrorLevel || !reflect.DeepEqual(entries[0].ContextMap(), fields) {
-						t.Fatalf("terminal log=%+v, want %+v", entries, fields)
-					}
-					delete(fields, "setup_stage")
-					delete(fields, "http_status")
-					fields["outages"], fields["recoveries"], fields["consumer_failures"], fields["unresolved_outage"] = int64(1), int64(0), int64(0), true
-					summary := logs.FilterMessageSnippet("interruption summary").All()
-					if len(summary) != 1 || !reflect.DeepEqual(summary[0].ContextMap(), fields) {
-						t.Fatalf("summary=%+v", summary)
-					}
-					time.Sleep(59 * time.Second)
-					synctest.Wait()
-					if calls != int(stage) || *body != (preflightTestBody{closes: 1}) || *r.operational.state.Load() != want || len(host.events) != 0 {
-						t.Fatal("terminal setup retried or changed status/state")
-					}
-					stopped := logs.FilterMessageSnippet("Live Timing input stopped;").All()
-					if len(stopped) != 2 {
-						t.Fatalf("stopped notices=%+v", stopped)
-					}
-					for i, entry := range stopped {
-						if want := httpProgressFields(1, float64((i+1)*30), float64((i+1)*30), 0, 1); !reflect.DeepEqual(entry.ContextMap(), want) {
-							t.Fatalf("stopped fields=%+v, want %+v", entry.ContextMap(), want)
-						}
-					}
 				})
-			})
+			}
 		}
 	}
 }

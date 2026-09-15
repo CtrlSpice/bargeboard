@@ -91,9 +91,10 @@ No Go OpenF1 receiver exists yet.
 
 **Status: GREEN**
 
-`bootstrapConnection` in `receiver/f1livetimingreceiver/bootstrap.go` owns the
-negotiation OPTIONS response and MUST close its body without reading or draining
-it. Only the response headers and status enter the pure
+The setup transport adapter closes rejected negotiation OPTIONS responses;
+`bootstrapConnection` in `receiver/f1livetimingreceiver/bootstrap.go` owns accepted
+responses. Both MUST close the body without reading or draining it. Only the
+response headers and status enter the pure
 `credentialsFromPreflight` decision. A non-empty `AWSALBCORS` cookie remains
 sufficient even on HTTP 405. Without it, a 2xx response remains a permanent
 invalid-server-data failure; other statuses follow the HTTP setup table below.
@@ -148,15 +149,37 @@ reading their irrelevant bodies, then closed without draining. Successful
 negotiation JSON MUST remain bounded to 64 KiB and validated. A 101 with a codec or
 WebSocket handshake validation failure remains a protocol failure, not an ordinary
 HTTP status failure.
+`http_runtime.go` MUST apply the stage-specific classification at the RoundTripper
+boundary for preflight, negotiation, and upgrade, before returning to
+`http.Client`. Go's HTTP client parses `Location` before calling `CheckRedirect`;
+an invalid redirect target otherwise hides the status and cookies behind a
+URL-parsing error. Relying on `CheckRedirect` alone is rejected because it can turn
+a terminal HTTP response into a transient network failure, or prevent an
+authoritative preflight cookie from being accepted.
+
+The adapter MUST close rejected responses unread and return typed stage/status
+and retry-deadline metadata. The existing `credentialsFromPreflight` decision
+remains authoritative before preflight status classification. For accepted
+cookie-bearing preflight 3xx responses, the adapter MUST return a response copy
+with a cloned header map that omits the irrelevant `Location` field. It MUST
+preserve the original status, cookies, body ownership, and every other response
+field; neither original response nor original headers may be mutated. Preflight
+acceptance MUST proceed to the configured negotiation endpoint, without parsing
+or following Location or invoking the redirect callback. Malformed, valid, and
+absent Location values therefore have identical policy outcomes. Replacing the
+status with 200 is rejected because that would rewrite source authority.
+
 Pinned `coder/websocket` v1.8.15 normally reads up to 1024 error-body bytes with a
-three-second cleanup timer. `http_runtime.go` MUST intercept non-101 responses at
-its RoundTripper boundary before that diagnostic read or HTTP redirect handling,
-capture their classification/deadline, close their bodies, and return a typed
-error. Dial's URL-bearing wrappers MUST be discarded using typed extraction.
+three-second cleanup timer. The same early adapter intercepts non-101 upgrade
+responses before that diagnostic read. Preflight, negotiation, and Dial errors
+MUST discard HTTP client's and Dial's URL-bearing wrappers using typed extraction.
 Successful 101 bodies retain their writable transport and the codec's validation
 and cleanup ownership. Canonical caller cancellation or an elapsed deadline takes
-precedence at header observation and on return from failed Dial; custom context
-causes MUST NOT escape. This adapter owns no new goroutine or retry lifecycle.
+precedence at header observation and on return from failed setup requests; custom
+context causes MUST NOT escape. Client copies retain timeout and other client
+settings, use the default transport when none is supplied, and preserve the
+existing nil-response/body guards. This adapter owns no new goroutine or retry
+lifecycle.
 
 Only retryable HTTP errors may supply a `Retry-After` floor. The pure parser in
 `http_policy.go` MUST accept nonnegative ASCII delta-seconds and the HTTP-date
@@ -189,6 +212,16 @@ periodic output, complete SDK metrics without new attributes, terminal 401/403
 stage/status and intervention guidance, no further terminal retries, initial
 Start failure cleanup without retries, cancellation during large waits or stalled
 notices, and cleanup/logging time spent before and past the original deadline.
+Redirect regressions MUST exercise OPTIONS and POST responses with malformed
+`Location` values (`%` and `http://[::1`), valid targets, and missing targets.
+Without an affinity cookie, 302 MUST yield the bare typed terminal stage/status,
+zero body reads, one close, and no redirect callback. Cookie-bearing OPTIONS MUST
+retain its original 3xx status and cookies and reach the original configured POST
+target, without mutating the supplied response or headers. Runtime regressions
+MUST verify complete terminal state, PermanentError metadata, summary fields,
+exact attempt counts, and no further retries. Header-observation cancellation and
+client timeouts MUST retain canonical context errors and body cleanup at all
+stages, independently of malformed Location or cookie acceptance.
 
 In `receiver/f1livetimingreceiver/connection.go`, SignalR handshake reads and
 writes and subscription writes MUST pass transport failures through

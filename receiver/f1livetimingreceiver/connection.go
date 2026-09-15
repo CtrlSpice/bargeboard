@@ -112,7 +112,7 @@ func connectSignalR(ctx context.Context, client *http.Client, cfg *Config) (*sig
 	}
 
 	connection, response, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{
-		HTTPClient: upgradeHTTPClient(client),
+		HTTPClient: setupHTTPClient(client, stageUpgrade),
 		HTTPHeader: credentials.headersWithCookies(upgradeCookies),
 	})
 	if err != nil {
@@ -281,17 +281,20 @@ func negotiate(
 	request.Header = credentials.headersWithCookies(cookies)
 	request.Header.Set("Content-Type", "application/json")
 
-	response, err := client.Do(request)
+	response, err := setupHTTPClient(client, stageNegotiate).Do(request)
 	if err != nil {
+		if callerErr := setupContextError(ctx, time.Now()); callerErr != nil {
+			return negotiation{}, nil, sanitizedTransportError(ctx, "perform SignalR negotiation", callerErr)
+		}
+		if failure := asSetupHTTPError(err); failure != nil {
+			return negotiation{}, nil, failure // Discard http.Client's URL-bearing wrapper.
+		}
 		return negotiation{}, nil, sanitizedTransportError(ctx, "perform SignalR negotiation", err)
 	}
 	defer response.Body.Close()
 	now := time.Now()
 	if err := setupContextError(ctx, now); err != nil {
 		return negotiation{}, nil, sanitizedTransportError(ctx, "perform SignalR negotiation", err)
-	}
-	if classifySetupHTTP(stageNegotiate, response.StatusCode) != httpAccept {
-		return negotiation{}, nil, setupHTTPFailure(stageNegotiate, response.StatusCode, response.Header.Get("Retry-After"), now)
 	}
 
 	contents, err := io.ReadAll(io.LimitReader(response.Body, maxNegotiateResponseSize+1))
