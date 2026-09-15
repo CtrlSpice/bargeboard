@@ -163,8 +163,10 @@ Only retryable HTTP errors may supply a `Retry-After` floor. The pure parser in
 formats accepted by `http.ParseTime`, with surrounding HTTP space/tab OWS.
 Zero and past dates impose no extra delay. Malformed values, negative values, and
 durations that cannot be represented by `time.Duration` fall back to backoff;
-overflow MUST NOT wrap or saturate into an accepted delay. There is no additional
-business cap on a valid server hint. The parser takes an explicit observation
+overflow MUST NOT wrap or saturate into an accepted delay. Deadline conversion
+MUST also reject a `time.Add` overflow that would discard an available monotonic
+reading, rather than silently using wall-clock scheduling. There is no additional
+business cap on a representable server hint. The parser takes an explicit observation
 time: dates use its wall time only to derive a duration, then `now.Add(delay)`
 converts that duration into a process deadline. Only the deadline is retained.
 The operational reducer MUST schedule

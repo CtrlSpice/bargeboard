@@ -412,12 +412,12 @@ func TestHTTPOperationalCancelLargeRetryAfterWait(t *testing.T) {
 		calls := 0
 		r.client.Transport = roundTripperFunc(func(*http.Request) (*http.Response, error) {
 			calls++
-			return &http.Response{StatusCode: 429, Header: http.Header{"Retry-After": {"9223372036"}}, Body: http.NoBody}, nil
+			return &http.Response{StatusCode: 429, Header: http.Header{"Retry-After": {"86400"}}, Body: http.NoBody}, nil
 		})
 		socket.reads <- livenessRead{err: errors.New("private-transport")}
 		time.Sleep(30 * time.Second)
 		synctest.Wait()
-		want := operationalState{started: origin, outage: true, outageStarted: origin, outages: 1, attempts: 1, retryAt: origin.Add(time.Second).Add(9223372036 * time.Second)}
+		want := operationalState{started: origin, outage: true, outageStarted: origin, outages: 1, attempts: 1, retryAt: origin.Add(time.Second).Add(24 * time.Hour)}
 		if got := *r.operational.state.Load(); got != want {
 			t.Fatalf("large hint=%+v, want %+v", got, want)
 		}

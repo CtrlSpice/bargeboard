@@ -128,7 +128,7 @@ func retryAfterDeadline(value string, now time.Time) time.Time {
 		if seconds == 0 {
 			return time.Time{}
 		}
-		return now.Add(time.Duration(seconds) * time.Second)
+		return processRetryDeadline(now, time.Duration(seconds)*time.Second)
 	}
 	date, err := http.ParseTime(value)
 	if err != nil || !date.After(now) {
@@ -140,5 +140,15 @@ func retryAfterDeadline(value string, now time.Time) time.Time {
 	if !now.Add(delay).Equal(date) {
 		return time.Time{}
 	}
-	return now.Add(delay)
+	return processRetryDeadline(now, delay)
+}
+
+func processRetryDeadline(now time.Time, delay time.Duration) time.Time {
+	deadline := now.Add(delay)
+	// Time.Add drops the monotonic reading if its internal value overflows,
+	// even when delay itself fits time.Duration. Do not fall back to wall time.
+	if now != now.Round(0) && deadline == deadline.Round(0) {
+		return time.Time{}
+	}
+	return deadline
 }

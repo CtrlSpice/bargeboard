@@ -175,6 +175,26 @@ func TestHTTPErrorIsOpaqueAndExtractable(t *testing.T) {
 	}
 }
 
+func TestHTTPRetryAfterRejectsMonotonicDeadlineOverflow(t *testing.T) {
+	// Obtain a monotonic value, then place its reading above the sub-second
+	// headroom left by the largest representable whole-second duration.
+	now := time.Now().Add(time.Hour)
+	if now == now.Round(0) {
+		t.Fatal("the supported native clock did not supply a monotonic reading")
+	}
+	for _, value := range []string{
+		"9223372036",
+		now.Add(time.Duration(math.MaxInt64)).UTC().Format(http.TimeFormat),
+	} {
+		if got := retryAfterDeadline(value, now); !got.IsZero() {
+			t.Fatalf("accepted a hint that loses the process clock: %v", got)
+		}
+	}
+	if got := retryAfterDeadline("3600", now); got != now.Add(time.Hour) || got == got.Round(0) {
+		t.Fatalf("ordinary retry deadline lost its monotonic reading: %v", got)
+	}
+}
+
 func TestOperationalHTTPDeadlineFloor(t *testing.T) {
 	at := time.Unix(100, 0)
 	before := operationalState{started: at.Add(-time.Hour), outage: true, outageStarted: at.Add(-time.Minute), attempts: 3, outages: 1, updates: 2, ready: true}
