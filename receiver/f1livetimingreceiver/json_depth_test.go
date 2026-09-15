@@ -220,7 +220,7 @@ func TestUnicodeControlsDepthOrderedBatches(t *testing.T) {
 				liveTimingBatch{source: liveTimingUpdateSourceFeed, updates: []liveTimingUpdate{{topic: "SessionInfo", payload: json.RawMessage(payload), timestamp: "2026-08-21T10:30:30Z", source: liveTimingUpdateSourceFeed}}},
 				incrementalWantFeed("Finished", "2026-08-21T10:31:00Z"))
 			wantNormalized = append(wantNormalized,
-				normalizedLiveTimingBatch{source: liveTimingUpdateSourceFeed, requestedTopics: []string{}, presentTopics: []string{}, observationTime: observation, updates: []normalizedLiveTimingUpdate{{topic: "SessionInfo", payload: json.RawMessage(payload), timestamp: time.Date(2026, 8, 21, 10, 30, 30, 0, time.UTC), source: liveTimingUpdateSourceFeed}}},
+				normalizedLiveTimingBatch{source: liveTimingUpdateSourceFeed, requestedTopics: []string{}, presentTopics: []string{}, observationTime: observation, invalidUnicodeUpdates: 1, updates: []normalizedLiveTimingUpdate{{topic: "SessionInfo", payload: json.RawMessage(payload), timestamp: time.Date(2026, 8, 21, 10, 30, 30, 0, time.UTC), source: liveTimingUpdateSourceFeed}}},
 				normalizedLiveTimingBatch{source: liveTimingUpdateSourceFeed, requestedTopics: []string{}, presentTopics: []string{}, observationTime: observation, updates: []normalizedLiveTimingUpdate{{topic: "SessionStatus", payload: json.RawMessage(`{"Status":"Finished"}`), timestamp: time.Date(2026, 8, 21, 10, 31, 0, 0, time.UTC), source: liveTimingUpdateSourceFeed}}})
 		}
 		if !errors.Is(err, wantErr) || !reflect.DeepEqual(gotWire, wantWire) || !reflect.DeepEqual(gotNormalized, wantNormalized) {

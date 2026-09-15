@@ -9,7 +9,7 @@ landing. Notes, issue assignments, and milestones cannot override either source.
 
 ### U-POLICY — Layered Unicode and input quality
 
-**Approved policy; U1 landed, U2 implemented, U3 pending.** The user approved the strategy and
+**Approved policy; U1/U2 landed, U3 implemented.** The user approved the strategy and
 requested persistence in the repository. The exact contract and required tests
 are in [Layered Unicode and Input Quality](architecture.md#layered-unicode-and-input-quality).
 
@@ -52,14 +52,58 @@ It groups the implementation work; issue text links back to the canonical policy
 |---|---|---|
 | U-POLICY | Approved; landed in PR #37 | Canonical policy, this handoff, and the AGENTS resume pointer. Documentation validation checks approval fidelity, existing-contract consistency, links, and required future verification. |
 | [U1 / #34](https://github.com/CtrlSpice/bargeboard/issues/34) | Landed in PR #38 | Lossless quoted-string tokens and source-order raw object-member visitor; scoped negotiation/capability/handshake/hub/feed/manifest controls; descriptive error metadata; opaque plain/inflated payload preservation. Focused scalar, duplicate/key/null/casing, setup prevention, A/B/C, snapshot atomicity, and runtime-stop regressions. |
-| [U2 / #35](https://github.com/CtrlSpice/bargeboard/issues/35) | Implemented; landing tracked in #35 | SessionInfo lossless classification and raw-key isolation; bounded issue propagation through descriptor/batch/gate results; attributable synthetic malformed-name regressions; complete independent-bundle/gate state, depth, atomicity, occurrence-union, and no-replay tests. |
-| [U3 / #36](https://github.com/CtrlSpice/bargeboard/issues/36) | Approved; not implemented | Nonfatal plain/inflated payload-quality findings, bounded terminal cadence, receiver-only internal affected-update counts, and final summaries. Report actual input findings, not unimplemented projection outcomes. |
+| [U2 / #35](https://github.com/CtrlSpice/bargeboard/issues/35) | Landed in PR #39 at `0284a6265049b99bdf382ed1ed76aefb3d30cfec` | SessionInfo lossless classification and raw-key isolation; bounded issue propagation through descriptor/batch/gate results; attributable synthetic malformed-name regressions; complete independent-bundle/gate state, depth, atomicity, occurrence-union, and no-replay tests. |
+| [U3 / #36](https://github.com/CtrlSpice/bargeboard/issues/36) | Implemented; landing tracked in #36 | Nonfatal plain/inflated payload-quality findings after full batch validation; initial/coalesced warnings on the existing cadence; receiver-only affected-envelope counter and final summaries. Complete pure, byte/manifest/depth/limit, runtime-boundary, metrics-None, cardinality, and callback-summary oracles. |
 
 U1 landed in PR #38 at `e2afacb0d6071f0a8e6a5c790c9039a3f52070d2`, the base of
-the U2 implementation. Issue #35 tracks U2's implementation and landing. The approved
-policy remains GREEN with partial FORMATION LAP implementation until U3 and the
-future topic integrations are complete. U3 owns nonfatal payload-quality findings
-and runtime diagnostics/counters; the production normalized consumer remains a no-op.
+the U2 implementation. U2 landed in PR #39 at `0284a62`, the U3 implementation base.
+Issue #36 tracks U3's landing; implementation is present but not yet landed. The
+approved policy remains GREEN with partial FORMATION LAP implementation until the
+future topic integrations are complete. The production normalized consumer remains
+a no-op and SessionInfo helpers remain unwired.
+
+### U3 Resume Details
+
+- `hasInvalidJSONScalars` extracts and reuses U1's surrogate-pairing check. It scans
+  validated original JSON without decoding keys/strings, allocating an AST, or
+  adding a depth profile. Escaped backslashes, intentional U+FFFD, valid pairs, and
+  literal astral text stay valid. Synthetic probes exercise keys, values, unknown
+  content, duplicate occurrences, and plain/inflated payload boundaries.
+- `normalizedLiveTimingBatch.invalidUnicodeUpdates` counts affected envelopes only
+  after updates and manifests validate. A rejected batch returns zero findings;
+  multiple bad strings in one envelope count once. Payload bytes, source ownership,
+  and complete normalized manifests are preserved.
+- `opBatch` commits the count before the consumer call. The operational reducer
+  retains a total and reported-total watermark; first findings warn immediately,
+  repeats flush only on the existing ticker's `opPeriodicTick`. Retry progress's
+  separate `opTick` does not flush quality reports. The warning carries only total
+  and newly reported affected-envelope counts, alongside any independent readiness
+  notice. No status, outage, or semantic-recovery effect follows from a finding.
+- `otelcol_f1livetiming_invalid_unicode_updates` is a synchronous Int64 counter,
+  unit `{update}`, with only the configured receiver ID. The canonical instrument
+  description and complete independent metric oracle are updated. Provider history,
+  shared signal-factory ownership, multi-reader collection, and disabled-metrics
+  terminal reporting retain the existing contracts.
+- Controlled transport tests exercise the actual run with its production no-op
+  consumer: a first affected snapshot at second 29, repeated findings across the
+  exact 30/60-second boundaries, clean intervals, A/B/C continuation, and pending
+  counts in the final summary. Separate tests cover rejected snapshots and shutdown
+  timing out while a consumer callback holds completion. Summary totals describe
+  input findings only, never projection, quarantine, dropped signals, or recovery.
+- Local verification passed with pinned Go 1.26.8 and `GOTOOLCHAIN=local`:
+  `go test ./receiver/f1livetimingreceiver -run 'Test(PayloadQuality|LosslessJSONString|UnicodeControls|Operational|HTTP)' -count=1`,
+  `go test -race -count=1 ./receiver/f1livetimingreceiver -run 'Test(PayloadQuality|LosslessJSONString|UnicodeControls|Operational|HTTP)'`,
+  and `go test -race -count=1 ./receiver/f1livetimingreceiver`. Formatting and
+  `git diff --check` are clean. The initial full `make check` exposed an omitted
+  root Collector integration metric oracle for `invalid_unicode_updates`. Its
+  synthetic snapshots now exercise nonzero quality findings with Basic, None,
+  and POSIX SIGINT, including receiver-only Prometheus labels, bounded warnings,
+  complete summary totals, and unchanged status transitions. Focused root
+  verification passed with the same pinned Go environment:
+  `go test -count=1 -run '^TestForegroundCollectorOperationalTelemetry$' -v .`
+  (Basic, None, and POSIX SIGINT). The full `make check` rerun, receiver race suite,
+  and `npm run typecheck` passed. CI and independent landing reviews remain
+  governed by `AGENTS.md`; issue #36 tracks the final candidate and landing evidence.
 
 ### U2 Resume Details
 
@@ -72,7 +116,7 @@ and runtime diagnostics/counters; the production normalized consumer remains a n
   SessionInfo depth limit. Malformed scalar keys cannot name known ASCII members;
   they are skipped with a Unicode issue. Escaped known keys retain duplicate
   policy. Unknown value content stays opaque, including invalid scalars and
-  duplicate metadata; payload-wide detection remains U3 work.
+  duplicate metadata; U3 now detects payload-wide findings at normalization.
 - The fixed `uint8` issue set gains a Unicode bit alongside existing domain bits.
   `sessionInfoReduction.issues` and `liveTimingReduction.sessionInfoIssues` carry
   parse occurrences through all outcomes without storing diagnostics in state.

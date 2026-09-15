@@ -124,7 +124,8 @@ func (r *liveTimingReceiver) run(
 				return err
 			}
 			receivedBatch = true
-			r.operational.apply(operationalInput{event: opBatch, snapshot: normalized.source == liveTimingUpdateSourceSnapshot, updates: len(normalized.updates)})
+			r.operational.apply(operationalInput{event: opBatch, snapshot: normalized.source == liveTimingUpdateSourceSnapshot,
+				updates: len(normalized.updates), invalidUnicodeUpdates: normalized.invalidUnicodeUpdates})
 			if err := r.consume(ctx, normalized); err != nil {
 				r.operational.apply(operationalInput{event: opConsumerFailure})
 			}

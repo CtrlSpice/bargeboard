@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -220,7 +221,9 @@ func TestForegroundCollectorOperationalTelemetry(t *testing.T) {
 							return
 						}
 					}
-					if err = socket.Write(ctx, websocket.MessageText, []byte(`{"type":3,"invocationId":"0","result":{"SessionStatus":{"Status":"Started"}}}`+"\x1e")); err != nil {
+					// Synthetic unused keys/text exercise input quality without changing
+					// the envelope count: multiple malformed strings affect one update.
+					if err = socket.Write(ctx, websocket.MessageText, []byte(`{"type":3,"invocationId":"0","result":{"SessionStatus":{"Status":"Started","unused":{"synthetic-private-key":"synthetic-private-text\uD800","\uDC00":"\uDFFF"}}}}`+"\x1e")); err != nil {
 						return
 					}
 					wait, closeRecord := drop, `{"type":7,"allowReconnect":true}`
@@ -348,7 +351,7 @@ func TestForegroundCollectorOperationalTelemetry(t *testing.T) {
 			// than a private SDK that could accidentally bypass Collector filtering.
 			endpoint := fmt.Sprintf("http://127.0.0.1:%d/metrics", port)
 			client := &http.Client{Timeout: time.Second}
-			checkExposition := func(updates, outages, attempts, recoveries int) {
+			checkExposition := func(updates, invalidUnicodeUpdates, outages, attempts, recoveries int) {
 				t.Helper()
 				response, err := client.Get(endpoint)
 				if level == "none" {
@@ -369,18 +372,21 @@ func TestForegroundCollectorOperationalTelemetry(t *testing.T) {
 				if response.StatusCode != http.StatusOK {
 					t.Fatalf("metrics status = %d", response.StatusCode)
 				}
-				for _, help := range []string{
+				for _, metadata := range []string{
 					"# HELP otelcol_f1livetiming_normalized_updates Envelopes in fully normalized input batches, not cars, datapoints, or exported racing signals.",
 					"# HELP otelcol_f1livetiming_last_update_age Process seconds since local acceptance of a nonempty normalized batch; omitted before first input, not source freshness.",
+					"# HELP otelcol_f1livetiming_invalid_unicode_updates Envelopes with malformed Unicode scalar escapes in fully normalized payloads; not rejected input or dropped racing signals.",
+					"# TYPE otelcol_f1livetiming_invalid_unicode_updates counter",
 				} {
-					if !strings.Contains(string(body), help) {
-						t.Fatalf("missing HELP: %s", help)
+					if !strings.Contains(string(body), metadata) {
+						t.Fatalf("missing metric metadata: %s", metadata)
 					}
 				}
 				want := map[string]float64{
 					"connection_active": 1, "subscription_active": 1, "outage_active": 0, "outage_duration": 0,
 					"outages": float64(outages), "reconnect_attempts": float64(attempts), "recoveries": float64(recoveries),
 					"normalized_updates": float64(updates), "consumer_failures": 0, "last_update_age": -1,
+					"invalid_unicode_updates": float64(invalidUnicodeUpdates),
 				}
 				for _, line := range strings.Split(string(body), "\n") {
 					if !strings.HasPrefix(line, "otelcol_f1livetiming_") {
@@ -405,14 +411,15 @@ func TestForegroundCollectorOperationalTelemetry(t *testing.T) {
 					t.Fatalf("missing F1 metrics: %v", want)
 				}
 			}
-			checkExposition(1, 0, 0, 0)
+			checkExposition(1, 1, 0, 0, 0)
 			close(drop)
 			await("Live Timing input interrupted; updates may be missing")
 			await("Live Timing updates resumed; missed updates may be unrecoverable")
-			checkExposition(2, 1, 1, 1)
+			checkExposition(2, 2, 1, 1, 1)
 			close(terminal)
 			await("Collector can still run")
 			await("interruption summary")
+			assertInputStatuses([]string{"StatusStarting", "StatusRecoverableError", "StatusOK", "StatusRecoverableError", "StatusOK", "StatusPermanentError"})
 			if test.stop == "stdin" {
 				if err := stdin.Close(); err != nil {
 					t.Fatal(err)
@@ -436,11 +443,52 @@ func TestForegroundCollectorOperationalTelemetry(t *testing.T) {
 					t.Errorf("stderr missing %q: %s", required, joined)
 				}
 			}
-			if strings.Count(joined, "interruption summary") != 1 {
-				t.Error("summary was not singular")
+			qualityWarnings, summaries := 0, 0
+			for _, line := range output {
+				var want map[string]any
+				switch {
+				case strings.Contains(line, "Live Timing payload contains malformed Unicode scalar escapes; normalized payload bytes preserved; no F1 race export is implemented"):
+					qualityWarnings++
+					want = map[string]any{"invalid_unicode_updates": float64(1), "new_invalid_unicode_updates": float64(1)}
+				case strings.Contains(line, "interruption summary"):
+					summaries++
+					want = map[string]any{
+						"attempt": float64(1), "outages": float64(2), "recoveries": float64(1), "normalized_updates": float64(2),
+						"consumer_failures": float64(0), "invalid_unicode_updates": float64(2), "next_delay_seconds": float64(0),
+						"connection_active": false, "subscription_active": false, "unresolved_outage": true,
+					}
+				default:
+					continue
+				}
+				// The real console logger appends JSON fields after its message.
+				// Collector-injected context is independent of receiver-owned fields.
+				start := strings.IndexByte(line, '{')
+				var fields map[string]any
+				if start < 0 || json.Unmarshal([]byte(line[start:]), &fields) != nil {
+					t.Fatalf("missing structured notice fields: %s", line)
+				}
+				for key, value := range want {
+					if fields[key] != value {
+						t.Errorf("%s = %v, want %v: %s", key, fields[key], value, line)
+					}
+				}
+				if strings.Contains(line, "interruption summary") {
+					for _, key := range []string{"run_elapsed_seconds", "outage_duration_seconds", "total_outage_duration_seconds"} {
+						if seconds, ok := fields[key].(float64); !ok || seconds < 0 {
+							t.Errorf("invalid summary duration %s: %s", key, line)
+						}
+					}
+				}
 			}
-			if strings.Contains(joined, "synthetic-only") || strings.Contains(joined, "synthetic-token") {
-				t.Error("synthetic confidential value exposed")
+			// Both snapshots arrive before the 30-second tick. The second finding
+			// remains coalesced but must survive in the summary, also at level None.
+			if qualityWarnings != 1 || summaries != 1 {
+				t.Errorf("quality warnings=%d summaries=%d; want one each", qualityWarnings, summaries)
+			}
+			for _, private := range []string{"synthetic-only", "synthetic-token", "synthetic-private-key", "synthetic-private-text", `\uD800`, `\uDC00`, `\uDFFF`} {
+				if strings.Contains(joined, private) {
+					t.Error("synthetic confidential value exposed")
+				}
 			}
 		})
 	}

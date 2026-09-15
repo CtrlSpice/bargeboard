@@ -5,12 +5,13 @@ import "time"
 // operationalState describes input observations, never racing projection or export.
 // Times are supplied process-monotonic samples; no payload or episode history is retained.
 type operationalState struct {
-	started, outageStarted, lastUpdate, retryAt time.Time
-	connection, subscription, connectionData    bool
-	ready, outage, stopped, summarized          bool
-	outages, attempts, recoveries, updates      int64
-	consumerFailures                            int64
-	closedOutageDuration                        time.Duration
+	started, outageStarted, lastUpdate, retryAt          time.Time
+	connection, subscription, connectionData             bool
+	ready, outage, stopped, summarized                   bool
+	outages, attempts, recoveries, updates               int64
+	consumerFailures                                     int64
+	invalidUnicodeUpdates, reportedInvalidUnicodeUpdates int64
+	closedOutageDuration                                 time.Duration
 }
 
 type operationalEvent uint8
@@ -28,17 +29,19 @@ const (
 	opSetupStopped
 	opFinish
 	opTick
+	opPeriodicTick
 )
 
 type operationalInput struct {
-	event      operationalEvent
-	at         time.Time
-	delay      time.Duration
-	notBefore  time.Time
-	setupStage setupStage
-	httpStatus int
-	updates    int
-	snapshot   bool
+	event                 operationalEvent
+	at                    time.Time
+	delay                 time.Duration
+	notBefore             time.Time
+	setupStage            setupStage
+	httpStatus            int
+	updates               int
+	invalidUnicodeUpdates int
+	snapshot              bool
 }
 
 type operationalNotice uint8
@@ -60,7 +63,7 @@ const (
 )
 
 func reduceOperational(s operationalState, in operationalInput) (operationalState, operationalNotice) {
-	if s.stopped && in.event != opTick && in.event != opFinish {
+	if s.stopped && in.event != opTick && in.event != opPeriodicTick && in.event != opFinish {
 		return s, noticeNone
 	}
 	notice := noticeNone
@@ -72,6 +75,12 @@ func reduceOperational(s operationalState, in operationalInput) (operationalStat
 		s.connection, s.subscription, s.connectionData = true, false, false
 		s.retryAt = time.Time{}
 	case opBatch:
+		s.invalidUnicodeUpdates += int64(in.invalidUnicodeUpdates)
+		if s.reportedInvalidUnicodeUpdates == 0 {
+			// The first finding is immediate, including alongside first-data or
+			// transport recovery. Later findings wait for the periodic tick.
+			s.reportedInvalidUnicodeUpdates = s.invalidUnicodeUpdates
+		}
 		if in.snapshot {
 			s.subscription = true
 		}
@@ -129,7 +138,10 @@ func reduceOperational(s operationalState, in operationalInput) (operationalStat
 			s.stopped, s.summarized = true, true
 			notice = noticeSummary
 		}
-	case opTick:
+	case opTick, opPeriodicTick:
+		if in.event == opPeriodicTick && !s.summarized {
+			s.reportedInvalidUnicodeUpdates = s.invalidUnicodeUpdates
+		}
 		switch {
 		case s.stopped:
 			notice = noticeStopped
