@@ -5113,17 +5113,36 @@ complete hub record inside its partial message.
 
 The pure `splitHubRecord` seam in `protocol.go` uses `splitFirstRecord` to return
 only the first record and remaining input views without mutation or a
-record-count-sized list. It MUST enforce the 16 MiB record limit, excluding the
-separator, on both complete and incomplete first records. A 32 MiB message of
-separators must not allocate a slice header per separator before rejecting its
-first empty record. The local `hubRecordBuffer` in `protocol.go` owns buffered
-contents and their compaction lifecycle. Its `next` method calls the pure framer,
-advances past complete records, and detaches the bounded incomplete tail once
-after a consumed prefix. Further incomplete checks reuse that storage, including
-after empty fragments; ordinary append growth may allocate. Completing another
-record rearms compaction. Handshake pending data starts eligible for compaction
-because it may still retain the consumed handshake prefix. Framing errors leave
-the buffer state intact.
+record-count-sized list. Both framers accept a byte offset identifying the
+already-scanned, separator-free prefix of the current record; only bytes at or
+after that offset are searched. The offset MUST be between zero and the current
+buffer length. `splitHubRecord` MUST enforce the 16 MiB record limit, excluding
+the separator, against the whole complete or incomplete first record, not just
+its unscanned suffix. A 32 MiB message of separators must not allocate a slice
+header per separator before rejecting its first empty record.
+
+The local `hubRecordBuffer` in `protocol.go` owns buffered contents, scan progress,
+and their compaction lifecycle. Its `next` method calls the pure framer, advances
+past complete records, and resets the scan offset to zero for the uninspected
+remaining input. On an incomplete record it saves the current buffer length as
+the next scan offset and detaches the bounded incomplete tail once after a
+consumed prefix. The offset is relative to the current record, so detachment and
+append growth preserve it. Further incomplete checks reuse that storage and scan
+only appended bytes, including no search work for empty fragments. Completing
+another record rearms compaction. Handshake pending data starts with zero scan
+progress and is eligible for compaction because it may still retain the consumed
+handshake prefix. Framing errors leave the complete buffer state intact.
+
+`readHandshakeResponse` in `connection.go` retains the same byte-relative scan
+offset across successful text reads and uses `splitFirstRecord` to search only
+new bytes. The 16 KiB handshake limit still applies to the entire response record,
+excluding its separator, rather than the fragment or any coalesced hub tail.
+Only a successfully parsed handshake returns that uninspected tail; failed reads
+discard their bytes and failed handshakes return no pending data. Separator search
+work in both paths MUST be linear in bytes received even for one-byte fragments.
+Restarting from byte zero on every append is rejected: bounded record sizes alone
+do not prevent quadratic work. This cursor does not change fragment acceptance,
+record commitment, snapshot atomicity, or protocol recovery policy.
 
 The imperative read loop checks context cancellation between records, including
 ignored records, and appends only successful text WebSocket reads after `next`
@@ -5156,8 +5175,19 @@ complete buffer state and input preservation, and cover initial handshake tails,
 empty tails, and size-error state preservation. Deterministic storage-identity
 checks must catch both unconditional cloning and failure to detach a prefix;
 framer allocation counts or transport delivery outcomes alone do not prove these
-buffering properties. Heap-size thresholds and timing-based assertions are not
-valid substitutes.
+buffering properties. Direct cursor-state oracles MUST cover one-byte and empty
+fragments, consumption of complete and empty records, rebasing to the next record,
+compaction, append growth, exact bounds and limit-plus-one after an earlier scan,
+and error-state preservation. A deterministic probe of the already-scanned prefix
+MUST prove that the shared framer and hub buffer actually start searching at the
+saved offset, rather than merely updating unused cursor state. Handshake tests
+MUST cover tiny fragments through the exact bound, oversized complete and
+incomplete responses, uninspected pending data beyond the handshake cap, empty
+records, malformed responses, and byte discard on failed reads. Fragmented runtime
+tests MUST retain accepted A before invalid B, stop before C, and discard a failed
+read that would otherwise complete the buffered record. An allocation-reporting
+one-byte-fragment benchmark may supplement these deterministic oracles. Heap-size
+thresholds and timing-based assertions are not valid substitutes.
 
 ## OTLP Projection
 

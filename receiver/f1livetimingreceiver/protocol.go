@@ -111,8 +111,8 @@ func encodeSubscribeInvocation(topics []string) ([]byte, error) {
 
 // splitHubRecord checks only the first record and returns views of contents.
 // Later records are framed only after the caller has processed this one.
-func splitHubRecord(contents []byte) (record, remaining []byte, complete bool, err error) {
-	record, remaining, complete = splitFirstRecord(contents)
+func splitHubRecord(contents []byte, scanned int) (record, remaining []byte, complete bool, err error) {
+	record, remaining, complete = splitFirstRecord(contents, scanned)
 	if len(record) > maxHubRecordSize || (!complete && len(remaining) > maxHubRecordSize) {
 		return nil, nil, false, invalidLiveTimingData(fmt.Sprintf("SignalR record exceeds %d bytes", maxHubRecordSize))
 	}
@@ -125,22 +125,27 @@ func splitHubRecord(contents []byte) (record, remaining []byte, complete bool, e
 // returns an incomplete record without error.
 type hubRecordBuffer struct {
 	contents        []byte
+	scanned         int // Separator-free prefix of contents, independent of storage.
 	needsCompaction bool
 }
 
 func (b *hubRecordBuffer) next() (record []byte, complete bool, err error) {
-	record, remaining, complete, err := splitHubRecord(b.contents)
+	record, remaining, complete, err := splitHubRecord(b.contents, b.scanned)
 	if err != nil {
 		return nil, false, err
 	}
 	if complete {
 		b.contents = remaining
+		b.scanned = 0
 		b.needsCompaction = true
-	} else if b.needsCompaction {
-		// Detach the consumed prefix once, then reuse storage across fragments
-		// until another complete record creates a new compaction boundary.
-		b.contents = bytes.Clone(remaining)
-		b.needsCompaction = false
+	} else {
+		b.scanned = len(b.contents)
+		if b.needsCompaction {
+			// Detach the consumed prefix once, then reuse storage across fragments.
+			// The byte-relative scan offset survives cloning and append growth.
+			b.contents = bytes.Clone(remaining)
+			b.needsCompaction = false
+		}
 	}
 	return record, complete, nil
 }

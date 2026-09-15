@@ -64,6 +64,7 @@ func TestHubRecordBufferCompactsAtRecordBoundaries(t *testing.T) {
 	// Compaction must detach the small tail from the large consumed prefix.
 	record, complete, err := buffer.next()
 	want.needsCompaction = false
+	want.scanned = len(want.contents)
 	if err != nil || complete || record != nil || !reflect.DeepEqual(buffer, want) {
 		t.Fatalf("incomplete next() = %q, %v, %v; buffer = %#v", record, complete, err, buffer)
 	}
@@ -79,6 +80,7 @@ func TestHubRecordBufferCompactsAtRecordBoundaries(t *testing.T) {
 		storageBefore, capacityBefore := &buffer.contents[0], cap(buffer.contents)
 		buffer.contents = append(buffer.contents, fragment...)
 		want.contents = append(want.contents, fragment...)
+		want.scanned = len(want.contents)
 		storageAfterAppend, capacityAfterAppend := &buffer.contents[0], cap(buffer.contents)
 		if len(buffer.contents) <= capacityBefore && storageAfterAppend != storageBefore {
 			t.Fatalf("fragment %d: append within capacity changed storage", i)
@@ -112,6 +114,7 @@ func TestHubRecordBufferCompactsAtRecordBoundaries(t *testing.T) {
 	previousRecord := record
 	record, complete, err = buffer.next()
 	want.needsCompaction = false
+	want.scanned = len(want.contents)
 	if err != nil || complete || record != nil || !reflect.DeepEqual(buffer, want) || &buffer.contents[0] == storageBefore {
 		t.Fatalf("second boundary did not detach tail: %q, %v, %v; buffer = %#v", record, complete, err, buffer)
 	}
@@ -124,7 +127,7 @@ func TestHubRecordBufferHandshakeTailAndEmptyState(t *testing.T) {
 	input := []byte("{}\x1e{")
 	buffer := hubRecordBuffer{contents: input[3:], needsCompaction: true}
 	record, complete, err := buffer.next()
-	if err != nil || complete || record != nil || !reflect.DeepEqual(buffer, hubRecordBuffer{contents: []byte("{")}) ||
+	if err != nil || complete || record != nil || !reflect.DeepEqual(buffer, hubRecordBuffer{contents: []byte("{"), scanned: 1}) ||
 		&buffer.contents[0] == &input[3] || string(input) != "{}\x1e{" {
 		t.Fatalf("handshake tail next() = %q, %v, %v; buffer = %#v", record, complete, err, buffer)
 	}
@@ -180,7 +183,7 @@ func TestSplitHubRecord(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			before := bytes.Clone(test.contents)
-			record, remaining, complete, err := splitHubRecord(test.contents)
+			record, remaining, complete, err := splitHubRecord(test.contents, 0)
 			if err != nil || !reflect.DeepEqual(record, test.record) ||
 				!reflect.DeepEqual(remaining, test.remaining) || complete != test.complete {
 				t.Errorf("splitHubRecord() = %q, %q, %v, %v", record, remaining, complete, err)
@@ -202,7 +205,7 @@ func TestSplitHubRecordSizeBoundary(t *testing.T) {
 					contents = append(contents, recordSeparator, '{')
 				}
 				before := bytes.Clone(contents)
-				record, remaining, complete, err := splitHubRecord(contents)
+				record, remaining, complete, err := splitHubRecord(contents, 0)
 				if size > maxHubRecordSize {
 					if !errors.Is(err, errInvalidLiveTimingData) || record != nil || remaining != nil || complete {
 						t.Errorf("oversized result: record length %d, remaining length %d, complete %v, error %v", len(record), len(remaining), complete, err)
@@ -226,7 +229,7 @@ func TestSplitHubRecordSeparatorDenseAllocations(t *testing.T) {
 	contents := bytes.Repeat([]byte{recordSeparator}, maxWebSocketMessage)
 	before := bytes.Clone(contents)
 	allocs := testing.AllocsPerRun(100, func() {
-		record, remaining, complete, err := splitHubRecord(contents)
+		record, remaining, complete, err := splitHubRecord(contents, 0)
 		if err != nil || !complete || len(record) != 0 || len(remaining) != len(contents)-1 ||
 			&remaining[0] != &contents[1] {
 			t.Fatal("framer did not return the first empty record and remaining input view")
@@ -247,7 +250,7 @@ func BenchmarkSplitHubRecordSeparatorDense(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				record, remaining, complete, err := splitHubRecord(contents)
+				record, remaining, complete, err := splitHubRecord(contents, 0)
 				if err != nil || !complete || len(record) != 0 || len(remaining) != size-1 {
 					b.Fatal("invalid first record")
 				}

@@ -9,7 +9,7 @@ landing. Notes, issue assignments, and milestones cannot override either source.
 
 ### U-POLICY — Layered Unicode and input quality
 
-**Approved policy; U1/U2 landed, U3 implemented.** The user approved the strategy and
+**Approved policy; U1/U2/U3 landed.** The user approved the strategy and
 requested persistence in the repository. The exact contract and required tests
 are in [Layered Unicode and Input Quality](architecture.md#layered-unicode-and-input-quality).
 
@@ -53,14 +53,46 @@ It groups the implementation work; issue text links back to the canonical policy
 | U-POLICY | Approved; landed in PR #37 | Canonical policy, this handoff, and the AGENTS resume pointer. Documentation validation checks approval fidelity, existing-contract consistency, links, and required future verification. |
 | [U1 / #34](https://github.com/CtrlSpice/bargeboard/issues/34) | Landed in PR #38 | Lossless quoted-string tokens and source-order raw object-member visitor; scoped negotiation/capability/handshake/hub/feed/manifest controls; descriptive error metadata; opaque plain/inflated payload preservation. Focused scalar, duplicate/key/null/casing, setup prevention, A/B/C, snapshot atomicity, and runtime-stop regressions. |
 | [U2 / #35](https://github.com/CtrlSpice/bargeboard/issues/35) | Landed in PR #39 at `0284a6265049b99bdf382ed1ed76aefb3d30cfec` | SessionInfo lossless classification and raw-key isolation; bounded issue propagation through descriptor/batch/gate results; attributable synthetic malformed-name regressions; complete independent-bundle/gate state, depth, atomicity, occurrence-union, and no-replay tests. |
-| [U3 / #36](https://github.com/CtrlSpice/bargeboard/issues/36) | Implemented; landing tracked in #36 | Nonfatal plain/inflated payload-quality findings after full batch validation; initial/coalesced warnings on the existing cadence; receiver-only affected-envelope counter and final summaries. Complete pure, byte/manifest/depth/limit, runtime-boundary, metrics-None, cardinality, and callback-summary oracles. |
+| [U3 / #36](https://github.com/CtrlSpice/bargeboard/issues/36) | Landed in PR #40 at `7018b2a0e173b5619650498c71e6a7ef0636e0c9` | Nonfatal plain/inflated payload-quality findings after full batch validation; initial/coalesced warnings on the existing cadence; receiver-only affected-envelope counter and final summaries. Complete pure, byte/manifest/depth/limit, runtime-boundary, metrics-None, cardinality, and callback-summary oracles. |
+| F-SCAN | Approved; implemented, pending landing | Linear separator scanning across tiny fragments in runtime hub and handshake framing. Saved byte-relative cursors, deterministic scan-start and complete buffer-state oracles, bounds/ownership/failure checks, and a one-byte-fragment benchmark. |
 
 U1 landed in PR #38 at `e2afacb0d6071f0a8e6a5c790c9039a3f52070d2`, the base of
 the U2 implementation. U2 landed in PR #39 at `0284a62`, the U3 implementation base.
-Issue #36 tracks U3's landing; implementation is present but not yet landed. The
+U3 landed in PR #40 at `7018b2a`, the F-SCAN implementation base. The
 approved policy remains GREEN with partial FORMATION LAP implementation until the
 future topic integrations are complete. The production normalized consumer remains
 a no-op and SessionInfo helpers remain unwired.
+
+### F-SCAN Resume Details
+
+- The user approved reproducing incomplete-prefix rescanning, retaining scan
+  progress for linear work, and covering both runtime hub and handshake framing.
+  Implementation is on `fix/linear-fragment-scanning` at base
+  `7018b2a0e173b5619650498c71e6a7ef0636e0c9`; landing remains pending.
+- `splitFirstRecord` accepts the already-scanned prefix length. The hub buffer
+  retains that cursor across incomplete checks, compaction, and append growth;
+  consuming a record resets it for the next uninspected tail. Handshake reads keep
+  the same offset locally and return only a successfully parsed response's tail.
+  Whole-record bounds, accepted A before protocol-invalid B and no C, snapshot
+  atomicity, failed-read byte discard, and recovery policy retain their contracts.
+- The pre-fix one-byte-fragment benchmark with preallocated storage reproduced
+  roughly 1.75/20.1/324 ms at 16/64/256 KiB, with zero allocations. After the fix,
+  the same benchmark measured roughly 0.068/0.275/1.09 ms, also zero allocations.
+  These are local supporting measurements, not timing-based acceptance gates.
+- `TestFragmentScanStartsAtCursor` plants a separator in a previously scanned
+  prefix solely as a white-box probe. Safely restoring the old byte-zero search
+  made all three cases fail; independently forcing the hub buffer to pass offset
+  zero also made all three fail. Both temporary mutations were restored. Complete
+  state and storage-identity tests cover tiny/empty fragments, cursor resets,
+  compaction, append growth, exact/plus-one bounds, and unchanged error state.
+  Handshake and runtime tests cover coalesced tails, failure byte discard, and
+  ordered delivery; the existing snapshot atomicity regressions also pass.
+- Local verification passed with pinned Go 1.26.8 and `GOTOOLCHAIN=local`:
+  `go test ./receiver/f1livetimingreceiver -run 'Test(FragmentScan|HubRecordBuffer|SplitHubRecord|SplitFirstRecord|HandshakeTiny|HandshakeFragment|Incremental)' -count=1`,
+  `go test ./receiver/f1livetimingreceiver -run '^$' -bench '^BenchmarkHubRecordBufferTinyFragments$' -benchtime=100ms -count=1`,
+  and `go test -race -count=1 ./receiver/f1livetimingreceiver`.
+  `npm run typecheck`, the full `make check`, and `git diff --check` also passed.
+  Final independent reviews, CI, and landing remain governed by `AGENTS.md`.
 
 ### U3 Resume Details
 
@@ -103,7 +135,8 @@ a no-op and SessionInfo helpers remain unwired.
   `go test -count=1 -run '^TestForegroundCollectorOperationalTelemetry$' -v .`
   (Basic, None, and POSIX SIGINT). The full `make check` rerun, receiver race suite,
   and `npm run typecheck` passed. CI and independent landing reviews remain
-  governed by `AGENTS.md`; issue #36 tracks the final candidate and landing evidence.
+  governed by `AGENTS.md`; PR #40 records the completed landing and issue #36 tracks
+  its evidence.
 
 ### U2 Resume Details
 
@@ -207,8 +240,9 @@ The broader adversarial cleanup sequence is approved: release integrity, active 
 transport, retained TypeScript correctness, then test/seam/documentation cleanup.
 Research findings still need adjudication and focused verification in their slices.
 
-- Go transport: avoid rescanning incomplete prefixes; distinguish codec-detected
-  malformed WebSocket framing from network failures; tighten negotiation duplicate,
+- Go transport: incomplete-prefix rescanning is implemented in F-SCAN above and
+  pending landing. Remaining audits: distinguish codec-detected malformed WebSocket
+  framing from network failures; tighten negotiation duplicate,
   casing, and null handling; require a nonempty endpoint hostname.
 - Pure-test oracles: complete attributable CarData and remaining reducer/gate
   assertions. Keep the existing value-state functional core and idiomatic Go.
