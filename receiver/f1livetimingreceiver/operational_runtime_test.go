@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 )
 
@@ -440,4 +442,139 @@ func TestOperationalRecoveryAndSummaryDurationFields(t *testing.T) {
 			t.Fatalf("summary fields = %+v; want %+v", summary, want)
 		}
 	})
+}
+
+func TestOperationalRetryDeadlineIncludesScheduleLogging(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		blocked time.Duration
+		cancel  bool
+	}{
+		{"log takes 20 seconds", 20 * time.Second, false},
+		{"log exceeds deadline", 40 * time.Second, false},
+		{"cancel before deadline", 20 * time.Second, true},
+		{"cancel after deadline", 40 * time.Second, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				const delay = 30 * time.Second
+				entered, release := make(chan struct{}), make(chan struct{})
+				releaseLog := sync.OnceFunc(func() { close(release) })
+				var scheduleLog sync.Once
+				core, logs := observer.New(zap.InfoLevel)
+				settings := receivertest.NewNopSettings(Type)
+				settings.Logger = zap.New(core, zap.Hooks(func(entry zapcore.Entry) error {
+					if strings.Contains(entry.Message, "reconnect progress") {
+						scheduleLog.Do(func() { close(entered); <-release })
+					}
+					return nil
+				}))
+				r := newLiveTimingReceiver(connectionTestConfig(t, "http://127.0.0.1"), settings)
+				var err error
+				r.operational, err = newOperationalReporter(t.Context(), settings)
+				if err != nil {
+					t.Fatal(err)
+				}
+				attempts := make(chan time.Time, 1)
+				r.client = &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+					if request.Method != http.MethodOptions {
+						t.Errorf("unexpected reconnect request: %s", request.Method)
+					}
+					attempts <- time.Now()
+					// Missing synthetic affinity stops this actual reconnect attempt
+					// through the existing permanent-data policy, with no network I/O.
+					return httptest.NewRecorder().Result(), nil
+				})}
+				r.retryDelay = func(int) time.Duration { return delay }
+				ctx, cancel := context.WithCancel(t.Context())
+				r.cancel, r.done = cancel, make(chan struct{})
+				defer func() {
+					cancel()
+					releaseLog()
+					if err := r.Shutdown(context.Background()); err != nil {
+						t.Error(err)
+					}
+				}()
+				origin := time.Now()
+				// No periodic goroutine: the production run still schedules, logs,
+				// waits, and reconnects. Explicit ticks below inspect its countdown
+				// without a ticker contending on the deliberately blocked log mutex.
+				r.operational.apply(operationalInput{event: opStart})
+				socket := newLivenessSocket()
+				go r.run(ctx, &signalRConnection{conn: socket}, r.done)
+				socket.reads <- livenessRead{err: errors.New("synthetic transport failure")}
+				<-entered
+				wantState := operationalState{started: origin, outageStarted: origin, retryAt: origin.Add(delay), outage: true, outages: 1}
+				if got := *r.operational.state.Load(); got != wantState {
+					t.Fatalf("scheduled state = %+v, want %+v", got, wantState)
+				}
+				wantProgress := map[string]any{"attempt": int64(0), "run_elapsed_seconds": float64(0), "outage_duration_seconds": float64(0), "total_outage_duration_seconds": float64(0), "next_delay_seconds": float64(30), "connection_active": false, "subscription_active": false, "normalized_updates": int64(0)}
+				checkProgress := func(index int) {
+					t.Helper()
+					entries := logs.FilterMessageSnippet("reconnect progress").All()
+					if len(entries) != index+1 || !reflect.DeepEqual(entries[index].ContextMap(), wantProgress) {
+						t.Fatalf("progress = %+v; want entry %d with %+v", entries, index, wantProgress)
+					}
+				}
+				checkProgress(0)
+				time.Sleep(test.blocked)
+				if got := *r.operational.state.Load(); got != wantState || got.nextDelay(time.Now()) != max(0, delay-test.blocked) {
+					t.Fatalf("blocked-log state = %+v", got)
+				}
+				if len(attempts) != 0 {
+					t.Fatal("reconnect occurred while the schedule log was blocked")
+				}
+				if test.cancel {
+					cancel()
+				}
+				releaseLog()
+				synctest.Wait()
+				if test.cancel {
+					select {
+					case <-r.done:
+					default:
+						t.Fatal("canceled run did not finish")
+					}
+					if len(attempts) != 0 || r.operational.state.Load().attempts != 0 {
+						t.Fatal("cancellation while logging manufactured an attempt")
+					}
+					checkProgress(0)
+					return
+				}
+				progressIndex := 1
+				if test.blocked < delay {
+					for _, elapsed := range []time.Duration{20 * time.Second, 29 * time.Second} {
+						time.Sleep(elapsed - time.Since(origin))
+						synctest.Wait()
+						if len(attempts) != 0 || r.operational.state.Load().attempts != 0 {
+							t.Fatal("reconnect occurred before the scheduled deadline")
+						}
+						r.operational.apply(operationalInput{event: opTick})
+						wantProgress["run_elapsed_seconds"], wantProgress["outage_duration_seconds"], wantProgress["total_outage_duration_seconds"] = elapsed.Seconds(), elapsed.Seconds(), elapsed.Seconds()
+						wantProgress["next_delay_seconds"] = (delay - elapsed).Seconds()
+						checkProgress(progressIndex)
+						progressIndex++
+					}
+					time.Sleep(time.Second)
+					synctest.Wait()
+				}
+				wantAttemptAt := origin.Add(max(delay, test.blocked))
+				select {
+				case at := <-attempts:
+					if at != wantAttemptAt {
+						t.Fatalf("attempt at %s, want %s", at, wantAttemptAt)
+					}
+				default:
+					t.Fatalf("no reconnect at %s; schedule logging must not start a fresh full backoff", wantAttemptAt)
+				}
+				if state := r.operational.state.Load(); state.attempts != 1 || !state.retryAt.IsZero() {
+					t.Fatalf("attempt state = %+v", state)
+				}
+				elapsed := max(delay, test.blocked).Seconds()
+				wantProgress["attempt"], wantProgress["next_delay_seconds"] = int64(1), float64(0)
+				wantProgress["run_elapsed_seconds"], wantProgress["outage_duration_seconds"], wantProgress["total_outage_duration_seconds"] = elapsed, elapsed, elapsed
+				checkProgress(progressIndex)
+			})
+		})
+	}
 }

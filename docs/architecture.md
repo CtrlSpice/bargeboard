@@ -265,6 +265,18 @@ plus any active gap as of that notice. Next delay is time remaining to a
 scheduled attempt, or zero when none is scheduled.
 Backoff remains unlimited, with its existing 30-second delay cap.
 
+Each retry schedule MUST establish one process-monotonic deadline before its
+progress log: `retryAt = schedule observation time + retry delay`. The state,
+countdown fields, and actual backoff wait MUST use that same deadline. The
+reporter returns its immutable published state; after synchronous reporting
+returns, the run waits only `time.Until(retryAt)`. Logging time spends the existing
+backoff rather than starting a fresh relative delay. If logging finishes at or
+after the deadline, no additional backoff is due; reconnect can proceed as soon
+as reporting returns, subject to the existing cancellation check. Countdown
+fields describe remaining time at their observation sample, not at eventual
+log delivery. Starting a full delay after logging is rejected because it can
+report zero remaining seconds while another full backoff is still pending.
+
 If input was ready before the outage, recovery MUST produce exactly one notice:
 `Live Timing updates resumed; missed updates may be unrecoverable`.
 If input has never met the readiness condition before this outage,
@@ -415,6 +427,14 @@ recovery, consumer failure, terminal state, and idempotent summary. Synthetic
 transport and `testing/synctest` tests MUST cover periodic waiting and outage
 progress before backoff, cancellation and active-callback shutdown deadlines,
 whole-batch invalidation, terminal visibility, and serialized recovery output.
+Production-run wiring tests MUST schedule a 30-second backoff and block its
+progress log for 20 seconds, then prove countdown values of 10, 1, and 0 seconds
+and the first actual reconnect at the original 30-second deadline, not at 50
+seconds. They MUST also cover logging past the deadline and cancellation while
+logging is blocked on either side of that deadline, without counting or making
+a canceled attempt. Use a controlled logger and synthetic transport; an explicit
+tick may replace periodic reporting in this test to avoid a synctest mutex wait
+while the schedule log is deliberately blocked.
 Barrier tests MUST reproduce concurrent late replay and broadcast ordering.
 ManualReader tests MUST assert complete metric names, scope, types, units,
 temporality, values, and attributes; two receiver IDs and three shared signal

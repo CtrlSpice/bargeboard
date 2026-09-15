@@ -149,8 +149,8 @@ func (r *liveTimingReceiver) run(
 
 		for {
 			delay := r.retryDelay(attempt)
-			r.operational.apply(operationalInput{event: opSchedule, delay: delay})
-			if !waitForReconnect(ctx, delay) || ctx.Err() != nil {
+			scheduled := r.operational.apply(operationalInput{event: opSchedule, delay: delay})
+			if !waitForReconnect(ctx, time.Until(scheduled.retryAt)) || ctx.Err() != nil {
 				return
 			}
 			attempt++

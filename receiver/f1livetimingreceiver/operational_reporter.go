@@ -223,7 +223,9 @@ func waitForCompletion(ctx context.Context, done <-chan struct{}) error {
 	}
 }
 
-func (r *operationalReporter) apply(in operationalInput) {
+// Return the published value after reporting, preserving its original process
+// deadline even when synchronous output takes time.
+func (r *operationalReporter) apply(in operationalInput) operationalState {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	in.at = time.Now()
@@ -236,7 +238,7 @@ func (r *operationalReporter) apply(in operationalInput) {
 		}
 	}
 	if notice == noticeNone {
-		return
+		return s
 	}
 	durations := operationalTiming(old, s, in.at)
 	fields := []zap.Field{
@@ -279,4 +281,5 @@ func (r *operationalReporter) apply(in operationalInput) {
 	case noticeStopped:
 		r.logger.Warn("Live Timing input stopped; Collector can still run. Press Ctrl-C to stop the Collector.", fields...)
 	}
+	return s
 }
