@@ -530,8 +530,9 @@ func exchangeHandshake(ctx context.Context, connection *websocket.Conn) ([]byte,
 	return readHandshakeResponse(ctx, connection)
 }
 
-func readHandshakeResponse(ctx context.Context, connection *websocket.Conn) ([]byte, error) {
+func readHandshakeResponse(ctx context.Context, connection signalRSocket) ([]byte, error) {
 	var buffered []byte
+	scanned := 0
 	for {
 		messageType, contents, err := connection.Read(ctx)
 		if err != nil {
@@ -545,13 +546,14 @@ func readHandshakeResponse(ctx context.Context, connection *websocket.Conn) ([]b
 		}
 		buffered = append(buffered, contents...)
 
-		record, remaining, complete := splitFirstRecord(buffered)
+		record, remaining, complete := splitFirstRecord(buffered, scanned)
 		if !complete {
 			if len(buffered) > maxHandshakeResponseSize {
 				return nil, invalidLiveTimingData(
 					fmt.Sprintf("SignalR handshake response exceeds %d bytes", maxHandshakeResponseSize),
 				)
 			}
+			scanned = len(buffered)
 			continue
 		}
 		if len(record) > maxHandshakeResponseSize {
@@ -570,11 +572,15 @@ func encodeHandshakeRequest() []byte {
 	return []byte(handshakeRequest)
 }
 
-func splitFirstRecord(contents []byte) (record, remaining []byte, complete bool) {
-	separator := bytes.IndexByte(contents, recordSeparator)
+// splitFirstRecord returns views of the first record and its uninspected tail.
+// scanned is a byte offset in contents: contents[:scanned] has already been
+// checked and contains no separator. Only appended bytes need another search.
+func splitFirstRecord(contents []byte, scanned int) (record, remaining []byte, complete bool) {
+	separator := bytes.IndexByte(contents[scanned:], recordSeparator)
 	if separator == -1 {
 		return nil, contents, false
 	}
+	separator += scanned
 	return contents[:separator], contents[separator+1:], true
 }
 

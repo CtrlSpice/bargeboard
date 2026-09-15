@@ -231,7 +231,7 @@ func TestCookiesForEndpointHonorsScopeAndDeletion(t *testing.T) {
 }
 
 func TestSplitFirstRecord(t *testing.T) {
-	record, remaining, complete := splitFirstRecord([]byte("{}\x1e{\"type\":6}\x1e"))
+	record, remaining, complete := splitFirstRecord([]byte("{}\x1e{\"type\":6}\x1e"), 0)
 	if !complete {
 		t.Fatal("splitFirstRecord() did not find complete record")
 	}
@@ -239,7 +239,7 @@ func TestSplitFirstRecord(t *testing.T) {
 		t.Errorf("splitFirstRecord() = %q, %q", record, remaining)
 	}
 
-	_, remaining, complete = splitFirstRecord([]byte("{"))
+	_, remaining, complete = splitFirstRecord([]byte("{"), 0)
 	if complete || string(remaining) != "{" {
 		t.Errorf("splitFirstRecord(incomplete) remaining = %q, complete = %v", remaining, complete)
 	}
