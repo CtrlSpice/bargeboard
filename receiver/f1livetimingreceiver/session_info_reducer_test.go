@@ -46,6 +46,7 @@ func TestReduceSessionInfoInstallsWithoutOptionalBundles(t *testing.T) {
 			generation:        1,
 		},
 		disposition: sessionInfoDispositionInstalled,
+		issues:      sessionInfoIssueRoute | sessionInfoIssueSchedule,
 	}
 	assertSessionInfoReduction(t, got, want)
 }
@@ -85,6 +86,7 @@ func TestReduceSessionInfoUnresolvedIdentityRetainsRecoveryState(t *testing.T) {
 			assertSessionInfoReduction(t, got, sessionInfoReduction{
 				state:       wantState,
 				disposition: sessionInfoDispositionUnresolved,
+				issues:      issues,
 			})
 			if !state.synchronized {
 				t.Fatal("reduceSessionInfo mutated its input state")
@@ -93,6 +95,7 @@ func TestReduceSessionInfoUnresolvedIdentityRetainsRecoveryState(t *testing.T) {
 			fresh := reduceSessionInfo(sessionInfoState{}, descriptor)
 			assertSessionInfoReduction(t, fresh, sessionInfoReduction{
 				disposition: sessionInfoDispositionUnresolved,
+				issues:      issues,
 			})
 		})
 	}
@@ -164,6 +167,7 @@ func TestReduceSessionInfoReplacesCompleteOptionalBundles(t *testing.T) {
 	assertSessionInfoReduction(t, got, sessionInfoReduction{
 		state:       wantState,
 		disposition: sessionInfoDispositionRefreshed,
+		issues:      sessionInfoIssueKeyframe,
 	})
 	state = got.state
 

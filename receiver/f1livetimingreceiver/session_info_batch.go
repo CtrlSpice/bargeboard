@@ -4,7 +4,11 @@ import "errors"
 
 var errInvalidNormalizedSessionInfoBatch = errors.New("invalid normalized F1 SessionInfo batch")
 
-// reduceSessionInfoBatch reports false when the batch has no authoritative SessionInfo outcome.
+// reduceSessionInfoBatch reports false when the batch has no authoritative
+// SessionInfo outcome. Issues describe occurrences in this batch only. The
+// normalized contract permits one feed update or one atomic snapshot with at
+// most one SessionInfo; callers combining feed results must OR issues separately
+// from the last state/disposition, which can recover later in wire order.
 func reduceSessionInfoBatch(
 	state sessionInfoState,
 	batch normalizedLiveTimingBatch,

@@ -9,7 +9,7 @@ landing. Notes, issue assignments, and milestones cannot override either source.
 
 ### U-POLICY — Layered Unicode and input quality
 
-**Approved policy; U1 implemented, U2/U3 pending.** The user approved the strategy and
+**Approved policy; U1 landed, U2 implemented, U3 pending.** The user approved the strategy and
 requested persistence in the repository. The exact contract and required tests
 are in [Layered Unicode and Input Quality](architecture.md#layered-unicode-and-input-quality).
 
@@ -51,16 +51,50 @@ It groups the implementation work; issue text links back to the canonical policy
 | ID | State | Scope and completion evidence |
 |---|---|---|
 | U-POLICY | Approved; landed in PR #37 | Canonical policy, this handoff, and the AGENTS resume pointer. Documentation validation checks approval fidelity, existing-contract consistency, links, and required future verification. |
-| [U1 / #34](https://github.com/CtrlSpice/bargeboard/issues/34) | Implemented; landing tracked in #34 | Lossless quoted-string tokens and source-order raw object-member visitor; scoped negotiation/capability/handshake/hub/feed/manifest controls; descriptive error metadata; opaque plain/inflated payload preservation. Focused scalar, duplicate/key/null/casing, setup prevention, A/B/C, snapshot atomicity, and runtime-stop regressions. |
-| [U2 / #35](https://github.com/CtrlSpice/bargeboard/issues/35) | Approved; not implemented | SessionInfo classification isolation and bounded issue propagation; synthetic malformed-name fixture; full independent-bundle/gate state and no-replay tests. |
+| [U1 / #34](https://github.com/CtrlSpice/bargeboard/issues/34) | Landed in PR #38 | Lossless quoted-string tokens and source-order raw object-member visitor; scoped negotiation/capability/handshake/hub/feed/manifest controls; descriptive error metadata; opaque plain/inflated payload preservation. Focused scalar, duplicate/key/null/casing, setup prevention, A/B/C, snapshot atomicity, and runtime-stop regressions. |
+| [U2 / #35](https://github.com/CtrlSpice/bargeboard/issues/35) | Implemented; landing tracked in #35 | SessionInfo lossless classification and raw-key isolation; bounded issue propagation through descriptor/batch/gate results; attributable synthetic malformed-name regressions; complete independent-bundle/gate state, depth, atomicity, occurrence-union, and no-replay tests. |
 | [U3 / #36](https://github.com/CtrlSpice/bargeboard/issues/36) | Approved; not implemented | Nonfatal plain/inflated payload-quality findings, bounded terminal cadence, receiver-only internal affected-update counts, and final summaries. Report actual input findings, not unimplemented projection outcomes. |
 
-U1 is implemented from the policy baseline in PR #37,
-`b222a3c305a8e3b03ad0eae03b98de5c1b1a978e`; #34 tracks its implementation and landing.
-The approved policy remains GREEN with partial
-FORMATION LAP implementation until all stages are complete. U2 owns SessionInfo
-string/key integration and issue propagation; U3 owns nonfatal payload-quality
-findings and runtime diagnostics/counters. Neither is implemented by U1.
+U1 landed in PR #38 at `e2afacb0d6071f0a8e6a5c790c9039a3f52070d2`, the base of
+the U2 implementation. Issue #35 tracks U2's implementation and landing. The approved
+policy remains GREEN with partial FORMATION LAP implementation until U3 and the
+future topic integrations are complete. U3 owns nonfatal payload-quality findings
+and runtime diagnostics/counters; the production normalized consumer remains a no-op.
+
+### U2 Resume Details
+
+- `parseJSONString` uses U1's lossless token helper. Recognized scalar occurrences
+  are decoded once before classification or typed grammar, including duplicates.
+  `Meeting.Name`, `Type`, and `Name` belong to identity; `StartDate` also belongs
+  to schedule. `EndDate` and `GmtOffset` remain schedule-only. Numeric keys retain
+  raw integer grammar.
+- Root/Meeting keys use the U1 whole-object visitor with the old end-to-end
+  SessionInfo depth limit. Malformed scalar keys cannot name known ASCII members;
+  they are skipped with a Unicode issue. Escaped known keys retain duplicate
+  policy. Unknown value content stays opaque, including invalid scalars and
+  duplicate metadata; payload-wide detection remains U3 work.
+- The fixed `uint8` issue set gains a Unicode bit alongside existing domain bits.
+  `sessionInfoReduction.issues` and `liveTimingReduction.sessionInfoIssues` carry
+  parse occurrences through all outcomes without storing diagnostics in state.
+  The batch contract still accepts exactly one feed update or an atomic snapshot
+  with at most one SessionInfo. Callers combining feed results must OR issues
+  separately from the last semantic state; later recovery does not erase findings.
+- Complete-result tests cover exact recovery-only identity/route/schedule,
+  generation, routing epoch, and retired FIFO preservation, independent bundle
+  failures, idempotence, stale/exhausted outcomes, snapshot order and atomicity,
+  source-byte ownership, and recovery without retaining intervening updates.
+  Structural field-name assertions force review of new state/result fields.
+- The initial attributed Abu Dhabi fixture mutation `"\uD800 Grand Prix"` failed
+  before implementation because it classified as `practice_1` with no issues.
+  The regression and all focused SessionInfo/parser/reducer/gate checks now pass.
+  Local verification passed using repository-pinned Go 1.26.8 with
+  `GOTOOLCHAIN=local`: `make check`,
+  `go test -race -count=1 ./receiver/f1livetimingreceiver`, and
+  `go test -race -count=20 ./receiver/f1livetimingreceiver -run 'Test(SessionInfoUnicode|ParseSessionInfo|ClassifySessionInfo|ParsePositiveCanonicalInt64|ReduceSessionInfo|ReduceLiveTimingBatch)'`.
+  `npm run typecheck` and `git diff --check` also passed. Inspect #35 and its linked
+  PR for final candidate, CI, review, and landing evidence.
+- These are pure helper outcomes, not runtime projection or quarantine. They emit
+  no counters or logs and do not establish any other topic's resynchronization.
 
 ### U1 Resume Details
 

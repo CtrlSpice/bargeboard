@@ -9,6 +9,7 @@ type liveTimingReduction struct {
 	sessionInfoDisposition      sessionInfoDisposition
 	sessionInfoAuthoritative    bool
 	sessionInfoRouteTransition  bool
+	sessionInfoIssues           sessionInfoIssueSet
 	sessionScopedUpdatesAllowed bool
 }
 
@@ -29,6 +30,7 @@ func reduceLiveTimingBatch(
 		reduction.state.sessionInfo = sessionInfo.state
 		reduction.sessionInfoDisposition = sessionInfo.disposition
 		reduction.sessionInfoRouteTransition = sessionInfo.routeTransition
+		reduction.sessionInfoIssues = sessionInfo.issues
 	}
 	reduction.sessionScopedUpdatesAllowed =
 		reduction.state.sessionInfo.identityAvailable &&

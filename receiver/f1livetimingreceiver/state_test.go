@@ -133,16 +133,23 @@ func TestReduceLiveTimingBatchUsesOnlyLogicalIdentityForGate(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reduceLiveTimingBatch() error = %v", err)
 			}
-			if !got.sessionInfoAuthoritative || !got.sessionScopedUpdatesAllowed ||
-				got.sessionInfoDisposition != sessionInfoDispositionInstalled ||
-				!got.state.sessionInfo.synchronized || !got.state.sessionInfo.identityAvailable {
-				t.Fatalf("logical identity did not open gate: %#v", got)
+			want := liveTimingReduction{
+				state:                       identityGateTestState(),
+				sessionInfoAuthoritative:    true,
+				sessionInfoDisposition:      sessionInfoDispositionInstalled,
+				sessionScopedUpdatesAllowed: true,
 			}
-			if got.state.sessionInfo.routeAvailable != test.wantRoute ||
-				got.state.sessionInfo.scheduleAvailable != test.wantSchedule {
-				t.Fatalf("optional bundle availability = route %t, schedule %t",
-					got.state.sessionInfo.routeAvailable, got.state.sessionInfo.scheduleAvailable)
+			if !test.wantRoute {
+				want.state.sessionInfo.routeAvailable = false
+				want.state.sessionInfo.routeKey = 0
+				want.sessionInfoIssues |= sessionInfoIssueRoute
 			}
+			if !test.wantSchedule {
+				want.state.sessionInfo.scheduleAvailable = false
+				want.state.sessionInfo.schedule = sessionInfoSchedule{}
+				want.sessionInfoIssues |= sessionInfoIssueSchedule
+			}
+			assertLiveTimingReduction(t, got, want)
 		})
 	}
 }
@@ -150,8 +157,9 @@ func TestReduceLiveTimingBatchUsesOnlyLogicalIdentityForGate(t *testing.T) {
 func TestReduceLiveTimingBatchClosesGateOnAuthoritativeFailure(t *testing.T) {
 	state := identityGateTestState()
 	tests := []struct {
-		name  string
-		batch normalizedLiveTimingBatch
+		name   string
+		batch  normalizedLiveTimingBatch
+		issues sessionInfoIssueSet
 	}{
 		{
 			name: "requested omission",
@@ -167,8 +175,9 @@ func TestReduceLiveTimingBatchClosesGateOnAuthoritativeFailure(t *testing.T) {
 			}),
 		},
 		{
-			name:  "present unresolved descriptor",
-			batch: normalizeIdentityGateSessionInfoFeed(t, `null`, "2025-01-01T00:00:00Z"),
+			name:   "present unresolved descriptor",
+			batch:  normalizeIdentityGateSessionInfoFeed(t, `null`, "2025-01-01T00:00:00Z"),
+			issues: sessionInfoIssueShape,
 		},
 	}
 
@@ -184,6 +193,7 @@ func TestReduceLiveTimingBatchClosesGateOnAuthoritativeFailure(t *testing.T) {
 				state:                    wantState,
 				sessionInfoDisposition:   sessionInfoDispositionUnresolved,
 				sessionInfoAuthoritative: true,
+				sessionInfoIssues:        test.issues,
 			})
 			if !state.sessionInfo.synchronized {
 				t.Fatal("reduceLiveTimingBatch mutated its input state")
@@ -368,6 +378,7 @@ func TestReduceLiveTimingBatchPreservesRouteLossAndRestoration(t *testing.T) {
 		sessionInfoDisposition:      sessionInfoDispositionRefreshed,
 		sessionInfoAuthoritative:    true,
 		sessionInfoRouteTransition:  true,
+		sessionInfoIssues:           sessionInfoIssueRoute,
 		sessionScopedUpdatesAllowed: true,
 	})
 

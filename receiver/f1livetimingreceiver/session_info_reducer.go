@@ -75,6 +75,8 @@ type sessionInfoReduction struct {
 	state           sessionInfoState
 	disposition     sessionInfoDisposition
 	routeTransition bool
+	// Occurrences in this descriptor, not retained invalidity or state history.
+	issues sessionInfoIssueSet
 }
 
 // reduceSessionInfo consumes descriptors produced by parseSessionInfo.
@@ -83,7 +85,9 @@ func reduceSessionInfo(
 	descriptor sessionInfoParseResult,
 ) sessionInfoReduction {
 	if !descriptor.identityAvailable {
-		return unsynchronizeSessionInfo(state)
+		reduction := unsynchronizeSessionInfo(state)
+		reduction.issues = descriptor.issues
+		return reduction
 	}
 
 	incomingTuple := descriptor.identity.logicalTuple()
@@ -92,12 +96,13 @@ func reduceSessionInfo(
 		return sessionInfoReduction{
 			state:       state,
 			disposition: sessionInfoDispositionStale,
+			issues:      descriptor.issues,
 		}
 	}
 
 	if !state.identityAvailable {
 		if state.generation == ^sessionInfoGeneration(0) {
-			return exhaustedSessionInfoReduction(state)
+			return exhaustedSessionInfoReduction(state, descriptor.issues)
 		}
 		state.identity = descriptor.identity
 		state.identityAvailable = true
@@ -108,6 +113,7 @@ func reduceSessionInfo(
 		return sessionInfoReduction{
 			state:       state,
 			disposition: sessionInfoDispositionInstalled,
+			issues:      descriptor.issues,
 		}
 	}
 
@@ -115,7 +121,7 @@ func reduceSessionInfo(
 		routeTransition := state.routeAvailable != descriptor.routeAvailable ||
 			(state.routeAvailable && state.routeKey != descriptor.routeKey)
 		if routeTransition && state.routeEpoch == ^sessionInfoRouteEpoch(0) {
-			return exhaustedSessionInfoReduction(state)
+			return exhaustedSessionInfoReduction(state, descriptor.issues)
 		}
 		state.synchronized = true
 		if routeTransition {
@@ -126,11 +132,12 @@ func reduceSessionInfo(
 			state:           state,
 			disposition:     sessionInfoDispositionRefreshed,
 			routeTransition: routeTransition,
+			issues:          descriptor.issues,
 		}
 	}
 
 	if state.generation == ^sessionInfoGeneration(0) {
-		return exhaustedSessionInfoReduction(state)
+		return exhaustedSessionInfoReduction(state, descriptor.issues)
 	}
 	state.retired.add(state.identity.logicalTuple())
 	state.identity = descriptor.identity
@@ -141,6 +148,7 @@ func reduceSessionInfo(
 	return sessionInfoReduction{
 		state:       state,
 		disposition: sessionInfoDispositionReplaced,
+		issues:      descriptor.issues,
 	}
 }
 
@@ -152,11 +160,12 @@ func unsynchronizeSessionInfo(state sessionInfoState) sessionInfoReduction {
 	}
 }
 
-func exhaustedSessionInfoReduction(state sessionInfoState) sessionInfoReduction {
+func exhaustedSessionInfoReduction(state sessionInfoState, issues sessionInfoIssueSet) sessionInfoReduction {
 	state.synchronized = false
 	return sessionInfoReduction{
 		state:       state,
 		disposition: sessionInfoDispositionTokenExhausted,
+		issues:      issues,
 	}
 }
 
