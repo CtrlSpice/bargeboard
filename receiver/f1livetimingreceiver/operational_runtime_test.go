@@ -29,7 +29,7 @@ func operationalTestRun(t *testing.T, host component.Host) (*liveTimingReceiver,
 	settings.Logger = zap.New(core)
 	r := newLiveTimingReceiver(nil, settings)
 	var err error
-	r.operational, err = newOperationalReporter(settings)
+	r.operational, err = newOperationalReporter(t.Context(), settings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestOperationalSharedShutdownTimeoutKeepsOwnership(t *testing.T) {
 		m := newReceiverMap()
 		cfg := createDefaultConfig().(*Config)
 		cfg.Auth.TokenFile = "unused-synthetic-path"
-		shared, err := m.receiver(cfg, settings)
+		shared, err := m.receiver(t.Context(), cfg, settings)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -195,7 +195,7 @@ func TestOperationalSharedShutdownTimeoutKeepsOwnership(t *testing.T) {
 		if err := shared.Shutdown(shutdown); !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("shutdown = %v", err)
 		}
-		retained, err := m.receiver(cfg, settings)
+		retained, err := m.receiver(t.Context(), cfg, settings)
 		if !errors.Is(err, errReceiverStopping) || retained != nil {
 			t.Fatal("factory returned a receiver that is still stopping")
 		}
@@ -216,7 +216,7 @@ func TestOperationalSharedShutdownTimeoutKeepsOwnership(t *testing.T) {
 		close(release)
 		<-r.done
 		synctest.Wait()
-		recreated, err := m.receiver(cfg, settings)
+		recreated, err := m.receiver(t.Context(), cfg, settings)
 		if err != nil || recreated == shared {
 			t.Fatal("completed run retained factory cache")
 		}
@@ -265,11 +265,11 @@ func TestOperationalConcurrentReportingAndCollection(t *testing.T) {
 	core, logs := observer.New(zap.InfoLevel)
 	settings := receivertest.NewNopSettings(Type)
 	settings.Logger, settings.MeterProvider = zap.New(core), provider
-	r, err := newOperationalReporter(settings)
+	r, err := newOperationalReporter(t.Context(), settings)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.stop()
+	defer r.stop(t.Context())
 	r.host = &collectingStatusHost{reader, t}
 	r.apply(operationalInput{event: opStart})
 	r.apply(operationalInput{event: opConnected})
@@ -410,11 +410,11 @@ func TestOperationalRecoveryAndSummaryDurationFields(t *testing.T) {
 		core, logs := observer.New(zap.InfoLevel)
 		settings := receivertest.NewNopSettings(Type)
 		settings.Logger = zap.New(core)
-		r, err := newOperationalReporter(settings)
+		r, err := newOperationalReporter(t.Context(), settings)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer r.stop()
+		defer r.stop(t.Context())
 		r.apply(operationalInput{event: opStart})
 		r.apply(operationalInput{event: opConnected})
 		r.apply(operationalInput{event: opBatch, snapshot: true, updates: 1})

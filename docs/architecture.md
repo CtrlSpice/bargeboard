@@ -338,14 +338,19 @@ outage.
 
 Instruments and one callback MUST be created once per shared receiver, with
 construction errors propagated through the factory and no failed receiver
-cached. A non-nil registration returned together with an error MUST be
-unregistered, and both construction and cleanup errors MUST remain available to
-the caller. Callbacks stay disabled until registration succeeds. Callbacks load
+cached. A non-nil registration returned together with an error MUST be submitted
+to the same once-owned cleanup operation. Factory context bounds the wait for
+that cleanup: the original construction error is preserved, joined with any
+completed cleanup error and any canonical caller context error. If cleanup is
+still pending when the context ends, its worker retains ownership and reports
+any eventual unregister failure through the sanitized warning. It does not
+publish a partially constructed receiver. Callbacks stay disabled until
+registration succeeds. Callbacks load
 an immutable atomic snapshot and do no logging, state mutation, or counter
 updates, allowing repeated, concurrent, multi-reader, and
 reentrant collection. A separate callback-lifetime read lock covers observations;
-disabling takes its write lock to drain already admitted callbacks. Shutdown
-disables observations before attempting unregistration exactly once; failed
+the cleanup worker takes its write lock to drain already admitted callbacks and
+disable future observations before attempting unregistration exactly once. Failed
 unregistration produces a sanitized warning but cannot let a retained callback
 emit under a recreated receiver ID. Failed-start cleanup follows the same rule.
 The receiver MUST NOT create a private production SDK, replace global providers,
@@ -361,12 +366,39 @@ synchronous consumer callback finish. It retains attempts, outages, recoveries,
 normalized updates, consumer failures, any unresolved outage, and closed plus
 current outage duration as of the summary, including after successful recovery.
 A shutdown deadline MUST NOT produce a falsely completed summary. Shutdown
-cancels periodic reporting and unregisters the
-callback; if the run is still finishing, it owns its eventual summary and its
-factory cache entry remains reserved until completion. Factory requests for that
-reserved configuration and attempts to restart the stopping shared receiver MUST
-return an error rather than report a successful start of an inactive receiver.
-Stopped state cannot
+immediately requests input and periodic-reporting cancellation, then starts one
+once-owned asynchronous cleanup worker. Initiation MUST NOT wait for the
+callback lock, periodic reporter join, logger, or SDK Unregister. The worker
+drains and disables observations, joins periodic reporting, attempts Unregister,
+reports any failure, and closes `cleanupDone`, publishing its cleanup result.
+It then joins the input run and releases the factory reservation before closing
+`stopDone`. This is one worker per receiver, including after a timed-out wait;
+there is no second detached waiter, repeated cleanup worker, or retry queue.
+
+Every Shutdown caller waits for both the input run and cleanup completion using
+its own context. A deadline or cancellation MUST return the canonical context
+error promptly even when an admitted observer, another component's SDK callback,
+or periodic logging prevents cleanup progress. In particular, pinned SDK
+Unregister can wait on a pipeline mutex held across unrelated callbacks even
+when the F1 callback lock is free. No blocking cleanup is deferred past the
+context-aware wait. Shared `stopOnce` protects initiation only, not the caller's
+wait; an earlier caller's timeout MUST NOT become another caller's result.
+
+The atomic stopping guard applies as soon as cleanup begins, including failed
+Start. If the input run has finished but telemetry cleanup has not, the factory
+cache entry still remains reserved. Factory requests for that configuration and
+attempts to restart the stopping shared receiver MUST return
+`errReceiverStopping` until both lifetimes complete. Cleanup never shuts down the
+supplied provider or forces an in-flight callback to be abandoned. A dependency
+that remains blocked therefore retains one owned worker and its reservation,
+rather than permitting overlapping receiver observations. Cleanup completion
+is not input-run completion and cannot trigger the input summary.
+
+Failed Start uses the same cleanup owner and context-aware wait, preserving its
+original sanitized connection error together with any canonical cleanup-wait
+context error. A never-started receiver has no input-run join; a private receiver
+without a reporter has no telemetry cleanup. Both remain safe to shut down
+repeatedly. Stopped state cannot
 accept later input events. Summary totals remain available when internal metrics
 are disabled and do not depend on reader collection.
 
@@ -389,7 +421,19 @@ temporality, values, and attributes; two receiver IDs and three shared signal
 factories; repeated and multi-reader collection without effects; instrument
 and callback construction failures, including registration-plus-error;
 unregistration failure with retained callbacks, recreation, and timed-out
-shutdown. Pure and reporting tests MUST cover an outage long after startup,
+shutdown. Deterministic cleanup regressions MUST hold admitted observations
+across a short deadline, hold a real SDK callback from another component across
+Unregister, and block actual periodic output across Shutdown. They MUST verify
+prompt canonical context errors, stopping reservation after the run has already
+ended, singular cleanup with concurrent callers and never-started receivers,
+eventual recreation only after both completions, retained counter history, and
+no old gauge observations under the recreated ID. Failed-Start and partial
+registration cleanup deadlines MUST preserve their original causes and eventual
+cleanup reporting. Use synctest and explicit barriers without real-time sleeps;
+because mutex waits are not durably blocked in synctest, expired deadlines and
+live cancellation cover the real SDK mutex boundary, while channel-blocked
+unregister and periodic joins verify a deadline expiring during Shutdown.
+Pure and reporting tests MUST cover an outage long after startup,
 closed duration retained across recovery, and a later unresolved gap at summary.
 Actual pinned Collector integration MUST exercise Basic and None,
 real Prometheus exposition on private ports, the pipeline-telemetry gate,

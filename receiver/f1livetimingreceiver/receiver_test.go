@@ -713,13 +713,13 @@ func TestReceiverSanitizesHandshakeCloseOutcomes(t *testing.T) {
 					return 0
 				}
 				done := make(chan struct{})
-				r.operational, err = newOperationalReporter(settings)
+				r.operational, err = newOperationalReporter(t.Context(), settings)
 				if err != nil {
 					t.Fatal(err)
 				}
 				r.operational.start(host)
 				requireAwaitingInput(t, host)
-				defer r.operational.stop()
+				defer r.operational.stop(t.Context())
 				r.run(ctx, connection, done)
 				wantAttempts := []int{0, 1}
 				wantMessages := []string{outageMessage}

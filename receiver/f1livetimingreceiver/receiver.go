@@ -75,15 +75,14 @@ func (r *liveTimingReceiver) registerLogs(next consumer.Logs) {
 func (r *liveTimingReceiver) Start(ctx context.Context, host component.Host) error {
 	if r.operational == nil {
 		var err error
-		r.operational, err = newOperationalReporter(r.settings)
+		r.operational, err = newOperationalReporter(ctx, r.settings)
 		if err != nil {
 			return fmt.Errorf("create F1 internal telemetry: %w", err)
 		}
 	}
 	connection, err := r.connect(ctx)
 	if err != nil {
-		r.operational.stop()
-		return fmt.Errorf("connect to F1 live timing: %w", err)
+		return errors.Join(fmt.Errorf("connect to F1 live timing: %w", err), r.operational.stop(ctx))
 	}
 
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -193,22 +192,27 @@ func waitForReconnect(ctx context.Context, delay time.Duration) bool {
 }
 
 func (r *liveTimingReceiver) Shutdown(ctx context.Context) error {
-	if r.operational != nil {
-		defer r.operational.stop()
-	}
-	if r.cancel == nil {
-		return nil
-	}
-	cancel := r.cancel
-	done := r.done
-	cancel()
+	r.beginShutdown()
+	return r.waitShutdown(ctx)
+}
 
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+func (r *liveTimingReceiver) beginShutdown() {
+	if r.cancel != nil {
+		r.cancel()
 	}
+	if r.operational != nil {
+		r.operational.beginStop()
+	}
+}
+
+func (r *liveTimingReceiver) waitShutdown(ctx context.Context) error {
+	if err := waitForCompletion(ctx, r.done); err != nil {
+		return err
+	}
+	if r.operational != nil {
+		return waitForCompletion(ctx, r.operational.stopDone)
+	}
+	return ctx.Err()
 }
 
 type sharedReceiver struct {
@@ -219,7 +223,6 @@ type sharedReceiver struct {
 	startOnce sync.Once
 	startErr  error
 	stopOnce  sync.Once
-	stopErr   error
 	stopping  atomic.Bool
 }
 
@@ -230,9 +233,6 @@ func (r *sharedReceiver) Start(ctx context.Context, host component.Host) error {
 	r.status.register(host)
 	r.startOnce.Do(func() {
 		r.startErr = r.receiver.Start(ctx, &r.status)
-		if r.startErr != nil {
-			r.remove()
-		}
 	})
 	return r.startErr
 }
@@ -289,16 +289,9 @@ func (b *statusBroadcaster) GetExtensions() map[component.ID]component.Component
 func (r *sharedReceiver) Shutdown(ctx context.Context) error {
 	r.stopOnce.Do(func() {
 		r.stopping.Store(true)
-		r.stopErr = r.receiver.Shutdown(ctx)
-		if r.stopErr != nil && r.receiver.done != nil {
-			// Do not permit recreation to overlap a callback still completing its
-			// old run. The run owns its eventual summary; timeout is not completion.
-			go func() { <-r.receiver.done; r.remove() }()
-		} else {
-			r.remove()
-		}
+		r.receiver.beginShutdown()
 	})
-	return r.stopErr
+	return r.receiver.waitShutdown(ctx)
 }
 
 type receiverMap struct {
@@ -310,7 +303,7 @@ func newReceiverMap() *receiverMap {
 	return &receiverMap{receivers: make(map[*Config]*sharedReceiver)}
 }
 
-func (m *receiverMap) loadOrStore(config *Config, settings receiver.Settings) (*sharedReceiver, error) {
+func (m *receiverMap) loadOrStore(ctx context.Context, config *Config, settings receiver.Settings) (*sharedReceiver, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -321,7 +314,7 @@ func (m *receiverMap) loadOrStore(config *Config, settings receiver.Settings) (*
 		return existing, nil
 	}
 
-	operational, err := newOperationalReporter(settings)
+	operational, err := newOperationalReporter(ctx, settings)
 	if err != nil {
 		return nil, fmt.Errorf("create F1 internal telemetry: %w", err)
 	}
@@ -335,6 +328,13 @@ func (m *receiverMap) loadOrStore(config *Config, settings receiver.Settings) (*
 		if m.receivers[config] == shared {
 			delete(m.receivers, config)
 		}
+	}
+	operational.onStop = func() { shared.stopping.Store(true) }
+	operational.afterCleanup = func() {
+		if shared.receiver.done != nil {
+			<-shared.receiver.done
+		}
+		shared.remove()
 	}
 	m.receivers[config] = shared
 	return shared, nil

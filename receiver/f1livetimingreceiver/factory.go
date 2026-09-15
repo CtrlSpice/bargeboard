@@ -30,12 +30,12 @@ func createDefaultConfig() component.Config {
 }
 
 func (m *receiverMap) createTraces(
-	_ context.Context,
+	ctx context.Context,
 	settings receiver.Settings,
 	config component.Config,
 	next consumer.Traces,
 ) (receiver.Traces, error) {
-	shared, err := m.receiver(config, settings)
+	shared, err := m.receiver(ctx, config, settings)
 	if err != nil {
 		return nil, err
 	}
@@ -44,12 +44,12 @@ func (m *receiverMap) createTraces(
 }
 
 func (m *receiverMap) createMetrics(
-	_ context.Context,
+	ctx context.Context,
 	settings receiver.Settings,
 	config component.Config,
 	next consumer.Metrics,
 ) (receiver.Metrics, error) {
-	shared, err := m.receiver(config, settings)
+	shared, err := m.receiver(ctx, config, settings)
 	if err != nil {
 		return nil, err
 	}
@@ -58,12 +58,12 @@ func (m *receiverMap) createMetrics(
 }
 
 func (m *receiverMap) createLogs(
-	_ context.Context,
+	ctx context.Context,
 	settings receiver.Settings,
 	config component.Config,
 	next consumer.Logs,
 ) (receiver.Logs, error) {
-	shared, err := m.receiver(config, settings)
+	shared, err := m.receiver(ctx, config, settings)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +71,7 @@ func (m *receiverMap) createLogs(
 	return shared, nil
 }
 
-func (m *receiverMap) receiver(config component.Config, settings receiver.Settings) (*sharedReceiver, error) {
+func (m *receiverMap) receiver(ctx context.Context, config component.Config, settings receiver.Settings) (*sharedReceiver, error) {
 	cfg, ok := config.(*Config)
 	if !ok {
 		return nil, fmt.Errorf("invalid config type %T", config)
@@ -79,5 +79,5 @@ func (m *receiverMap) receiver(config component.Config, settings receiver.Settin
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	return m.loadOrStore(cfg, settings)
+	return m.loadOrStore(ctx, cfg, settings)
 }

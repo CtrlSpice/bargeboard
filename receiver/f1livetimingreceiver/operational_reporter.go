@@ -40,11 +40,16 @@ type operationalReporter struct {
 	callbackMu      sync.RWMutex
 	callbackEnabled bool
 	stopOnce        sync.Once
+	cleanupDone     chan struct{}
+	stopDone        chan struct{}
+	cleanupErr      error  // Published by closing cleanupDone.
+	onStop          func() // Nonblocking shared-receiver stopping guard.
+	afterCleanup    func() // Join the input run and release its factory reservation.
 	cancel          context.CancelFunc
 	done            chan struct{}
 }
 
-func newOperationalReporter(settings receiver.Settings) (*operationalReporter, error) {
+func newOperationalReporter(ctx context.Context, settings receiver.Settings) (*operationalReporter, error) {
 	// Match builtin OTLP's structural interface, without importing Collector internals.
 	provider := settings.MeterProvider
 	if injected, ok := provider.(interface {
@@ -58,7 +63,10 @@ func newOperationalReporter(settings receiver.Settings) (*operationalReporter, e
 		}
 		return core
 	}))
-	r := &operationalReporter{logger: logger, attrs: metric.WithAttributes(attribute.String("receiver", settings.ID.String()))}
+	r := &operationalReporter{
+		logger: logger, attrs: metric.WithAttributes(attribute.String("receiver", settings.ID.String())),
+		cleanupDone: make(chan struct{}), stopDone: make(chan struct{}),
+	}
 	r.state.Store(&operationalState{})
 	meter := provider.Meter(operationalScope)
 	for i, spec := range []struct{ name, unit, description string }{
@@ -122,10 +130,14 @@ func newOperationalReporter(settings receiver.Settings) (*operationalReporter, e
 	if err != nil {
 		// RegisterCallback may return both a live registration and an error.
 		// It has never been enabled, so even failed cleanup cannot emit gauges.
-		if r.registration != nil {
-			err = errors.Join(err, r.registration.Unregister())
+		waitErr := r.stop(ctx)
+		select {
+		case <-r.cleanupDone:
+			err = errors.Join(err, r.cleanupErr)
+		default:
+			// The once-owned worker still owns eventual cleanup and reporting.
 		}
-		return nil, err
+		return nil, errors.Join(err, waitErr)
 	}
 	r.callbackMu.Lock()
 	r.callbackEnabled = true
@@ -158,19 +170,57 @@ func (r *operationalReporter) start(host component.Host) {
 	}()
 }
 
-func (r *operationalReporter) stop() {
+// beginStop never waits on SDK code, observation locks, or the periodic reporter.
+// The single worker retains ownership through cleanup and the input-run join.
+func (r *operationalReporter) beginStop() <-chan struct{} {
 	r.stopOnce.Do(func() {
-		r.callbackMu.Lock()
-		r.callbackEnabled = false
-		r.callbackMu.Unlock()
+		if r.onStop != nil {
+			r.onStop()
+		}
 		if r.cancel != nil {
 			r.cancel()
-			<-r.done
 		}
-		if err := r.registration.Unregister(); err != nil {
-			r.logger.Warn("Live Timing internal metric callback cleanup failed")
-		}
+		go func() {
+			defer close(r.stopDone)
+			r.callbackMu.Lock()
+			r.callbackEnabled = false
+			r.callbackMu.Unlock()
+			if r.done != nil {
+				<-r.done
+			}
+			if r.registration != nil {
+				r.cleanupErr = r.registration.Unregister()
+				if r.cleanupErr != nil {
+					r.logger.Warn("Live Timing internal metric callback cleanup failed")
+				}
+			}
+			close(r.cleanupDone)
+			if r.afterCleanup != nil {
+				r.afterCleanup()
+			}
+		}()
 	})
+	return r.stopDone
+}
+
+func (r *operationalReporter) stop(ctx context.Context) error {
+	return waitForCompletion(ctx, r.beginStop())
+}
+
+func waitForCompletion(ctx context.Context, done <-chan struct{}) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if done == nil {
+		// An input run or reporter that never existed.
+		return nil
+	}
+	select {
+	case <-done:
+		return ctx.Err()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (r *operationalReporter) apply(in operationalInput) {

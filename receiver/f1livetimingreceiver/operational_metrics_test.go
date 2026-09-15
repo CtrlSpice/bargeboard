@@ -124,11 +124,11 @@ func TestOperationalMetricsLifecycle(t *testing.T) {
 		settings := receivertest.NewNopSettings(Type)
 		settings.ID = component.NewID(Type)
 		settings.MeterProvider = provider
-		r, err := newOperationalReporter(settings)
+		r, err := newOperationalReporter(t.Context(), settings)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer r.stop()
+		defer r.stop(t.Context())
 		want := zeroOperationalMetrics("f1livetiming")
 		check := func() {
 			t.Helper()
@@ -191,8 +191,8 @@ func TestOperationalMetricsLifecycle(t *testing.T) {
 		set("outage_duration", 7)
 		set("last_update_age", 7)
 		check() // terminal state remains observable and ages keep increasing
-		r.stop()
-		r.stop()
+		r.stop(t.Context())
+		r.stop(t.Context())
 		for name, m := range want {
 			if m.Kind != "Int64Counter" {
 				delete(want, name)
@@ -201,11 +201,11 @@ func TestOperationalMetricsLifecycle(t *testing.T) {
 		check()
 		// Same provider/ID retains synchronous counter history but starts fresh gauges
 		// and run totals, with no random run-ID dimension.
-		recreated, err := newOperationalReporter(settings)
+		recreated, err := newOperationalReporter(t.Context(), settings)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer recreated.stop()
+		defer recreated.stop(t.Context())
 		for name, m := range zeroOperationalMetrics("f1livetiming") {
 			if m.Kind != "Int64Counter" {
 				want[name] = m
@@ -358,7 +358,7 @@ func TestOperationalCallbackShutdownDrainsObservations(t *testing.T) {
 	provider := &failingMeterProvider{meter: failingMeter{unregisterErr: errors.New("synthetic retained callback")}}
 	settings := receivertest.NewNopSettings(Type)
 	settings.MeterProvider = provider
-	r, err := newOperationalReporter(settings)
+	r, err := newOperationalReporter(t.Context(), settings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,11 +371,11 @@ func TestOperationalCallbackShutdownDrainsObservations(t *testing.T) {
 		r.callbackMu.Unlock()
 		close(o.release)
 		<-collected
-		r.stop()
+		r.stop(t.Context())
 		t.Fatal("callback released its lifetime guard before observations finished")
 	}
 	stopped := make(chan struct{})
-	go func() { r.stop(); close(stopped) }()
+	go func() { r.stop(t.Context()); close(stopped) }()
 	close(o.release)
 	if err := <-collected; err != nil {
 		t.Fatal(err)
@@ -411,12 +411,12 @@ func TestOperationalPartialRegistrationUnwinds(t *testing.T) {
 			m := newReceiverMap()
 			cfg := createDefaultConfig().(*Config)
 			cfg.Auth.TokenFile = "unused-synthetic-path"
-			r, err := m.receiver(cfg, settings)
+			r, err := m.receiver(t.Context(), cfg, settings)
 			if r != nil || !errors.Is(err, registrationErr) || (cleanupFails && !errors.Is(err, cleanupErr)) || len(m.receivers) != 0 || provider.meter.unregisters != 1 {
 				t.Fatalf("partial construction = %v, %v; cache=%d unregisters=%d", r, err, len(m.receivers), provider.meter.unregisters)
 			}
 			provider.meter.partial, provider.meter.unregisterErr = false, nil
-			recreated, err := m.receiver(cfg, settings)
+			recreated, err := m.receiver(t.Context(), cfg, settings)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -441,23 +441,23 @@ func TestOperationalFailedUnregisterDisablesRetainedCallback(t *testing.T) {
 	settings := receivertest.NewNopSettings(Type)
 	core, logs := observer.New(zap.WarnLevel)
 	settings.Logger, settings.MeterProvider = zap.New(core), provider
-	r, err := newOperationalReporter(settings)
+	r, err := newOperationalReporter(t.Context(), settings)
 	if err != nil {
 		t.Fatal(err)
 	}
 	r.apply(operationalInput{event: opConnected})
 	r.apply(operationalInput{event: opBatch, snapshot: true, updates: 1})
-	r.stop()
-	r.stop()
+	r.stop(t.Context())
+	r.stop(t.Context())
 	if provider.meter.unregisters != 1 || logs.FilterMessage("Live Timing internal metric callback cleanup failed").Len() != 1 {
 		t.Fatal("cleanup not attempted and reported exactly once")
 	}
 	provider.meter.unregisterErr = nil
-	recreated, err := newOperationalReporter(settings)
+	recreated, err := newOperationalReporter(t.Context(), settings)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer recreated.stop()
+	defer recreated.stop(t.Context())
 	// Late run completion/publication must not re-enable the old callback.
 	r.apply(operationalInput{event: opFinish})
 	observed := &callbackObservations{}
@@ -510,20 +510,20 @@ func TestOperationalFailedUnregisterRecreationWithSDK(t *testing.T) {
 		provider := &retainingSDKProvider{MeterProvider: sdk, unregisterErr: errors.New("synthetic retained callback")}
 		settings := receivertest.NewNopSettings(Type)
 		settings.ID, settings.MeterProvider = component.NewID(Type), provider
-		old, err := newOperationalReporter(settings)
+		old, err := newOperationalReporter(t.Context(), settings)
 		if err != nil {
 			t.Fatal(err)
 		}
 		old.apply(operationalInput{event: opConnected})
 		old.apply(operationalInput{event: opBatch, snapshot: true, updates: 3})
 		_ = collectOperational(t, reader)
-		old.stop()
+		old.stop(t.Context())
 		provider.unregisterErr = nil
-		recreated, err := newOperationalReporter(settings)
+		recreated, err := newOperationalReporter(t.Context(), settings)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer recreated.stop()
+		defer recreated.stop(t.Context())
 		want := zeroOperationalMetrics("f1livetiming")
 		want[metricPrefix+"normalized_updates"].Points[0].Value = 3
 		for range 3 {
@@ -541,11 +541,11 @@ func TestOperationalMetricsConstructionAndFailedStartCleanup(t *testing.T) {
 	m := newReceiverMap()
 	cfg := createDefaultConfig().(*Config)
 	cfg.Auth.TokenFile = "unused-synthetic-path"
-	if r, err := m.receiver(cfg, settings); err == nil || r != nil || len(m.receivers) != 0 {
+	if r, err := m.receiver(t.Context(), cfg, settings); err == nil || r != nil || len(m.receivers) != 0 {
 		t.Fatal("failed construction cached a receiver")
 	}
 	provider.meter.fail = false
-	r, err := m.receiver(cfg, settings)
+	r, err := m.receiver(t.Context(), cfg, settings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -554,6 +554,7 @@ func TestOperationalMetricsConstructionAndFailedStartCleanup(t *testing.T) {
 	if err := r.Start(ctx, nil); err == nil {
 		t.Fatal("canceled start succeeded")
 	}
+	<-r.receiver.operational.stopDone
 	if len(m.receivers) != 0 || provider.meter.unregisters != 1 {
 		t.Fatal("failed start retained cache or callback")
 	}
@@ -577,11 +578,11 @@ func TestOperationalInstrumentErrorsDoNotCache(t *testing.T) {
 			m := newReceiverMap()
 			cfg := createDefaultConfig().(*Config)
 			cfg.Auth.TokenFile = "unused-synthetic-path"
-			if r, err := m.receiver(cfg, settings); r != nil || err == nil || len(m.receivers) != 0 || provider.meter.registrations != 0 {
+			if r, err := m.receiver(t.Context(), cfg, settings); r != nil || err == nil || len(m.receivers) != 0 || provider.meter.registrations != 0 {
 				t.Fatal("instrument failure cached a receiver or callback")
 			}
 			provider.meter.failInstrument = ""
-			r, err := m.receiver(cfg, settings)
+			r, err := m.receiver(t.Context(), cfg, settings)
 			if err != nil {
 				t.Fatal(err)
 			}
