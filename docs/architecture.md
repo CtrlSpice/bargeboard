@@ -62,6 +62,181 @@ as the behavior and its tests.
 - The historical TypeScript model MUST NOT be copied into Go without a fresh
   architecture decision.
 
+## Layered Unicode and Input Quality
+
+**Status: GREEN policy; FORMATION LAP implementation**
+
+The approved policy preserves independently useful input, never silently repairs
+identity, and makes resulting uncertainty visible. Blanket rejection of every
+payload containing an unpaired surrogate, followed by a permanent input stop,
+is **RED**. This section records the decision independently of conversation
+history; implementation progress is tracked in [agent-notes.md](agent-notes.md).
+
+### Encoding, Syntax, and Meaning
+
+Contributors MUST distinguish four checks:
+
+1. Raw UTF-8 byte validity.
+2. JSON grammar, including the shape of quoted strings and escapes.
+3. Unicode scalar validity of a string's original encoded token.
+4. The owning field's semantic grammar and dependencies.
+
+An ASCII token such as `"\uD800"` passes the first two checks but contains an
+unpaired surrogate. Go's JSON string decoding replaces it with U+FFFD. A string
+used for identity, routing, classification, or a typed measurement MUST be
+validated before that lossy conversion. Searching decoded strings for U+FFFD
+is forbidden: literal `"�"`, escaped `"\uFFFD"`, valid surrogate pairs such as
+`"\uD83D\uDE80"`, and literal backslash text such as `"\\uD800"` remain valid
+at the Unicode layer. Valid Unicode still has to satisfy the field's grammar.
+
+No new trimming, case folding, Unicode normalization, deletion of code units,
+double decoding, or guessed replacement is authorized for identity or routing.
+Exact payload bytes MUST be preserved during bounded processing, rather than
+rewriting JSON to remove bad members. Inflated payloads retain their inflated
+JSON bytes. This is not a durable raw-capture contract; storage, retention, and
+credential/media redaction for capture remain separate decisions.
+
+### Scope of a Malformed String
+
+| Affected information | Required disposition |
+|---|---|
+| Independently optional display text | Make that field unavailable for projection; retain independent measurements and records. |
+| Mandatory message or measurement field | Quarantine the smallest complete entry or coupled bundle that depends on it. Do not emit a partially trustworthy fact. |
+| Session or driver identity | Do not repair or guess. Apply the owning identity gate and suspend dependent output until authoritative source data restores availability; transport input continues. |
+| Unknown or unused payload content | Preserve the raw representation and report a bounded input-quality finding. Do not materialize repaired strings or invalidate unrelated known-topic state. |
+| Consumed protocol control or routing, including connection tokens, feed topics, and snapshot manifest identities | Require lossless decoding before use. Reject an untrustworthy envelope or connection attempt under the existing protocol failure policy. |
+
+The field's role determines its scope. In particular, `SessionInfo.Meeting.Name`
+participates in session classification and is not merely display text. A value
+such as `"Example \uD800 Grand Prix"` MUST NOT pass classification because a
+repaired string still has the Grand Prix suffix. `Type` and `Name` also belong
+to logical identity. `StartDate` contributes to both identity and schedule;
+`EndDate` and `GmtOffset` affect the independent schedule bundle. Existing
+route-only failure MUST NOT invalidate an otherwise coherent emitted identity.
+
+Required race-control text, semantic message references, frozen series names,
+media paths, and driver identifiers MUST NOT be treated as optional decoration.
+Their topic contracts govern entry coherence, identity consumption, quarantine,
+and recovery. This policy does not authorize placeholder race-control messages,
+revival of consumed TeamRadio entries, or a new source for repairing identity.
+
+Object keys MUST also be inspected before lossy decoding or map insertion.
+Strict control-object and manifest key policies continue to reject invalid
+identities. SessionInfo may ignore a malformed key proven unable to name a
+recognized ASCII member, with a finding; missing required members still make
+their bundle unresolved. Other indexed maps and deletion targets follow their
+existing source-specific key policies. A valid escaped spelling of a recognized
+key remains recognized, and equivalent decoded keys follow the owning duplicate
+policy. Unknown-member tolerance MUST NOT collapse malformed keys through U+FFFD.
+
+Descriptive server error text is not routing authority. Preserve the existing
+rejection and close/reconnect decisions using raw presence and string-shape
+information without printing or semantically using repaired error text.
+
+### Availability and Atomicity
+
+For a present Unicode-invalid value, deleting its member before reduction is
+forbidden: that turns an invalid update into an omission and can keep stale data
+looking current. The affected semantic boundary MUST become unavailable. Prior
+data may remain only as recovery state, not as refreshed or currently projectable
+data. An unrelated later patch MUST NOT restore that availability.
+
+Sparse absence, valid replacement, and explicit clear/delete retain their
+source-defined meanings. This Unicode rule does not redefine null handling or
+other invalid-input rules. A topic without an appropriate unavailable-state seam
+must acquire one in its own verified implementation slice before integrating
+this policy; the corruption must not be disguised as absence in the meantime.
+
+Snapshot atomicity remains mandatory. With coherent session identity, stage valid
+replacements and scoped semantic failures together, preserve the exact requested
+and present manifests, reconcile dependencies, and commit before deriving effects.
+Do not remove a failed topic from `presentTopics`, substitute an empty payload,
+or deliver valid siblings early. A Unicode finding inside a structurally valid
+payload is not automatically a protocol-normalization failure.
+
+An invalid logical SessionInfo still triggers the broader existing identity gate:
+session-dependent outcomes remain unbound, with prior state retained only for
+recovery. A later coherent descriptor cannot retroactively attribute intervening
+updates or make stale topic state projectable. Each affected topic retains its
+authoritative resynchronization requirements.
+
+For valid A, a valid-envelope B with malformed optional payload text, and valid C,
+preserve A, apply B's scoped semantic outcome, and continue to C. If B instead has
+an invalid protocol envelope or manifest, the existing record commitment and stop
+policy applies. Raw invalid UTF-8, malformed JSON grammar, decompression failures,
+and size limits retain their current normalization policy. This approval does
+not turn every `errInvalidLiveTimingData` into a retryable error.
+
+Recovery restores future observation; it MUST NOT manufacture missed events,
+laps, transitions, histogram observations, or deltas. Existing source-defined
+rules for incomplete records, consumed identities, snapshot seeding, and valid
+timing derivations remain authoritative.
+
+### Visibility and Implementation Boundaries
+
+The first runtime integration MUST distinguish an input-quality finding from an
+actual semantic disposition. Detecting a malformed payload string does not prove
+that a racing signal was dropped. Before reducers and projection are wired, report
+only what normalization and the implemented parser can establish.
+
+Use an initial bounded terminal warning, coalesce repeated findings with the
+existing 30-second reporting cadence, and retain affected-input totals in the
+run summary and Collector internal telemetry. Count affected normalized update
+envelopes rather than characters or imagined OTLP points. Keep those counts
+separate from transport outages and consumer failures. The implementation slice
+MUST document and test the exact instrument definitions; datapoint labels remain
+the configured receiver identity only. Broader validation-failure taxonomies and
+additional metric dimensions remain YELLOW.
+
+Notices MUST use bounded categories and describe the actual known action. They
+MUST NOT include offending text, raw keys, dynamic JSON paths, tokens, URLs, byte
+offsets, or payload hashes. A clean subsequent packet alone does not establish
+semantic recovery. The existing transport readiness indicators still do not
+certify complete racing data or successful export.
+
+The first approved implementation sequence is:
+
+1. Pure lossless JSON string-token and raw object-key handling, with scoped
+   control-field integration and unchanged opaque payload bytes.
+2. SessionInfo's demonstrated classification fix and bounded issue propagation,
+   using its existing independent identity, routing, schedule, and aggregate-gate
+   seams. Do not describe these helpers as wired racing projection.
+3. Nonfatal payload-quality reporting at the runtime input boundary, including
+   plain and inflated JSON, without changing existing normalized-input counts.
+
+Field/entry/topic integration for unimplemented reducers follows in their own
+slices. Broader reconnect/resubscription after protocol corruption, same-connection
+resubscription, whole-topic salvage of structurally invalid payloads, durable
+capture, and placeholder output require separate approval. They MUST NOT be
+introduced as incidental Unicode fixes.
+
+### Required Verification
+
+Pure tests MUST cover surrogate range boundaries, valid pairs, lone or mismatched
+halves, literal/escaped U+FFFD, escaped backslashes and quotes, mixed-case hex,
+invalid raw UTF-8 versus invalid escape grammar, and unchanged input bytes. Raw-key
+tests MUST cover valid escaped-equivalent names, duplicate policies, malformed-key
+repair collisions, and schema-specific unknown-key handling with bounded storage.
+
+Mutate attributable SessionInfo fixtures synthetically to verify the Grand Prix
+suffix regression, testing classifications and the 2020 exception, required versus
+ignored strings, independent route/schedule outcomes, full issue sets, and recovery
+state preservation. Invalid identity MUST block dependent admission without new
+generation/route identity, queued replay, or premature topic resynchronization.
+
+Protocol and normalization tests MUST separately prove A/B/C behavior for invalid
+control and nonfatal payload findings; unchanged plain/inflated payloads; existing
+manifest, size, compression, failed-read, and atomic snapshot guarantees; and
+descriptive error text that cannot change valid close/rejection controls. Future
+stateful tests MUST exercise valid value, invalid present update, unrelated omission,
+and valid recovery without stale resurrection, with topic-specific entry/event rules.
+
+Reporting tests MUST assert bounded warning cadence and complete counters/summaries,
+Basic/None behavior, fixed cardinality under many unique malformed values, no source
+text leakage, and no false outage, consumer failure, recovery, or export claim.
+All implementation slices retain the repository's required Go, receiver race,
+TypeScript, diff, CI, and independent-review gates.
+
 ## Current Grid
 
 The Go distribution currently compiles:
@@ -78,8 +253,10 @@ token file through `${env:HOME}/.config/bargeboard/f1tv-token`.
 The F1 Live Timing receiver currently authenticates, negotiates SignalR,
 subscribes, reconnects, decodes records, distinguishes feed updates from
 subscription snapshots, validates timestamps and JSON, and inflates compressed
-telemetry. Its reducer and OTLP projector are not implemented yet, so its
-normalized-batch consumer is currently a no-op. Input notices and Collector
+telemetry. Pure SessionInfo parsing, descriptor reduction, and aggregate identity
+gating are implemented but remain unwired. The multi-topic coordinator and OTLP
+projector are not implemented, so the normalized-batch consumer is currently a
+no-op. Input notices and Collector
 internal metrics are implemented under Live Timing Operational Visibility below;
 they MUST NOT imply racing projection or export. The transport shell retains its
 valid-batch backoff reset even if that consumer fails, emits one sanitized
@@ -4675,7 +4852,7 @@ remain permanent source-protocol failures.
 
 For complete hub records obtained from successful text WebSocket reads, the
 connection MUST frame, decode, and deliver one record before inspecting the next,
-in wire order. Given valid A, invalid B, and valid C, A remains delivered, B is
+in wire order. Given valid A, protocol-invalid B, and valid C, A remains delivered, B is
 rejected, and processing stops before C. This commitment boundary is one feed
 invocation or subscription completion: the receiver MUST normalize the whole
 batch before calling its normalized consumer. A snapshot with one invalid

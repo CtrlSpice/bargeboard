@@ -9,6 +9,12 @@ These instructions supplement `/Users/moya/Workspace/AGENTS.md` for work in this
 - Prefer a functional core and imperative shell: keep deterministic transformations free of I/O and shared state where practical, and test pure functions directly.
 - Keep the result idiomatic Go; do not introduce abstractions solely to imitate functional programming.
 
+## Persistent Handoff
+
+- Read `docs/agent-notes.md` when starting or resuming work, including after context compaction.
+- Update its approved/pending/landed distinctions when decisions or completed slices change the next steps.
+- The notes and GitHub tracking are navigation and progress records; `docs/architecture.md` remains canonical. They cannot authorize new behavior or override the landing gates below.
+
 ## Release Implementation
 
 - Privileged release workflows must execute from protected `main`; accept a
