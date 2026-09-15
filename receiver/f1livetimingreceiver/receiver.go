@@ -153,8 +153,11 @@ func (r *liveTimingReceiver) run(
 			if !waitForReconnect(ctx, time.Until(scheduled.retryAt)) || ctx.Err() != nil {
 				return
 			}
+			r.operational.apply(operationalInput{event: opTick})
+			if !r.operational.beginAttempt(ctx) {
+				return
+			}
 			attempt++
-			r.operational.apply(operationalInput{event: opAttempt})
 			next, err := r.connect(ctx)
 			if err == nil {
 				connection = next

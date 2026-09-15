@@ -228,6 +228,22 @@ func waitForCompletion(ctx context.Context, done <-chan struct{}) error {
 func (r *operationalReporter) apply(in operationalInput) operationalState {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.applyLocked(in)
+}
+
+// Commit only after pre-attempt output and any reporting-lock wait. opAttempt
+// has no notice: after this succeeds the run invokes connect without more output.
+func (r *operationalReporter) beginAttempt(ctx context.Context) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ctx.Err() != nil {
+		return false
+	}
+	r.applyLocked(operationalInput{event: opAttempt})
+	return true
+}
+
+func (r *operationalReporter) applyLocked(in operationalInput) operationalState {
 	in.at = time.Now()
 	old := *r.state.Load()
 	s, notice := reduceOperational(old, in)

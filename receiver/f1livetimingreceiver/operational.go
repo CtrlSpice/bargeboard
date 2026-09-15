@@ -107,7 +107,6 @@ func reduceOperational(s operationalState, in operationalInput) (operationalStat
 	case opAttempt:
 		s.attempts++
 		s.retryAt = time.Time{}
-		notice = noticeProgress
 	case opConsumerFailure:
 		s.consumerFailures++
 		if s.consumerFailures == 1 {

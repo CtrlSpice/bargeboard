@@ -277,6 +277,23 @@ fields describe remaining time at their observation sample, not at eventual
 log delivery. Starting a full delay after logging is rejected because it can
 report zero remaining seconds while another full backoff is still pending.
 
+Pre-attempt progress reporting MUST finish before the attempt is committed.
+Its `attempt` field counts previously committed calls, not the pending attempt.
+After that output, `beginAttempt(ctx)` acquires the reporting mutex and checks
+`ctx.Err()` inside the critical section. This is the attempt admission decision:
+cancellation during logging or while waiting for the mutex rejects admission
+without changing state or SDK counters. An outside-only cancellation check is
+insufficient because periodic reporting may delay acquisition of the mutex.
+
+An admitted `opAttempt` increments the run and SDK counters and clears `retryAt`
+without producing a notice. The adapter shares the existing locked publication
+path; only bounded SDK counter recording occurs during the commit. The run then
+increments its backoff index and invokes `connect` with no intervening terminal
+or status output. Cancellation racing after admission does not roll back the
+committed call: `connect` is invoked once and handles that context under the
+existing setup policy. Attempt counts describe calls, not successful network
+requests, established connections, or exported racing data.
+
 If input was ready before the outage, recovery MUST produce exactly one notice:
 `Live Timing updates resumed; missed updates may be unrecoverable`.
 If input has never met the readiness condition before this outage,
@@ -435,6 +452,18 @@ logging is blocked on either side of that deadline, without counting or making
 a canceled attempt. Use a controlled logger and synthetic transport; an explicit
 tick may replace periodic reporting in this test to avoid a synctest mutex wait
 while the schedule log is deliberately blocked.
+Additional production-run tests MUST block the second, pre-attempt progress
+notice after scheduling has already completed. Cancel both at eligibility and
+after the notice has remained blocked past that deadline, then verify zero
+attempt commits and reconnect requests, complete unchanged input counters, and
+an interruption summary without an attempt or recovery claim. A non-canceled
+slow notice MUST lead to exactly one committed call after release. Adapter tests
+MUST delay admission behind actual periodic output, cancel before releasing its
+mutex, and prove rejection preserves state, counters, and output. The context
+check must be verified inside the critical section, including an uncontended
+admission; successful commit must produce no terminal/status effects. Restoring
+count-before-log ordering or moving the final check outside the lock must fail
+these regressions.
 Barrier tests MUST reproduce concurrent late replay and broadcast ordering.
 ManualReader tests MUST assert complete metric names, scope, types, units,
 temporality, values, and attributes; two receiver IDs and three shared signal

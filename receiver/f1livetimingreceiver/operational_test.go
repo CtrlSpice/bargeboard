@@ -47,7 +47,7 @@ func TestOperationalLifecycle(t *testing.T) {
 	step(operationalInput{event: opTick}, noticeProgress)
 	at = at.Add(2 * time.Second)
 	want.retryAt, want.attempts = time.Time{}, 1
-	step(operationalInput{event: opAttempt}, noticeProgress)
+	step(operationalInput{event: opAttempt}, noticeNone)
 	step(operationalInput{event: opOutage}, noticeNone)
 	want.connection = true
 	step(operationalInput{event: opConnected}, noticeNone)

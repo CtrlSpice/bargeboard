@@ -395,7 +395,7 @@ func TestOperationalCanceledReconnectSetup(t *testing.T) {
 			t.Fatalf("setup state = %+v", state)
 		}
 		progress := logs.FilterMessageSnippet("reconnect progress").All()
-		if len(progress) != 2 || progress[0].ContextMap()["attempt"] != int64(0) || progress[1].ContextMap()["attempt"] != int64(1) {
+		if len(progress) != 2 || progress[0].ContextMap()["attempt"] != int64(0) || progress[1].ContextMap()["attempt"] != int64(0) {
 			t.Fatalf("attempt notices = %v", progress)
 		}
 		if err := r.Shutdown(t.Context()); err != nil {
@@ -571,7 +571,7 @@ func TestOperationalRetryDeadlineIncludesScheduleLogging(t *testing.T) {
 					t.Fatalf("attempt state = %+v", state)
 				}
 				elapsed := max(delay, test.blocked).Seconds()
-				wantProgress["attempt"], wantProgress["next_delay_seconds"] = int64(1), float64(0)
+				wantProgress["attempt"], wantProgress["next_delay_seconds"] = int64(0), float64(0)
 				wantProgress["run_elapsed_seconds"], wantProgress["outage_duration_seconds"], wantProgress["total_outage_duration_seconds"] = elapsed, elapsed, elapsed
 				checkProgress(progressIndex)
 			})
