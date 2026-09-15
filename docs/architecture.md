@@ -91,20 +91,137 @@ No Go OpenF1 receiver exists yet.
 
 **Status: GREEN**
 
-`bootstrapConnection` in `receiver/f1livetimingreceiver/bootstrap.go` owns the
-negotiation OPTIONS response and MUST close its body without reading or draining
-it. Only the response headers and status enter the pure
+The setup transport adapter closes rejected negotiation OPTIONS responses;
+`bootstrapConnection` in `receiver/f1livetimingreceiver/bootstrap.go` owns accepted
+responses. Both MUST close the body without reading or draining it. Only the
+response headers and status enter the pure
 `credentialsFromPreflight` decision. A non-empty `AWSALBCORS` cookie remains
-sufficient even on HTTP 405; without it, the existing invalid-server-data policy
-applies. Before accepting those headers, bootstrap MUST preserve an already
+sufficient even on HTTP 405. Without it, a 2xx response remains a permanent
+invalid-server-data failure; other statuses follow the HTTP setup table below.
+Before accepting those headers, bootstrap MUST preserve an already
 canceled or expired caller context as canonical `context.Canceled` or
 `context.DeadlineExceeded` and return no credentials. Custom cancellation causes
 MUST NOT escape through errors.
 
 The preflight body has no source authority. Draining it for connection reuse
 would make setup depend on irrelevant, potentially unbounded or stalled input.
-Body-close errors do not alter the header decision; this boundary introduces no
-body parsing, status-based retry policy, or additional retry owner.
+Body-close errors do not alter the header decision. This boundary introduces no
+body parsing or additional retry owner.
+
+#### HTTP Setup Failure Policy
+
+**Status: GREEN**
+
+The existing runtime reconnect loop MUST use this stage-specific policy after
+the authoritative preflight cookie decision:
+
+| Stage | Accepted HTTP response | Retry during reconnect | Stop input |
+|---|---|---|---|
+| Negotiation preflight, without affinity cookie | 2xx enters the existing missing-cookie protocol failure | 408, 429, 500, 502, 503, 504 | Every other status |
+| SignalR negotiation | 2xx enters bounded negotiation JSON validation | 408, 429, 500, 502, 503, 504 | Every other status, including 404 |
+| WebSocket upgrade | 101 enters WebSocket codec/handshake validation | 404, 408, 429, 500, 502, 503, 504 | Every other status |
+
+Network failures remain retryable with unlimited attempts and the existing
+exponential backoff. Every reconnect MUST perform fresh preflight and negotiation;
+an upgrade 404 can mean the negotiated connection token is no longer usable.
+Treating every 4xx as permanent is rejected for this reason and for 408/429.
+Retrying every unexpected status is also rejected: 401/403, redirects, and other
+unlisted statuses require intervention rather than an indefinite retry loop.
+Unknown internal stages MUST fail closed. These decisions do not introduce
+automatic startup retries: initial synchronous Start MUST return its first
+connection error and complete its existing context-aware telemetry cleanup.
+
+HTTP setup failures MUST remain distinct from invalid source protocol. They retain
+only a bounded known stage, numeric status, and optional process retry deadline,
+and MUST NOT wrap raw HTTP/WebSocket errors or retain URLs, bodies, credentials,
+headers, or raw `Retry-After` text. During runtime, a terminal HTTP setup failure
+MUST use the existing operational reporter to stop input and report
+`StatusPermanentError`, never Fatal. Both the terminal notice and status error MUST
+identify stage and numeric status and state that the Collector can still run and
+that Ctrl-C stops it. For 401/403 they MUST advise checking the F1 TV token and
+access, without inferring more from the status. Existing invalid-data and
+source-close handling remains distinct. No HTTP metric dimensions are added;
+attempts, outage episodes, summaries, and qualified recovery retain their existing
+meaning under Operational Visibility.
+
+Nonaccepted HTTP responses MUST be classified from status and headers before
+reading their irrelevant bodies, then closed without draining. Successful
+negotiation JSON MUST remain bounded to 64 KiB and validated. A 101 with a codec or
+WebSocket handshake validation failure remains a protocol failure, not an ordinary
+HTTP status failure.
+`http_runtime.go` MUST apply the stage-specific classification at the RoundTripper
+boundary for preflight, negotiation, and upgrade, before returning to
+`http.Client`. Go's HTTP client parses `Location` before calling `CheckRedirect`;
+an invalid redirect target otherwise hides the status and cookies behind a
+URL-parsing error. Relying on `CheckRedirect` alone is rejected because it can turn
+a terminal HTTP response into a transient network failure, or prevent an
+authoritative preflight cookie from being accepted.
+
+The adapter MUST close rejected responses unread and return typed stage/status
+and retry-deadline metadata. The existing `credentialsFromPreflight` decision
+remains authoritative before preflight status classification. For accepted
+cookie-bearing preflight 3xx responses, the adapter MUST return a response copy
+with a cloned header map that omits the irrelevant `Location` field. It MUST
+preserve the original status, cookies, body ownership, and every other response
+field; neither original response nor original headers may be mutated. Preflight
+acceptance MUST proceed to the configured negotiation endpoint, without parsing
+or following Location or invoking the redirect callback. Malformed, valid, and
+absent Location values therefore have identical policy outcomes. Replacing the
+status with 200 is rejected because that would rewrite source authority.
+
+Pinned `coder/websocket` v1.8.15 normally reads up to 1024 error-body bytes with a
+three-second cleanup timer. The same early adapter intercepts non-101 upgrade
+responses before that diagnostic read. Preflight, negotiation, and Dial errors
+MUST discard HTTP client's and Dial's URL-bearing wrappers using typed extraction.
+Successful 101 bodies retain their writable transport and the codec's validation
+and cleanup ownership. Canonical caller cancellation or an elapsed deadline takes
+precedence at header observation and on return from failed setup requests; custom
+context causes MUST NOT escape. Client copies retain timeout and other client
+settings, use the default transport when none is supplied, and preserve the
+existing nil-response/body guards. This adapter owns no new goroutine or retry
+lifecycle.
+
+Only retryable HTTP errors may supply a `Retry-After` floor. The pure parser in
+`http_policy.go` MUST accept nonnegative ASCII delta-seconds and the HTTP-date
+formats accepted by `http.ParseTime`, with surrounding HTTP space/tab OWS.
+Zero and past dates impose no extra delay. Malformed values, negative values, and
+durations that cannot be represented by `time.Duration` fall back to backoff;
+overflow MUST NOT wrap or saturate into an accepted delay. Deadline conversion
+MUST also reject a `time.Add` overflow that would discard an available monotonic
+reading, rather than silently using wall-clock scheduling. There is no additional
+business cap on a representable server hint. The parser takes an explicit observation
+time: dates use its wall time only to derive a duration, then `now.Add(delay)`
+converts that duration into a process deadline. Only the deadline is retained.
+The operational reducer MUST schedule
+`retryAt = max(scheduleNow.Add(existingBackoff), notBefore)` and return that exact
+deadline to the runtime wait. Cleanup and synchronous reporting spend the existing
+deadline; they MUST NOT restart the server delay. Long waits remain caller-
+cancelable and visible through the existing periodic progress notices. Neither
+hint parsing nor scheduling changes the backoff attempt index or batch-reset rule.
+
+Verification MUST compare the full stage/status matrix, cookie-first outcomes,
+bounded typed errors and formatting, supplied-time seconds/date parsing including
+obsolete HTTP forms, OWS, past values and overflow, and complete operational state.
+Synthetic bodies MUST prove zero reads and one close for rejected HTTP responses
+at every stage, including cancellation/deadline paths; accepted JSON bounds and
+101 protocol failures MUST remain covered. Synthetic `testing/synctest` runtime
+tests MUST start with healthy input, lose it, retry 503/429 and upgrade 404 through
+fresh setup, and establish recovery only after current-connection completion plus
+updates. They MUST assert exact attempt calls/indexes, shared countdown deadlines,
+periodic output, complete SDK metrics without new attributes, terminal 401/403
+stage/status and intervention guidance, no further terminal retries, initial
+Start failure cleanup without retries, cancellation during large waits or stalled
+notices, and cleanup/logging time spent before and past the original deadline.
+Redirect regressions MUST exercise OPTIONS and POST responses with malformed
+`Location` values (`%` and `http://[::1`), valid targets, and missing targets.
+Without an affinity cookie, 302 MUST yield the bare typed terminal stage/status,
+zero body reads, one close, and no redirect callback. Cookie-bearing OPTIONS MUST
+retain its original 3xx status and cookies and reach the original configured POST
+target, without mutating the supplied response or headers. Runtime regressions
+MUST verify complete terminal state, PermanentError metadata, summary fields,
+exact attempt counts, and no further retries. Header-observation cancellation and
+client timeouts MUST retain canonical context errors and body cleanup at all
+stages, independently of malformed Location or cookie acceptance.
 
 In `receiver/f1livetimingreceiver/connection.go`, SignalR handshake reads and
 writes and subscription writes MUST pass transport failures through
@@ -196,8 +313,8 @@ source-close, or callback outcome. A ping's own write deadline MUST retain its
 classification when its transport closure wakes the reader before the writer
 returns. Permanent invalid-data handling, source close without reconnect, failed
 WebSocket read byte discard, and the A-valid/B-invalid/C-valid commitment boundary
-remain as specified under State Reduction. This slice introduces no source
-mapping, operational metric, HTTP retry taxonomy, or Unicode acceptance policy.
+remain as specified under State Reduction. Liveness does not change source
+mapping or Unicode acceptance; HTTP setup follows the separate policy above.
 
 Verification MUST compare complete pure budget state at initial, remaining,
 reset, completion, and exact 15/30-second boundaries. Shell tests MUST use
@@ -263,10 +380,12 @@ or the just-closed gap on its recovery/first-data notice; it is zero otherwise.
 Total outage duration is the fixed-size cumulative duration of closed episodes
 plus any active gap as of that notice. Next delay is time remaining to a
 scheduled attempt, or zero when none is scheduled.
-Backoff remains unlimited, with its existing 30-second delay cap.
+Backoff remains unlimited, with its existing 30-second exponential-delay cap;
+a valid HTTP `Retry-After` floor may extend the scheduled wait beyond that cap.
 
 Each retry schedule MUST establish one process-monotonic deadline before its
-progress log: `retryAt = schedule observation time + retry delay`. The state,
+progress log: `retryAt = max(schedule observation time + backoff, HTTP notBefore)`.
+Without a server deadline, this is just the existing backoff. The state,
 countdown fields, and actual backoff wait MUST use that same deadline. The
 reporter returns its immutable published state; after synchronous reporting
 returns, the run waits only `time.Until(retryAt)`. Logging time spends the existing
@@ -304,8 +423,9 @@ complete coverage, replay of missed updates, downstream delivery, or racing
 export. Consumer failures count separately, retain a sanitized warning without
 the downstream error, and MUST NOT reconnect, create an input outage, or erase
 accepted input observations.
-Invalid server data and source close without reconnect stop reading as before;
-both MUST produce terminal-visible errors and `StatusPermanentError`, explicitly
+Invalid server data, terminal HTTP setup failures, and source close without
+reconnect stop reading; all MUST produce terminal-visible errors and
+`StatusPermanentError`, explicitly
 stating that the Collector can still run. They MUST NOT broadcast a fatal event.
 Initial synchronous Start failure still returns its error without entering the
 runtime reporting or retry lifecycle.

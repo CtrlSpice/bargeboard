@@ -112,15 +112,21 @@ func connectSignalR(ctx context.Context, client *http.Client, cfg *Config) (*sig
 	}
 
 	connection, response, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{
-		HTTPClient: client,
+		HTTPClient: setupHTTPClient(client, stageUpgrade),
 		HTTPHeader: credentials.headersWithCookies(upgradeCookies),
 	})
 	if err != nil {
+		if callerErr := setupContextError(ctx, time.Now()); callerErr != nil {
+			return nil, sanitizedTransportError(ctx, "SignalR WebSocket upgrade", callerErr)
+		}
+		if failure := asSetupHTTPError(err); failure != nil {
+			return nil, failure // Discard Dial's URL-bearing wrappers.
+		}
 		if response != nil {
 			if response.StatusCode == http.StatusSwitchingProtocols {
 				return nil, invalidLiveTimingData("SignalR WebSocket upgrade response is invalid")
 			}
-			return nil, fmt.Errorf("SignalR WebSocket upgrade returned HTTP %d", response.StatusCode)
+			return nil, setupHTTPFailure(stageUpgrade, response.StatusCode, "", time.Time{})
 		}
 		return nil, sanitizedTransportError(ctx, "SignalR WebSocket upgrade", err)
 	}
@@ -275,11 +281,21 @@ func negotiate(
 	request.Header = credentials.headersWithCookies(cookies)
 	request.Header.Set("Content-Type", "application/json")
 
-	response, err := client.Do(request)
+	response, err := setupHTTPClient(client, stageNegotiate).Do(request)
 	if err != nil {
+		if callerErr := setupContextError(ctx, time.Now()); callerErr != nil {
+			return negotiation{}, nil, sanitizedTransportError(ctx, "perform SignalR negotiation", callerErr)
+		}
+		if failure := asSetupHTTPError(err); failure != nil {
+			return negotiation{}, nil, failure // Discard http.Client's URL-bearing wrapper.
+		}
 		return negotiation{}, nil, sanitizedTransportError(ctx, "perform SignalR negotiation", err)
 	}
 	defer response.Body.Close()
+	now := time.Now()
+	if err := setupContextError(ctx, now); err != nil {
+		return negotiation{}, nil, sanitizedTransportError(ctx, "perform SignalR negotiation", err)
+	}
 
 	contents, err := io.ReadAll(io.LimitReader(response.Body, maxNegotiateResponseSize+1))
 	if err != nil {
@@ -290,10 +306,6 @@ func negotiate(
 			fmt.Sprintf("SignalR negotiation response exceeds %d bytes", maxNegotiateResponseSize),
 		)
 	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return negotiation{}, nil, fmt.Errorf("SignalR negotiation returned HTTP %d", response.StatusCode)
-	}
-
 	result, err := parseNegotiateResponse(contents)
 	if err != nil {
 		return negotiation{}, nil, err

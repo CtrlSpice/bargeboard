@@ -25,16 +25,20 @@ const (
 	opConsumerFailure
 	opInvalid
 	opSourceStopped
+	opSetupStopped
 	opFinish
 	opTick
 )
 
 type operationalInput struct {
-	event    operationalEvent
-	at       time.Time
-	delay    time.Duration
-	updates  int
-	snapshot bool
+	event      operationalEvent
+	at         time.Time
+	delay      time.Duration
+	notBefore  time.Time
+	setupStage setupStage
+	httpStatus int
+	updates    int
+	snapshot   bool
 }
 
 type operationalNotice uint8
@@ -50,6 +54,7 @@ const (
 	noticeConsumerFailure
 	noticeInvalid
 	noticeSourceStopped
+	noticeSetupStopped
 	noticeSummary
 	noticeStopped
 )
@@ -88,7 +93,7 @@ func reduceOperational(s operationalState, in operationalInput) (operationalStat
 			}
 			s.ready = true
 		}
-	case opOutage, opInvalid, opSourceStopped:
+	case opOutage, opInvalid, opSourceStopped, opSetupStopped:
 		s.connection, s.subscription, s.connectionData = false, false, false
 		s.retryAt = time.Time{}
 		if !s.outage {
@@ -100,9 +105,14 @@ func reduceOperational(s operationalState, in operationalInput) (operationalStat
 			s.stopped, notice = true, noticeInvalid
 		} else if in.event == opSourceStopped {
 			s.stopped, notice = true, noticeSourceStopped
+		} else if in.event == opSetupStopped {
+			s.stopped, notice = true, noticeSetupStopped
 		}
 	case opSchedule:
 		s.retryAt = in.at.Add(in.delay)
+		if in.notBefore.After(s.retryAt) {
+			s.retryAt = in.notBefore
+		}
 		notice = noticeProgress
 	case opAttempt:
 		s.attempts++

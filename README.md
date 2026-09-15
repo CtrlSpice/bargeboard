@@ -144,7 +144,18 @@ time is excluded from both server-wait budgets.
 
 Keep the Collector in the foreground to see its notices on stderr. **Press
 Ctrl-C to stop the Collector** and shut down gracefully. Retries have no attempt
-limit: the delay grows from one second to a maximum of 30 seconds.
+limit: exponential backoff grows from one second to 30 seconds. A valid
+`Retry-After` response header can extend a wait beyond 30 seconds; the countdown
+and actual wait share one deadline, and Ctrl-C still cancels the wait.
+
+During reconnect, network failures and HTTP 408, 429, 500, 502, 503, and 504 are
+retried. A WebSocket upgrade 404 also retries with fresh preflight and negotiation;
+a negotiation 404 stops input. HTTP 401/403, redirects, and all other unexpected
+statuses stop input with a terminal error identifying the setup stage and status.
+For 401/403, check your F1 TV token and access. Preflight remains cookie-first:
+a nonempty `AWSALBCORS` cookie is accepted even on 405; a successful response
+without that cookie is invalid source protocol. Initial connection errors still
+fail synchronous startup immediately, without a startup retry loop.
 
 Startup reports a recoverable not-receiving status until the validated
 subscription and first normalized updates arrive. Waiting alone does not count
@@ -167,8 +178,9 @@ reported every 30 process seconds.
 Pings and empty subscription snapshots do not count as updates. An idle feed
 does not create an additional failure or change the retry policy.
 
-Invalid source data or a server close that disallows reconnect stops the F1
-input and produces an error; the Collector can still run. The input run's final
+Invalid source data, a terminal HTTP setup failure, or a server close that
+disallows reconnect stops the F1 input and produces an error; the Collector can
+still run. The input run's final
 summary retains outage, recovery, reconnect-attempt, normalized-update, and
 consumer-failure totals, plus whether an outage remains unresolved. It also
 retains total outage duration, including any open gap as of that summary. These are

@@ -80,7 +80,11 @@ func TestBootstrapConnectionRejectsInvalidPreflight(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 				t.Fatalf("bootstrapConnection() error = %v, want containing %q", err, test.wantErr)
 			}
-			if !errors.Is(err, errInvalidLiveTimingData) {
+			if test.name == "failed response" {
+				if failure := asSetupHTTPError(err); failure == nil || *failure != (setupHTTPError{stage: stagePreflight, status: 401}) {
+					t.Errorf("bootstrapConnection() HTTP failure = %#v", failure)
+				}
+			} else if !errors.Is(err, errInvalidLiveTimingData) {
 				t.Errorf("bootstrapConnection() error does not wrap errInvalidLiveTimingData")
 			}
 		})
@@ -95,7 +99,7 @@ func TestBootstrapConnectionUsesOnlyPreflightHeaders(t *testing.T) {
 		wantErr    string
 	}{
 		{name: "cookie on 405", cookie: true},
-		{name: "missing cookie", wantErr: "invalid F1 live timing data: negotiation preflight returned HTTP 405 without AWSALBCORS cookie"},
+		{name: "missing cookie", wantErr: "negotiation preflight returned HTTP 405"},
 		{name: "canceled with cookie", cookie: true, contextErr: context.Canceled, wantErr: "perform negotiation preflight: context canceled"},
 		{name: "canceled without cookie", contextErr: context.Canceled, wantErr: "perform negotiation preflight: context canceled"},
 		{name: "deadline with cookie", cookie: true, contextErr: context.DeadlineExceeded, wantErr: "perform negotiation preflight: context deadline exceeded"},
@@ -136,9 +140,10 @@ func TestBootstrapConnectionUsesOnlyPreflightHeaders(t *testing.T) {
 				}
 				wantClass := test.contextErr
 				if wantClass == nil {
-					wantClass = errInvalidLiveTimingData
-				}
-				if !errors.Is(err, wantClass) {
+					if failure := asSetupHTTPError(err); failure == nil || *failure != (setupHTTPError{stage: stagePreflight, status: 405}) {
+						t.Errorf("HTTP failure = %#v", failure)
+					}
+				} else if !errors.Is(err, wantClass) {
 					t.Errorf("bootstrapConnection() error = %v, want classification %v", err, wantClass)
 				}
 			}
@@ -268,7 +273,11 @@ func TestCredentialsFromPreflight(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 					t.Fatalf("credentialsFromPreflight() error = %v, want containing %q", err, test.wantErr)
 				}
-				if !errors.Is(err, errInvalidLiveTimingData) {
+				if test.statusCode == http.StatusMethodNotAllowed {
+					if failure := asSetupHTTPError(err); failure == nil || *failure != (setupHTTPError{stage: stagePreflight, status: 405}) {
+						t.Errorf("HTTP failure = %#v", failure)
+					}
+				} else if !errors.Is(err, errInvalidLiveTimingData) {
 					t.Errorf("credentialsFromPreflight() error does not wrap errInvalidLiveTimingData")
 				}
 				return

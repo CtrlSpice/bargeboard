@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 const (
@@ -62,12 +63,19 @@ func bootstrapConnection(ctx context.Context, client *http.Client, cfg *Config) 
 		return connectionCredentials{}, fmt.Errorf("create negotiation preflight: %w", err)
 	}
 
-	response, err := client.Do(request)
+	response, err := setupHTTPClient(client, stagePreflight).Do(request)
 	if err != nil {
+		if callerErr := setupContextError(ctx, time.Now()); callerErr != nil {
+			return connectionCredentials{}, sanitizedTransportError(ctx, "perform negotiation preflight", callerErr)
+		}
+		if failure := asSetupHTTPError(err); failure != nil {
+			return connectionCredentials{}, failure // Discard http.Client's URL-bearing wrapper.
+		}
 		return connectionCredentials{}, sanitizedTransportError(ctx, "perform negotiation preflight", err)
 	}
 	defer response.Body.Close()
-	if err := ctx.Err(); err != nil {
+	now := time.Now()
+	if err := setupContextError(ctx, now); err != nil {
 		return connectionCredentials{}, sanitizedTransportError(ctx, "perform negotiation preflight", err)
 	}
 
@@ -112,9 +120,7 @@ func credentialsFromPreflight(
 		}
 	}
 	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
-		return connectionCredentials{}, invalidLiveTimingData(
-			fmt.Sprintf("negotiation preflight returned HTTP %d without %s cookie", statusCode, affinityCookieName),
-		)
+		return connectionCredentials{}, setupHTTPFailure(stagePreflight, statusCode, "", time.Time{})
 	}
 	return connectionCredentials{}, invalidLiveTimingData(
 		fmt.Sprintf("negotiation preflight did not return %s cookie", affinityCookieName),
