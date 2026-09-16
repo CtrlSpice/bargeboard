@@ -54,7 +54,9 @@ It groups the implementation work; issue text links back to the canonical policy
 | [U1 / #34](https://github.com/CtrlSpice/bargeboard/issues/34) | Landed in PR #38 | Lossless quoted-string tokens and source-order raw object-member visitor; scoped negotiation/capability/handshake/hub/feed/manifest controls; descriptive error metadata; opaque plain/inflated payload preservation. Focused scalar, duplicate/key/null/casing, setup prevention, A/B/C, snapshot atomicity, and runtime-stop regressions. |
 | [U2 / #35](https://github.com/CtrlSpice/bargeboard/issues/35) | Landed in PR #39 at `0284a6265049b99bdf382ed1ed76aefb3d30cfec` | SessionInfo lossless classification and raw-key isolation; bounded issue propagation through descriptor/batch/gate results; attributable synthetic malformed-name regressions; complete independent-bundle/gate state, depth, atomicity, occurrence-union, and no-replay tests. |
 | [U3 / #36](https://github.com/CtrlSpice/bargeboard/issues/36) | Landed in PR #40 at `7018b2a0e173b5619650498c71e6a7ef0636e0c9` | Nonfatal plain/inflated payload-quality findings after full batch validation; initial/coalesced warnings on the existing cadence; receiver-only affected-envelope counter and final summaries. Complete pure, byte/manifest/depth/limit, runtime-boundary, metrics-None, cardinality, and callback-summary oracles. |
-| F-SCAN | Approved; implemented, pending landing | Linear separator scanning across tiny fragments in runtime hub and handshake framing. Saved byte-relative cursors, deterministic scan-start and complete buffer-state oracles, bounds/ownership/failure checks, and a one-byte-fragment benchmark. |
+| F-SCAN | Landed in PR #41 at `2ca79a5a91e46ca6bda2576ddd74c40dd5403b46` | Linear separator scanning across tiny fragments in runtime hub and handshake framing. Saved byte-relative cursors, deterministic scan-start and complete buffer-state oracles, bounds/ownership/failure checks, and a one-byte-fragment benchmark. |
+| WS-ERROR | Upstream-first approved; local proposal prepared; dependency integration blocked | The pinned codec does not expose a typed identity for locally detected malformed frames. Prepare upstream classification support locally; public submission remains a separate decision. No dependency fork, replacement, or production classifier change is approved by this decision. |
+| N-CONTROL | Investigated; stricter acceptance policy pending approval | Duplicate negotiation controls can erase rejection or inherit capability fields. Exact-name, duplicate, and null rejection is a non-binding recommendation, not an amendment to U1's compatibility contract. |
 
 U1 landed in PR #38 at `e2afacb0d6071f0a8e6a5c790c9039a3f52070d2`, the base of
 the U2 implementation. U2 landed in PR #39 at `0284a62`, the U3 implementation base.
@@ -63,12 +65,71 @@ approved policy remains GREEN with partial FORMATION LAP implementation until th
 future topic integrations are complete. The production normalized consumer remains
 a no-op and SessionInfo helpers remain unwired.
 
+### WS-ERROR Resume Details
+
+- Raw-frame probes against `github.com/coder/websocket` v1.8.15 reproduced locally
+  detected RSV/opcode/control/sequence/close-payload/negative-length violations
+  returning ordinary errors, with `CloseStatus == -1`. The production receiver
+  retries such errors. Received protocol-close errors and the read-limit sentinel
+  remain distinguishable. Generic underlying I/O can have the same untyped error
+  shape, so classifying all unknown errors as terminal would break network retries.
+- At investigation time, v1.8.15 and upstream HEAD both identified
+  `9c8faadccd1b679e811a79ce506f8a10237251ad`; no released upgrade exposed the missing
+  identity. Observing outbound closes also misses negative lengths and failed
+  close writes. No message-text classifier or new wire parser was implemented.
+- The user chose upstream-first: prepare the patch and reproducer locally, then
+  continue negotiation cleanup while integration waits. Public submission is a
+  separate action. Bargeboard's dependency and runtime behavior remain unchanged.
+- The local proposal adds `errors.Is(err, websocket.ErrProtocolViolation)` at
+  existing native frame rejection sites. It preserves diagnostic text, wrapped
+  causes, received `CloseError`, `ErrMessageTooBig`, and generic I/O behavior.
+  It adds no validation rules. The sentinel is declared for js builds, whose
+  browser API cannot expose these frame errors.
+- This is an error-identity proposal, not a guarantee that every detected error
+  reaches the caller: upstream cancellation/closure precedence remains unchanged.
+  Independent review identified inflater buffering that invalidated an initial
+  stronger claim; that claim and the proposed cleanup-precedence change were
+  removed. Small-buffer shutdown/parity tests and a typed-cause wrapping oracle
+  cover both resolved findings. Follow-up review found no remaining issues.
+- Local materials are under `$TMPDIR/opencode/`: the complete six-file patch source
+  is `websocket-protocol-violation/`; the report, public reproducer, isolated Go
+  runner, and baseline overlays are in `websocket-protocol-violation-report/`.
+  Include untracked `errors_notjs.go`, `errors_notjs_test.go`, and
+  `protocol_error_test.go` when exporting the patch. These are local preparation
+  artifacts, not an upstream commit, submission, acceptance, or release.
+- Pinned Go 1.26.8 full upstream race tests, 20-repeat focused race tests, public
+  reproducer, native Staticcheck, and supplementary vet passed. Baseline probes
+  fail the new classification assertions while cancellation/closure parity passes.
+  Native unqualified vet has the same ARM64 assembly declaration failure on base
+  and candidate; Autobahn could not run without the Docker daemon. js/Linux
+  compilation is not execution evidence. The local report records exact commands
+  and verification scope; resolve remaining upstream checks before submission.
+
+### N-CONTROL Pending Decision
+
+The current U1 compatibility behavior remains authoritative. Investigation found
+that ordered duplicate assignments can clear a nonempty error/redirect control;
+reused capability slice elements can combine WebSockets from one array with Text
+from another. Existing synthetic acceptance tests in `unicode_controls_test.go`
+exercise related cases. These are hardening candidates, not U1 regressions.
+
+The non-binding recommendation is to reject duplicate known controls, noncanonical
+case aliases, and present null controls/array entries at the response and capability
+levels. Preserve unknown extensions, escaped canonical names, omitted-version v0,
+v0/v1 identity selection, and existing final capability checks. The version-tagged
+ASP.NET Core v8.0.0 `TransportProtocols.md` and `NegotiateProtocol.cs` support names
+and response structure, but do not mandate blanket duplicate rejection. Approval
+must settle the stricter policy before implementation. Its tests must cover
+rejection erasure, capability inheritance, duplicate/case/null matrices, preserved
+extensions and Unicode/depth behavior, complete zero-on-error results, input
+ownership, and prevention of WebSocket upgrade after invalid negotiation.
+
 ### F-SCAN Resume Details
 
 - The user approved reproducing incomplete-prefix rescanning, retaining scan
   progress for linear work, and covering both runtime hub and handshake framing.
-  Implementation is on `fix/linear-fragment-scanning` at base
-  `7018b2a0e173b5619650498c71e6a7ef0636e0c9`; landing remains pending.
+  Implementation landed in PR #41 at `2ca79a5`, based on
+  `7018b2a0e173b5619650498c71e6a7ef0636e0c9`.
 - `splitFirstRecord` accepts the already-scanned prefix length. The hub buffer
   retains that cursor across incomplete checks, compaction, and append growth;
   consuming a record resets it for the next uninspected tail. Handshake reads keep
@@ -92,7 +153,8 @@ a no-op and SessionInfo helpers remain unwired.
   `go test ./receiver/f1livetimingreceiver -run '^$' -bench '^BenchmarkHubRecordBufferTinyFragments$' -benchtime=100ms -count=1`,
   and `go test -race -count=1 ./receiver/f1livetimingreceiver`.
   `npm run typecheck`, the full `make check`, and `git diff --check` also passed.
-  Final independent reviews, CI, and landing remain governed by `AGENTS.md`.
+  Three independent reviews and exact-candidate CI passed; PR #41 records the
+  final candidate and landing evidence.
 
 ### U3 Resume Details
 
@@ -240,10 +302,9 @@ The broader adversarial cleanup sequence is approved: release integrity, active 
 transport, retained TypeScript correctness, then test/seam/documentation cleanup.
 Research findings still need adjudication and focused verification in their slices.
 
-- Go transport: incomplete-prefix rescanning is implemented in F-SCAN above and
-  pending landing. Remaining audits: distinguish codec-detected malformed WebSocket
-  framing from network failures; tighten negotiation duplicate,
-  casing, and null handling; require a nonempty endpoint hostname.
+- Go transport: F-SCAN landed; WS-ERROR awaits upstream classification support;
+  N-CONTROL awaits a stricter negotiation policy decision. Endpoint hostname
+  validation remains an independent audit item.
 - Pure-test oracles: complete attributable CarData and remaining reducer/gate
   assertions. Keep the existing value-state functional core and idiomatic Go.
 - TypeScript reference: lap/sector ordering and completion, replay termination,
