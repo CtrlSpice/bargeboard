@@ -41,8 +41,7 @@ exact-candidate CI, including JavaScript CodeQL for the retained CJS, passed.
 
 ### CAR-ORACLE — Complete attributable normalization evidence
 
-**Approved test cleanup; implemented on `test/complete-cardata-oracle`; pending
-landing.**
+**Landed in PR #47 at `462cdba8740241a25569ada34a5b5854ba5b3a06`.**
 The pre-existing inline first 2025 British Grand Prix race `CarData.z` token is now
 paired with pinned offline metadata: its direct source URL, archive prefix,
 compressed-token SHA-256, expected 2,380-byte inflation length and SHA-256, and an
@@ -50,6 +49,16 @@ explicit synthetic feed-wrapper boundary. The pure normalization test compares t
 complete topic, payload byte identity, timestamp, and source, preserves the complete
 input, and proves output storage does not alias the compressed input. It does not
 bind channel semantics or change production.
+
+### FEED-ORDER-ORACLE — Complete SessionInfo feed-order results
+
+**Approved test cleanup; implemented on `test/complete-feed-order-oracle`; pending
+landing.** The strict wire-order test now compares every meaningful descriptor
+reduction field for both A-then-B and B-then-A delivery, including complete
+identity, routing, schedule, synchronization, generation, route epoch, retired
+tuple order, disposition, route transition, and issues. Reversed source timestamps
+continue to prove that feed callbacks are not globally time-sorted. Production and
+the canonical feed-order contract are unchanged.
 
 ### U-POLICY — Layered Unicode and input quality
 
@@ -103,7 +112,8 @@ It groups the implementation work; issue text links back to the canonical policy
 | N-CONTROL | Landed in PR #43 at `6d2ce49b8fe1512699dd612db07c12256ee422ed` | Negotiation-only duplicate-known, case-alias, and present-null/entry rejection supersedes U1's negotiation compatibility policy. Fresh atomic capability replacement prevents inheritance. Attributed protocol examples and synthetic regression/matrix/setup oracles accompany the canonical update. |
 | H-HOST | Landed in PR #44 at `3ba7b9713ec06dba261a8792af9715785becb50d` | Configured endpoints require a nonempty parsed hostname, with the existing bounded field error. Pure helper/configuration and all-signal factory regressions preserve full-authority/security/loopback rules and accepted nonempty-host syntax. |
 | DEL-TS | Landed in PR #45 at `2290ca4c45123d492a367d83d9de1df6b1c6855f` | Deleted the obsolete replay implementation and package surface; retained only the Node-built-in release CJS boundary and future Go replay/OpenF1 architecture. No compatibility or cache migration. |
-| CAR-ORACLE | Approved test cleanup; implemented on `test/complete-cardata-oracle`; pending landing | Pin the attributable first 2025 British GP race `CarData.z` record and assert the complete pure normalization result, input preservation, and detached output storage without binding YELLOW channel semantics. |
+| CAR-ORACLE | Landed in PR #47 at `462cdba8740241a25569ada34a5b5854ba5b3a06` | Attribute the pre-existing first 2025 British GP race `CarData.z` token and assert the complete pure normalization result, input preservation, and detached output storage without binding YELLOW channel semantics. |
+| FEED-ORDER-ORACLE | Approved test cleanup; implemented on `test/complete-feed-order-oracle`; pending landing | Assert complete SessionInfo descriptor reductions in both feed delivery orders while reversed timestamps prove strict callback order. |
 
 U1 landed in PR #38 at `e2afacb0d6071f0a8e6a5c790c9039a3f52070d2`, the base of
 the U2 implementation. U2 landed in PR #39 at `0284a62`, the U3 implementation base.
@@ -424,8 +434,9 @@ adjudication and focused verification in their slices.
 - Go transport: F-SCAN, N-CONTROL, and H-HOST landed; WS-ERROR awaits upstream
   classification support. The separate upstream ARM64 correction is implemented
   and reviewed locally; public submission remains unapproved.
-- Pure-test oracles: CAR-ORACLE is implemented pending landing; remaining
-  reducer/gate assertions follow. Keep the existing value-state functional core
+- Pure-test oracles: CAR-ORACLE landed; FEED-ORDER-ORACLE is implemented pending
+  landing. Counter and retirement-boundary candidates remain research findings
+  that require focused adjudication. Keep the existing value-state functional core
   and idiomatic Go.
 - Verification engineering: supplied-evidence SPDX tests, structural workflow-gate
   tests, and demonstrated redundant work/dead scaffolding. Preserve independent
