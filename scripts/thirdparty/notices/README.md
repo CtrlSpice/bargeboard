@@ -179,8 +179,8 @@ Focused tests verify full-byte selection in synthetic Go syntax, literal-string
 exclusion, malformed input, normalization, module/source scope, exact supplemental
 associations, changed/additional terms, MPL source enforcement, material bounds,
 and a complete deterministic render oracle. Required repository checks are
-`make check`, `go test -race -count=1 ./scripts/thirdparty`,
-`npm run typecheck`, and `git diff --check`.
+`make check`, `go test -race -count=1 ./scripts/thirdparty`, and
+`git diff --check`.
 
 ## Complete output delta
 
