@@ -476,87 +476,116 @@ func TestReduceSessionInfoTokenBoundaries(t *testing.T) {
 	})
 }
 
-func TestReduceSessionInfoRetainsExactly256LogicalTuples(t *testing.T) {
-	const currentIndex = sessionInfoRetiredTupleLimit
-	var state sessionInfoState
-	for index := 0; index <= currentIndex; index++ {
+func TestReduceSessionInfoRetirementHorizon(t *testing.T) {
+	const (
+		retirementHorizon = 256
+		finalGeneration   = 2*retirementHorizon + 17
+	)
+	assertStale := func(state sessionInfoState, index int) {
+		t.Helper()
+		before := state
 		got := reduceSessionInfo(state, reducerTestIndexedDescriptor(index))
-		wantDisposition := sessionInfoDispositionReplaced
-		if index == 0 {
-			wantDisposition = sessionInfoDispositionInstalled
+		wantState := state
+		wantState.synchronized = false
+		assertSessionInfoReduction(t, got, sessionInfoReduction{
+			state:       wantState,
+			disposition: sessionInfoDispositionStale,
+		})
+		if state != before {
+			t.Fatalf("retained tuple %d replay mutated input state", index)
 		}
-		if got.disposition != wantDisposition {
-			t.Fatalf("descriptor %d disposition = %d, want %d", index, got.disposition, wantDisposition)
+	}
+
+	var state sessionInfoState
+	for generation := 1; generation <= finalGeneration; generation++ {
+		index := generation - 1
+		before := state
+		got := reduceSessionInfo(state, reducerTestIndexedDescriptor(index))
+		disposition := sessionInfoDispositionReplaced
+		if generation == 1 {
+			disposition = sessionInfoDispositionInstalled
+		}
+		firstRetired := index - retirementHorizon
+		if firstRetired < 0 {
+			firstRetired = 0
+		}
+		want := sessionInfoReduction{
+			state: sessionInfoState{
+				identity:          reducerTestIndexedIdentity(index),
+				identityAvailable: true,
+				synchronized:      true,
+				routeKey:          99,
+				routeAvailable:    true,
+				schedule:          reducerTestSchedule(1),
+				scheduleAvailable: true,
+				generation:        sessionInfoGeneration(generation),
+			},
+			disposition: disposition,
+		}
+		assertSessionInfoReductionWithRetiredRange(t, got, want, firstRetired, index-1)
+		if state != before {
+			t.Fatalf("generation %d mutated input state", generation)
 		}
 		state = got.state
-	}
 
-	if state.generation != currentIndex+1 || state.identity != reducerTestIndexedIdentity(currentIndex) {
-		t.Fatalf("current generation = %d, identity = %#v", state.generation, state.identity)
-	}
-	assertRetiredTupleRange(t, state.retired, 0, sessionInfoRetiredTupleLimit-1)
-
-	stale := reduceSessionInfo(state, reducerTestIndexedDescriptor(0))
-	wantStaleState := state
-	wantStaleState.synchronized = false
-	assertSessionInfoReduction(t, stale, sessionInfoReduction{
-		state:       wantStaleState,
-		disposition: sessionInfoDispositionStale,
-	})
-
-	const nextIndex = sessionInfoRetiredTupleLimit + 1
-	replaced := reduceSessionInfo(state, reducerTestIndexedDescriptor(nextIndex))
-	if replaced.disposition != sessionInfoDispositionReplaced || replaced.state.generation != nextIndex+1 {
-		t.Fatalf("257th retirement = %#v", replaced)
-	}
-	assertRetiredTupleRange(t, replaced.state.retired, 1, sessionInfoRetiredTupleLimit)
-	newestStale := reduceSessionInfo(replaced.state, reducerTestIndexedDescriptor(sessionInfoRetiredTupleLimit))
-	wantNewestStaleState := replaced.state
-	wantNewestStaleState.synchronized = false
-	assertSessionInfoReduction(t, newestStale, sessionInfoReduction{
-		state:       wantNewestStaleState,
-		disposition: sessionInfoDispositionStale,
-	})
-
-	replayed := reduceSessionInfo(replaced.state, reducerTestIndexedDescriptor(0))
-	if replayed.disposition != sessionInfoDispositionReplaced || replayed.state.generation != nextIndex+2 ||
-		replayed.state.identity != reducerTestIndexedIdentity(0) {
-		t.Fatalf("evicted tuple replay = disposition %d, generation %d, identity %#v",
-			replayed.disposition, replayed.state.generation, replayed.state.identity)
-	}
-	assertRetiredTupleRange(t, replayed.state.retired, 2, nextIndex)
-
-	fresh := reduceSessionInfo(sessionInfoState{}, reducerTestIndexedDescriptor(0))
-	if fresh.disposition != sessionInfoDispositionInstalled || fresh.state.generation != 1 {
-		t.Fatalf("fresh state replay = %#v", fresh)
-	}
-}
-
-func TestReduceSessionInfoRetirementCursorWraps(t *testing.T) {
-	const lastIndex = 2*sessionInfoRetiredTupleLimit + 17
-	var state sessionInfoState
-	for index := 0; index <= lastIndex; index++ {
-		state = reduceSessionInfo(state, reducerTestIndexedDescriptor(index)).state
-	}
-	firstRetained := lastIndex - sessionInfoRetiredTupleLimit
-	assertRetiredTupleRange(t, state.retired, firstRetained, lastIndex-1)
-
-	for _, index := range []int{firstRetained, lastIndex - 1} {
-		got := reduceSessionInfo(state, reducerTestIndexedDescriptor(index))
-		if got.disposition != sessionInfoDispositionStale || got.state.identity != state.identity ||
-			got.state.generation != state.generation {
-			t.Fatalf("retained tuple %d replay = disposition %d, generation %d, identity %#v",
-				index, got.disposition, got.state.generation, got.state.identity)
+		switch generation {
+		case 257:
+			assertStale(state, 0)
+		case 258:
+			assertStale(state, 256)
+		case 513:
+			assertStale(state, 511)
 		}
 	}
 
-	evicted := reduceSessionInfo(state, reducerTestIndexedDescriptor(firstRetained-1))
-	if evicted.disposition != sessionInfoDispositionReplaced ||
-		evicted.state.identity != reducerTestIndexedIdentity(firstRetained-1) ||
-		evicted.state.generation != state.generation+1 {
-		t.Fatalf("evicted tuple replay = disposition %d, generation %d, identity %#v",
-			evicted.disposition, evicted.state.generation, evicted.state.identity)
+	firstRetired := finalGeneration - 1 - retirementHorizon
+	for index := firstRetired; index < finalGeneration-1; index++ {
+		assertStale(state, index)
 	}
+
+	evictedIndex := firstRetired - 1
+	before := state
+	replayed := reduceSessionInfo(state, reducerTestIndexedDescriptor(evictedIndex))
+	wantReplay := sessionInfoReduction{
+		state: sessionInfoState{
+			identity:          reducerTestIndexedIdentity(evictedIndex),
+			identityAvailable: true,
+			synchronized:      true,
+			routeKey:          99,
+			routeAvailable:    true,
+			schedule:          reducerTestSchedule(1),
+			scheduleAvailable: true,
+			generation:        finalGeneration + 1,
+		},
+		disposition: sessionInfoDispositionReplaced,
+	}
+	assertSessionInfoReductionWithRetiredRange(
+		t,
+		replayed,
+		wantReplay,
+		firstRetired+1,
+		finalGeneration-1,
+	)
+	if state != before {
+		t.Fatal("evicted tuple replay mutated input state")
+	}
+
+	resetIndex := finalGeneration - 2
+	fresh := reduceSessionInfo(sessionInfoState{}, reducerTestIndexedDescriptor(resetIndex))
+	wantFresh := sessionInfoReduction{
+		state: sessionInfoState{
+			identity:          reducerTestIndexedIdentity(resetIndex),
+			identityAvailable: true,
+			synchronized:      true,
+			routeKey:          99,
+			routeAvailable:    true,
+			schedule:          reducerTestSchedule(1),
+			scheduleAvailable: true,
+			generation:        1,
+		},
+		disposition: sessionInfoDispositionInstalled,
+	}
+	assertSessionInfoReductionWithRetiredRange(t, fresh, wantFresh, 0, -1)
 }
 
 func reducerTestIdentity(
@@ -630,6 +659,20 @@ func assertSessionInfoReduction(t *testing.T, got, want sessionInfoReduction) {
 	if !slices.Equal(gotRetired, wantRetired) {
 		t.Fatalf("retired tuples = %#v, want %#v", gotRetired, wantRetired)
 	}
+}
+
+func assertSessionInfoReductionWithRetiredRange(
+	t *testing.T,
+	got, want sessionInfoReduction,
+	firstRetired, lastRetired int,
+) {
+	t.Helper()
+	retired := got.state.retired
+	got.state.retired = sessionInfoRetiredTuples{}
+	if got != want {
+		t.Fatalf("reduction = %#v, want %#v", got, want)
+	}
+	assertRetiredTupleRange(t, retired, firstRetired, lastRetired)
 }
 
 func activeRetiredTuples(retired sessionInfoRetiredTuples) []sessionInfoLogicalTuple {
