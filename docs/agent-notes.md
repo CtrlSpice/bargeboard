@@ -71,6 +71,16 @@ token. Generation replacement still resets routing epoch, and new-generation
 replacement remains independent of an exhausted prior-generation route epoch.
 Production and the canonical no-wrap contract are unchanged.
 
+### RETIREMENT-HORIZON-ORACLE — Complete bounded replay defense
+
+**Approved test cleanup; implemented on `test/complete-retirement-horizon-oracle`;
+pending landing.** A model-backed pure reducer test owns the canonical 256-tuple
+horizon independently of the production constant and compares every meaningful
+reduction field through 529 generations. It probes all retained tuples after the
+retirement cursor wraps, then proves complete adjacent-eviction replay and
+process-reset acceptance. Production and the canonical FIFO contract are
+unchanged.
+
 ### U-POLICY — Layered Unicode and input quality
 
 **Approved policy; U1/U2/U3 landed.** The user approved the strategy and
@@ -126,6 +136,7 @@ It groups the implementation work; issue text links back to the canonical policy
 | CAR-ORACLE | Landed in PR #47 at `462cdba8740241a25569ada34a5b5854ba5b3a06` | Attribute the pre-existing first 2025 British GP race `CarData.z` token and assert the complete pure normalization result, input preservation, and detached output storage without binding YELLOW channel semantics. |
 | FEED-ORDER-ORACLE | Landed in PR #49 at `97424b134b81886bd116ec365ec46e28bf244ff7` | Assert complete SessionInfo descriptor reductions in both feed delivery orders while reversed timestamps prove strict callback order. |
 | TOKEN-BOUNDARY-ORACLE | Landed in PR #50 at `f7acdb62f8be32349896920f3315c364c88044d4` | Assert complete generation and routing-epoch results at the final legal increment, exhaustion, recovery, and generation replacement boundaries. |
+| RETIREMENT-HORIZON-ORACLE | Approved test cleanup; implemented on `test/complete-retirement-horizon-oracle`; pending landing | Independently bind the exact 256-tuple replay-defense horizon and assert complete reductions, membership, eviction, cursor-wrap, and process-reset behavior. |
 
 U1 landed in PR #38 at `e2afacb0d6071f0a8e6a5c790c9039a3f52070d2`, the base of
 the U2 implementation. U2 landed in PR #39 at `0284a62`, the U3 implementation base.
@@ -447,9 +458,8 @@ adjudication and focused verification in their slices.
   classification support. The separate upstream ARM64 correction is implemented
   and reviewed locally; public submission remains unapproved.
 - Pure-test oracles: CAR-ORACLE, FEED-ORDER-ORACLE, and TOKEN-BOUNDARY-ORACLE
-  landed. Retirement-horizon completeness remains a research finding that
-  requires focused adjudication. Keep the existing value-state functional core
-  and idiomatic Go.
+  landed; RETIREMENT-HORIZON-ORACLE is implemented pending landing. Keep the
+  existing value-state functional core and idiomatic Go.
 - Verification engineering: supplied-evidence SPDX tests, structural workflow-gate
   tests, and demonstrated redundant work/dead scaffolding. Preserve independent
   generator/verifier cross-checks and all landing gates.
