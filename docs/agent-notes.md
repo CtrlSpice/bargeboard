@@ -56,7 +56,8 @@ It groups the implementation work; issue text links back to the canonical policy
 | [U3 / #36](https://github.com/CtrlSpice/bargeboard/issues/36) | Landed in PR #40 at `7018b2a0e173b5619650498c71e6a7ef0636e0c9` | Nonfatal plain/inflated payload-quality findings after full batch validation; initial/coalesced warnings on the existing cadence; receiver-only affected-envelope counter and final summaries. Complete pure, byte/manifest/depth/limit, runtime-boundary, metrics-None, cardinality, and callback-summary oracles. |
 | F-SCAN | Landed in PR #41 at `2ca79a5a91e46ca6bda2576ddd74c40dd5403b46` | Linear separator scanning across tiny fragments in runtime hub and handshake framing. Saved byte-relative cursors, deterministic scan-start and complete buffer-state oracles, bounds/ownership/failure checks, and a one-byte-fragment benchmark. |
 | WS-ERROR | Upstream-first approved; local proposal prepared; dependency integration blocked | The pinned codec does not expose a typed identity for locally detected malformed frames. Prepare upstream classification support locally; public submission remains a separate decision. No dependency fork, replacement, or production classifier change is approved by this decision. |
-| N-CONTROL | Approved; implemented locally; pending landing | Negotiation-only duplicate-known, case-alias, and present-null/entry rejection supersedes U1's negotiation compatibility policy. Fresh atomic capability replacement prevents inheritance. Attributed protocol examples and synthetic regression/matrix/setup oracles accompany the canonical update. |
+| N-CONTROL | Landed in PR #43 at `6d2ce49b8fe1512699dd612db07c12256ee422ed` | Negotiation-only duplicate-known, case-alias, and present-null/entry rejection supersedes U1's negotiation compatibility policy. Fresh atomic capability replacement prevents inheritance. Attributed protocol examples and synthetic regression/matrix/setup oracles accompany the canonical update. |
+| H-HOST | Approved; implemented locally; pending landing | Configured endpoints require a nonempty parsed hostname, with the existing bounded field error. Pure helper/configuration and all-signal factory regressions preserve full-authority/security/loopback rules and accepted nonempty-host syntax. |
 
 U1 landed in PR #38 at `e2afacb0d6071f0a8e6a5c790c9039a3f52070d2`, the base of
 the U2 implementation. U2 landed in PR #39 at `0284a62`, the U3 implementation base.
@@ -104,22 +105,31 @@ a no-op and SessionInfo helpers remain unwired.
   and candidate; Autobahn could not run without the Docker daemon. js/Linux
   compilation is not execution evidence. The local report records exact commands
   and verification scope; resolve remaining upstream checks before submission.
-- The separate ARM64 investigation traced vet's assembly-declaration failure to
-  symbolic names `b_ptr+0`/`b_len+8` mismatching Go's `b+0`/`len+8`; the numeric ABI
-  offsets are correct. A two-line names-only overlay makes full upstream vet pass
-  on both base and candidate and produces identical 48 ARM64 instruction words.
-  Production `mask` and the upstream `TestMaskASM` both call Go, so passing those
-  tests alone does not exercise assembly. A separate direct ARM64 oracle passed
-  alignment, tail, guard-byte, returned-key, and streaming checks. Evidence is local
-  under `$TMPDIR/opencode/websocket-protocol-violation-report/arm64-investigation`.
-  The assembly correction is **not applied or approved for public submission**;
-  it remains a separate recommended upstream fix. No suppression was added.
-  Bargeboard's `go vet ./...` package selection does not directly target dependency
-  assembly declarations. WS-ERROR remains local, upstream-first, and integration
-  blocked as above.
+- The user approved applying the separate ARM64 correction locally. It is now
+  implemented at `$TMPDIR/opencode/websocket-arm64-vet-fix`, based on
+  `9c8faadccd1b679e811a79ce506f8a10237251ad`. Exactly two files change:
+  `mask_arm64.s` corrects symbolic argument names `b_ptr+0`/`b_len+8` to
+  `b+0`/`len+8`; `mask_asm_test.go` wires `TestMaskASM` to actual assembly and adds
+  deterministic boundary/streaming oracles. Numeric ABI offsets and all 48 ARM64
+  instruction words are unchanged. Production masking still calls Go.
+- The report is `$TMPDIR/opencode/websocket-arm64-vet-fix-report/README.md`; its
+  adjacent `arm64-vet-fix.patch` is the complete two-file patch, SHA256
+  `96d74a4d5c902a29dbeac730766cd7a2ad3455e243c59ba9e011dc967f94ffea`.
+  Full native vet/tests/race/Staticcheck and nested-module checks passed. AMD64
+  direct-assembly tests and the root-module suite actually ran through Rosetta.
+  A mutation proves the old Go-backed test missed an assembly defect and the new
+  direct tests detect it. Independent read-only local patch review found no issues.
+- Composing the original protocol proposal with the two-file assembly overlay
+  passed full native vet and race tests. The original protocol checkout remains
+  separate and unmodified by the assembly fix; raw unoverlaid vet still fails.
+  Bargeboard's dependency remains unchanged. Public submission is not approved,
+  and the prior Autobahn Docker-daemon blocker remains pending. The separate report
+  records exact commands, platform execution limits, and combined-patch evidence;
+  these local checks do not establish upstream acceptance or integration.
 
 ### N-CONTROL Resume Details
 
+- Landed in PR #43 at `6d2ce49b8fe1512699dd612db07c12256ee422ed`, the H-HOST base.
 - The user explicitly approved the stricter negotiation-only policy. The canonical
   [N-CONTROL contract](architecture.md#negotiation-control-acceptance-n-control)
   supersedes only U1's negotiation duplicate/case/null/slice-reuse compatibility.
@@ -153,8 +163,38 @@ a no-op and SessionInfo helpers remain unwired.
   and `go test -race -count=1 ./receiver/f1livetimingreceiver` passed. Full
   `make check` and `npm run typecheck` passed; `gofmt -d` for the changed Go files
   and `git diff --check` are clean. The exact-byte-cap success oracle distinguishes
-  HTTP's empty cookie slice from nil cookies on failure. Independent reviews, CI,
-  and landing remain governed by `AGENTS.md`.
+  HTTP's empty cookie slice from nil cookies on failure. PR #43 records final
+  reviews, CI, and landing evidence under `AGENTS.md`.
+
+### H-HOST Resume Details
+
+- After the separate local upstream ARM64 fix, the user confirmed returning to
+  endpoint hostname validation. The approved production change is confined to
+  `validateEndpoint`: check `parsed.Hostname() == ""` after `url.Parse`, rather
+  than `parsed.Host == ""`. The canonical contract is
+  [Configured Endpoint Hostnames](architecture.md#configured-endpoint-hostnames-h-host).
+- Tests first reproduced acceptance of matching secure `:443` and `:` pairs on
+  base `6d2ce49b8fe1512699dd612db07c12256ee422ed`. All three signal factories
+  returned a receiver and populated the cache. A malformed single field instead
+  reached the authority-mismatch error. Pinned Go 1.26.8 already rejects `[]` and
+  `[]:443` during parsing; these remain rejection-compatibility cases.
+- Direct pure tests cover both configured field names and all four schemes, exact
+  bounded errors, and complete configuration preservation. Accepted secure DNS,
+  IPv4, bracketed IPv6, and insecure localhost/v4/v6 loopback pairs retain no-port
+  and explicit-port forms. Underscores, empty ports, and numeric port 65536 remain
+  accepted syntax, without a reachability claim. Full-authority comparison,
+  security matching, and loopback restrictions retain focused compatibility tests.
+- Traces, metrics, and logs factory tests assert nil receivers, exact field errors,
+  unchanged configuration, and an empty cache. An unusable token-file reference
+  needs no fixture or Start call; rejection precedes the lifecycle that owns file
+  and network I/O. No new grammar, normalization, dependency, or retry behavior is
+  part of H-HOST.
+- Local verification passed with pinned Go 1.26.8 and `GOTOOLCHAIN=local`:
+  `go test -count=1 ./receiver/f1livetimingreceiver -run 'Test(ValidateEndpointHostname|ConfigRejectsEmptyEndpointHostname|ConfigEndpointHostnameCompatibility|ConfigValidate|FactoriesRejectEmptyEndpointHostname)$'`
+  and `go test -race -count=1 ./receiver/f1livetimingreceiver`. Full `make check`
+  and `npm run typecheck` passed; `gofmt -d` for the changed Go files and
+  `git diff --check` are clean. Independent reviews, CI, and landing remain
+  governed by `AGENTS.md`.
 
 ### F-SCAN Resume Details
 
@@ -335,9 +375,10 @@ The broader adversarial cleanup sequence is approved: release integrity, active 
 transport, retained TypeScript correctness, then test/seam/documentation cleanup.
 Research findings still need adjudication and focused verification in their slices.
 
-- Go transport: F-SCAN landed; WS-ERROR awaits upstream classification support;
-  N-CONTROL is approved and implemented locally, pending landing. Endpoint hostname
-  validation remains an independent audit item.
+- Go transport: F-SCAN and N-CONTROL landed; WS-ERROR awaits upstream classification
+  support. H-HOST is approved and locally verified, pending CI, reviews, and
+  landing. The separate upstream ARM64 correction is implemented and reviewed
+  locally; public submission remains unapproved.
 - Pure-test oracles: complete attributable CarData and remaining reducer/gate
   assertions. Keep the existing value-state functional core and idiomatic Go.
 - TypeScript reference: lap/sector ordering and completion, replay termination,

@@ -526,9 +526,49 @@ would make setup depend on irrelevant, potentially unbounded or stalled input.
 Body-close errors do not alter the header decision. This boundary introduces no
 body parsing or additional retry owner.
 
-#### Negotiation Control Acceptance (N-CONTROL)
+#### Configured Endpoint Hostnames (H-HOST)
 
 **Status: GREEN; approved and implemented, pending landing**
+
+Configured `endpoint` (`ws`/`wss`) and `negotiate_endpoint` (`http`/`https`)
+MUST parse with `net/url` and have a nonempty `URL.Hostname()`. A nonempty
+authority alone is insufficient: `:443`, `:`, `[]`, and `[]:443` supply no
+hostname. Parse failure or an empty hostname MUST return the existing bounded,
+field-specific `endpoint must be an absolute URL` or
+`negotiate_endpoint must be an absolute URL` error, without including the URL.
+`Config.Validate` MUST leave the complete configuration unchanged. All three
+signal factories MUST reject invalid configuration before caching or returning a
+receiver, so it cannot reach token-file I/O or network setup through `Start`.
+
+The pure `validateEndpoint` helper in `config.go` owns this check. Comparing only
+`URL.Host` previously admitted matching secure port-only authorities and deferred
+the configuration defect to setup. Endpoint-pair comparison MUST still use the
+full authority, including explicit ports, with its existing case-insensitive
+comparison, matching-security requirement, and insecure-loopback restriction.
+Hostname-only pair comparison and implicit-port normalization are rejected because
+they would broaden which configured endpoints can share credentials.
+
+This contract adds no DNS lookup, DNS/IP/port grammar, scheme rule, URL
+normalization, or retry policy. Existing accepted nonempty-host syntax such as
+`under_score.test`, `example.test:`, and `example.test:65536` remains accepted;
+configuration acceptance does not establish validity for dialing or reachability.
+User-info, query, and fragment rejection remains in force.
+
+Verification MUST directly test both field names and all four schemes, missing
+hostnames with nonempty authorities, exact bounded errors, and complete unchanged
+configurations. Matching secure port-only pairs MUST fail the regression oracle
+against the original authority check. Preserve secure DNS, IPv4, and bracketed
+IPv6 hosts with and without explicit ports; insecure localhost, IPv4, and IPv6
+loopback pairs; accepted nonempty-host syntax; and authority/port/security mismatch
+rejection. Factory tests MUST assert nil receivers, exact field errors, and an
+empty receiver cache for traces, metrics, and logs without starting a receiver or
+using token files, live services, or sleeps. Retain these checks when changing Go's
+URL parser version or future endpoint validation; parser-level rejection of empty
+brackets may precede the hostname check.
+
+#### Negotiation Control Acceptance (N-CONTROL)
+
+**Status: GREEN; landed in PR #43**
 
 Negotiation response known names are `connectionId`, `connectionToken`,
 `negotiateVersion`, `url`, `accessToken`, `error`, and `availableTransports`.

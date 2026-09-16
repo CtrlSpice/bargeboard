@@ -62,7 +62,7 @@ func isLoopbackHost(host string) bool {
 
 func validateEndpoint(name, raw string, allowedSchemes ...string) error {
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Host == "" {
+	if err != nil || parsed.Hostname() == "" {
 		return fmt.Errorf("%s must be an absolute URL", name)
 	}
 	if parsed.User != nil {
