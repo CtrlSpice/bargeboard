@@ -9,7 +9,7 @@ landing. Notes, issue assignments, and milestones cannot override either source.
 
 ### DEL-TS — Remove the obsolete replay implementation
 
-**Approved and implemented on `chore/remove-typescript-replay`; pending landing.**
+**Landed in PR #45 at `2290ca4c45123d492a367d83d9de1df6b1c6855f`.**
 The Go Collector distribution is the sole implementation, and the application
 remains greenfield until explicitly declared complete. The deleted replay had no
 users and known correctness defects, so its pre-completion CLI, cache, package,
@@ -36,7 +36,20 @@ race suite. Both CJS files pass `node --check`; all 91 publication tests pass un
 local Node 26.7.0. Pinned actionlint 1.7.12, GoReleaser Pro 2.18.1 configuration
 validation, release-workflow tests, shell syntax, exact deletion/reference oracles,
 and `git diff --check` pass. A clean five-platform release snapshot and complete
-archive/SBOM/checksum verification also pass. Independent reviews remain pending.
+archive/SBOM/checksum verification also pass. Three independent final reviews and
+exact-candidate CI, including JavaScript CodeQL for the retained CJS, passed.
+
+### CAR-ORACLE — Complete attributable normalization evidence
+
+**Approved test cleanup; implemented on `test/complete-cardata-oracle`; pending
+landing.**
+The pre-existing inline first 2025 British Grand Prix race `CarData.z` token is now
+paired with pinned offline metadata: its direct source URL, archive prefix,
+compressed-token SHA-256, expected 2,380-byte inflation length and SHA-256, and an
+explicit synthetic feed-wrapper boundary. The pure normalization test compares the
+complete topic, payload byte identity, timestamp, and source, preserves the complete
+input, and proves output storage does not alias the compressed input. It does not
+bind channel semantics or change production.
 
 ### U-POLICY — Layered Unicode and input quality
 
@@ -89,7 +102,8 @@ It groups the implementation work; issue text links back to the canonical policy
 | WS-ERROR | Upstream-first approved; local proposal prepared; dependency integration blocked | The pinned codec does not expose a typed identity for locally detected malformed frames. Prepare upstream classification support locally; public submission remains a separate decision. No dependency fork, replacement, or production classifier change is approved by this decision. |
 | N-CONTROL | Landed in PR #43 at `6d2ce49b8fe1512699dd612db07c12256ee422ed` | Negotiation-only duplicate-known, case-alias, and present-null/entry rejection supersedes U1's negotiation compatibility policy. Fresh atomic capability replacement prevents inheritance. Attributed protocol examples and synthetic regression/matrix/setup oracles accompany the canonical update. |
 | H-HOST | Landed in PR #44 at `3ba7b9713ec06dba261a8792af9715785becb50d` | Configured endpoints require a nonempty parsed hostname, with the existing bounded field error. Pure helper/configuration and all-signal factory regressions preserve full-authority/security/loopback rules and accepted nonempty-host syntax. |
-| DEL-TS | Approved; implemented on `chore/remove-typescript-replay`; pending landing | Delete the obsolete replay implementation and package surface; retain only the Node-built-in release CJS boundary and future Go replay/OpenF1 architecture. No compatibility or cache migration. |
+| DEL-TS | Landed in PR #45 at `2290ca4c45123d492a367d83d9de1df6b1c6855f` | Deleted the obsolete replay implementation and package surface; retained only the Node-built-in release CJS boundary and future Go replay/OpenF1 architecture. No compatibility or cache migration. |
+| CAR-ORACLE | Approved test cleanup; implemented on `test/complete-cardata-oracle`; pending landing | Pin the attributable first 2025 British GP race `CarData.z` record and assert the complete pure normalization result, input preservation, and detached output storage without binding YELLOW channel semantics. |
 
 U1 landed in PR #38 at `e2afacb0d6071f0a8e6a5c790c9039a3f52070d2`, the base of
 the U2 implementation. U2 landed in PR #39 at `0284a62`, the U3 implementation base.
@@ -410,11 +424,20 @@ adjudication and focused verification in their slices.
 - Go transport: F-SCAN, N-CONTROL, and H-HOST landed; WS-ERROR awaits upstream
   classification support. The separate upstream ARM64 correction is implemented
   and reviewed locally; public submission remains unapproved.
-- Pure-test oracles: complete attributable CarData and remaining reducer/gate
-  assertions. Keep the existing value-state functional core and idiomatic Go.
+- Pure-test oracles: CAR-ORACLE is implemented pending landing; remaining
+  reducer/gate assertions follow. Keep the existing value-state functional core
+  and idiomatic Go.
 - Verification engineering: supplied-evidence SPDX tests, structural workflow-gate
   tests, and demonstrated redundant work/dead scaffolding. Preserve independent
   generator/verifier cross-checks and all landing gates.
+- Toolchain verification: [#46](https://github.com/CtrlSpice/bargeboard/issues/46)
+  tracks that Go 1.27 rejects the accepted JSON-depth boundary while the README
+  currently claims Go 1.26 or newer. Pinned Go 1.26.8 and releases remain green;
+  no depth-contract or supported-toolchain decision has been made.
+- Fixture licensing: [#48](https://github.com/CtrlSpice/bargeboard/issues/48)
+  tracks the owner/legal decision for pre-existing exact F1 archive bytes. This
+  slice does not add the readable inflated CarData record; its expected length
+  and SHA-256 retain the complete byte oracle without expanding that question.
 - Decisions still pending: broader protocol resubscription after corruption,
   durable raw capture, topic-specific Unicode integration for unimplemented
   reducers, and qualifying-phase fallback ownership. The layered Unicode approval

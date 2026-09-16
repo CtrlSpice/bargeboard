@@ -1,0 +1,11 @@
+[
+  {
+    "name": "2025_british_grand_prix_race_first_record",
+    "source": "https://livetiming.formula1.com/static/2025/2025-07-06_British_Grand_Prix/2025-07-06_Race/CarData.z.jsonStream",
+    "archive_prefix": "00:01:50.190",
+    "compressed_payload_sha256": "b21a290f4ffc24800f470fda9a0e7fefcd0a3a33e4bd08974f690aac26340c73",
+    "synthetic_feed_timestamp": "2025-07-06T13:09:31.123456Z",
+    "inflated_payload_size": 2380,
+    "inflated_payload_sha256": "3e2dcbdac301ca7047c6064f4bc8ac0a307e36e0859f3c0c373ae755dbc5c5eb"
+  }
+]
