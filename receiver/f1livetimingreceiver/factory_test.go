@@ -13,11 +13,55 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componentstatus"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/receiver/receivertest"
 )
+
+func TestFactoriesRejectEmptyEndpointHostname(t *testing.T) {
+	for _, authority := range []string{":443", ":", "[]", "[]:443"} {
+		for _, field := range []string{"endpoint", "negotiate_endpoint"} {
+			t.Run(authority+"/"+field, func(t *testing.T) {
+				cfg := createDefaultConfig().(*Config)
+				// An unusable path needs no fixture: validation must precede Start's I/O.
+				cfg.Auth.TokenFile = "\x00unused-token-file"
+				cfg.NegotiateEndpoint = "https://" + authority + "/private-negotiate-route"
+				if field == "endpoint" {
+					cfg.Endpoint = "wss://" + authority + "/private-stream-route"
+				}
+				want := *cfg
+				m := newReceiverMap()
+				settings := receivertest.NewNopSettings(Type)
+				next := consumertest.NewNop()
+				traces, tracesErr := m.createTraces(t.Context(), settings, cfg, next)
+				metrics, metricsErr := m.createMetrics(t.Context(), settings, cfg, next)
+				logs, logsErr := m.createLogs(t.Context(), settings, cfg, next)
+				for _, result := range []struct {
+					name     string
+					receiver component.Component
+					err      error
+				}{
+					{"traces", traces, tracesErr},
+					{"metrics", metrics, metricsErr},
+					{"logs", logs, logsErr},
+				} {
+					wantErr := field + " must be an absolute URL"
+					if result.receiver != nil || result.err == nil || result.err.Error() != wantErr {
+						t.Errorf("%s factory = (%v, %v), want (nil, %q)", result.name, result.receiver, result.err, wantErr)
+					}
+				}
+				if len(m.receivers) != 0 {
+					t.Errorf("receiver cache has %d entries, want none", len(m.receivers))
+				}
+				if *cfg != want {
+					t.Errorf("factory config = %#v, want unchanged %#v", *cfg, want)
+				}
+			})
+		}
+	}
+}
 
 func TestFactorySharesReceiverAcrossSignals(t *testing.T) {
 	var preflights atomic.Int32
