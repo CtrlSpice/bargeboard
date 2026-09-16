@@ -365,49 +365,98 @@ func TestReduceSessionInfoGenerationAdvancesOnlyForUnseenTuples(t *testing.T) {
 	}
 }
 
-func TestReduceSessionInfoTokenExhaustionFailsClosed(t *testing.T) {
+func TestReduceSessionInfoTokenBoundaries(t *testing.T) {
 	identityA := reducerTestIdentity(2025, 100, canonicalSessionTypeRace, canonicalSessionNameRace)
 	identityB := reducerTestIdentity(2025, 101, canonicalSessionTypeRace, canonicalSessionNameRace)
+	identityC := reducerTestIdentity(2025, 102, canonicalSessionTypeRace, canonicalSessionNameRace)
 	descriptorA := reducerTestDescriptor(identityA, 10, reducerTestSchedule(1))
+	descriptorB := reducerTestDescriptor(identityB, 20, reducerTestSchedule(2))
+	descriptorC := reducerTestDescriptor(identityC, 30, reducerTestSchedule(3))
 
 	t.Run("generation", func(t *testing.T) {
 		state := reduceSessionInfo(sessionInfoState{}, descriptorA).state
-		state.generation = ^sessionInfoGeneration(0)
-		got := reduceSessionInfo(state, reducerTestDescriptor(identityB, 20, reducerTestSchedule(2)))
-		wantState := state
-		wantState.synchronized = false
+		state.generation = ^sessionInfoGeneration(0) - 1
+		state.routeEpoch = 7
+		before := state
+
+		advanced := reduceSessionInfo(state, descriptorB)
+		wantAdvanced := sessionInfoState{
+			identity:          identityB,
+			identityAvailable: true,
+			synchronized:      true,
+			routeKey:          20,
+			routeAvailable:    true,
+			schedule:          reducerTestSchedule(2),
+			scheduleAvailable: true,
+			generation:        ^sessionInfoGeneration(0),
+		}
+		wantAdvanced.retired.tuples[0] = identityA.logicalTuple()
+		wantAdvanced.retired.count = 1
+		assertSessionInfoReduction(t, advanced, sessionInfoReduction{
+			state:       wantAdvanced,
+			disposition: sessionInfoDispositionReplaced,
+		})
+		if state != before {
+			t.Fatal("final legal generation advance mutated input state")
+		}
+
+		got := reduceSessionInfo(advanced.state, descriptorC)
+		wantExhausted := wantAdvanced
+		wantExhausted.synchronized = false
 		assertSessionInfoReduction(t, got, sessionInfoReduction{
-			state:       wantState,
+			state:       wantExhausted,
 			disposition: sessionInfoDispositionTokenExhausted,
 		})
 
-		wantState.synchronized = true
-		recovered := reduceSessionInfo(got.state, descriptorA)
+		recovered := reduceSessionInfo(got.state, descriptorB)
 		assertSessionInfoReduction(t, recovered, sessionInfoReduction{
-			state:       wantState,
+			state:       wantAdvanced,
 			disposition: sessionInfoDispositionRefreshed,
 		})
 	})
 
 	t.Run("routing epoch", func(t *testing.T) {
 		state := reduceSessionInfo(sessionInfoState{}, descriptorA).state
-		state.routeEpoch = ^sessionInfoRouteEpoch(0)
-		got := reduceSessionInfo(state, reducerTestDescriptor(identityA, 20, reducerTestSchedule(2)))
-		wantState := state
-		wantState.synchronized = false
+		state.routeEpoch = ^sessionInfoRouteEpoch(0) - 1
+		before := state
+
+		corrected := reducerTestDescriptor(identityA, 20, reducerTestSchedule(2))
+		advanced := reduceSessionInfo(state, corrected)
+		wantAdvanced := sessionInfoState{
+			identity:          identityA,
+			identityAvailable: true,
+			synchronized:      true,
+			routeKey:          20,
+			routeAvailable:    true,
+			schedule:          reducerTestSchedule(2),
+			scheduleAvailable: true,
+			generation:        1,
+			routeEpoch:        ^sessionInfoRouteEpoch(0),
+		}
+		assertSessionInfoReduction(t, advanced, sessionInfoReduction{
+			state:           wantAdvanced,
+			disposition:     sessionInfoDispositionRefreshed,
+			routeTransition: true,
+		})
+		if state != before {
+			t.Fatal("final legal routing-epoch advance mutated input state")
+		}
+
+		got := reduceSessionInfo(advanced.state, reducerTestDescriptor(identityA, 30, reducerTestSchedule(3)))
+		wantExhausted := wantAdvanced
+		wantExhausted.synchronized = false
 		assertSessionInfoReduction(t, got, sessionInfoReduction{
-			state:       wantState,
+			state:       wantExhausted,
 			disposition: sessionInfoDispositionTokenExhausted,
 		})
 
-		wantState.synchronized = true
-		recovered := reduceSessionInfo(got.state, descriptorA)
+		recovered := reduceSessionInfo(got.state, corrected)
 		assertSessionInfoReduction(t, recovered, sessionInfoReduction{
-			state:       wantState,
+			state:       wantAdvanced,
 			disposition: sessionInfoDispositionRefreshed,
 		})
 
-		replaced := reduceSessionInfo(got.state, reducerTestDescriptor(identityB, 20, reducerTestSchedule(2)))
+		replaced := reduceSessionInfo(got.state, descriptorB)
 		wantReplacement := sessionInfoState{
 			identity:          identityB,
 			identityAvailable: true,

@@ -52,13 +52,24 @@ bind channel semantics or change production.
 
 ### FEED-ORDER-ORACLE — Complete SessionInfo feed-order results
 
-**Approved test cleanup; implemented on `test/complete-feed-order-oracle`; pending
-landing.** The strict wire-order test now compares every meaningful descriptor
+**Landed in PR #49 at `97424b134b81886bd116ec365ec46e28bf244ff7`.**
+The strict wire-order test compares every meaningful descriptor
 reduction field for both A-then-B and B-then-A delivery, including complete
 identity, routing, schedule, synchronization, generation, route epoch, retired
 tuple order, disposition, route transition, and issues. Reversed source timestamps
 continue to prove that feed callbacks are not globally time-sorted. Production and
 the canonical feed-order contract are unchanged.
+
+### TOKEN-BOUNDARY-ORACLE — Complete final legal token advances
+
+**Approved test cleanup; implemented on `test/complete-token-boundary-oracle`;
+pending landing.** Pure reducer tests now prove that generation and routing epoch
+may each advance from their maximum-minus-one value to the maximum exactly once.
+The next advancing transition fails closed with complete recovery state, while a
+repeat of the current tuple and route restores synchronization without consuming a
+token. Generation replacement still resets routing epoch, and new-generation
+replacement remains independent of an exhausted prior-generation route epoch.
+Production and the canonical no-wrap contract are unchanged.
 
 ### U-POLICY — Layered Unicode and input quality
 
@@ -113,7 +124,8 @@ It groups the implementation work; issue text links back to the canonical policy
 | H-HOST | Landed in PR #44 at `3ba7b9713ec06dba261a8792af9715785becb50d` | Configured endpoints require a nonempty parsed hostname, with the existing bounded field error. Pure helper/configuration and all-signal factory regressions preserve full-authority/security/loopback rules and accepted nonempty-host syntax. |
 | DEL-TS | Landed in PR #45 at `2290ca4c45123d492a367d83d9de1df6b1c6855f` | Deleted the obsolete replay implementation and package surface; retained only the Node-built-in release CJS boundary and future Go replay/OpenF1 architecture. No compatibility or cache migration. |
 | CAR-ORACLE | Landed in PR #47 at `462cdba8740241a25569ada34a5b5854ba5b3a06` | Attribute the pre-existing first 2025 British GP race `CarData.z` token and assert the complete pure normalization result, input preservation, and detached output storage without binding YELLOW channel semantics. |
-| FEED-ORDER-ORACLE | Approved test cleanup; implemented on `test/complete-feed-order-oracle`; pending landing | Assert complete SessionInfo descriptor reductions in both feed delivery orders while reversed timestamps prove strict callback order. |
+| FEED-ORDER-ORACLE | Landed in PR #49 at `97424b134b81886bd116ec365ec46e28bf244ff7` | Assert complete SessionInfo descriptor reductions in both feed delivery orders while reversed timestamps prove strict callback order. |
+| TOKEN-BOUNDARY-ORACLE | Approved test cleanup; implemented on `test/complete-token-boundary-oracle`; pending landing | Assert complete generation and routing-epoch results at the final legal increment, exhaustion, recovery, and generation replacement boundaries. |
 
 U1 landed in PR #38 at `e2afacb0d6071f0a8e6a5c790c9039a3f52070d2`, the base of
 the U2 implementation. U2 landed in PR #39 at `0284a62`, the U3 implementation base.
@@ -434,10 +446,10 @@ adjudication and focused verification in their slices.
 - Go transport: F-SCAN, N-CONTROL, and H-HOST landed; WS-ERROR awaits upstream
   classification support. The separate upstream ARM64 correction is implemented
   and reviewed locally; public submission remains unapproved.
-- Pure-test oracles: CAR-ORACLE landed; FEED-ORDER-ORACLE is implemented pending
-  landing. Counter and retirement-boundary candidates remain research findings
-  that require focused adjudication. Keep the existing value-state functional core
-  and idiomatic Go.
+- Pure-test oracles: CAR-ORACLE and FEED-ORDER-ORACLE landed;
+  TOKEN-BOUNDARY-ORACLE is implemented pending landing. Retirement-horizon
+  completeness remains a research finding that requires focused adjudication.
+  Keep the existing value-state functional core and idiomatic Go.
 - Verification engineering: supplied-evidence SPDX tests, structural workflow-gate
   tests, and demonstrated redundant work/dead scaffolding. Preserve independent
   generator/verifier cross-checks and all landing gates.
