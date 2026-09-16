@@ -4,8 +4,8 @@ These instructions supplement `/Users/moya/Workspace/AGENTS.md` for work in this
 
 ## Implementation
 
-- The Go Collector distribution is the active implementation.
-- Keep the TypeScript replay CLI as a reference until the Go implementation reaches feature parity. Do not remove it without explicit approval.
+- The Go Collector distribution is the sole implementation.
+- Treat the application as greenfield until the user explicitly declares it complete. Do not add compatibility or migration support for removed or superseded pre-completion CLIs, caches, package or configuration formats, or output schemas without explicit user approval.
 - Prefer a functional core and imperative shell: keep deterministic transformations free of I/O and shared state where practical, and test pure functions directly.
 - Keep the result idiomatic Go; do not introduce abstractions solely to imitate functional programming.
 
@@ -144,7 +144,7 @@ These instructions supplement `/Users/moya/Workspace/AGENTS.md` for work in this
 
 ## Architecture Documentation
 
-- `docs/architecture.md` is the canonical architecture for the active Go distribution. The TypeScript signal model in `README.md` is historical and non-authoritative.
+- `docs/architecture.md` is the canonical architecture for the Go distribution.
 - Any commit that changes source semantics, source ownership, state reduction, OTLP representation, timestamps, cardinality, or signal failure policy must update `docs/architecture.md` in the same commit.
 - Clearly mark unresolved candidates as non-binding. Do not implement a pending signal mapping as if it were accepted.
 - Keep architecture changes useful to both human and agent contributors: record rationale, rejected alternatives, source limitations, implementation seams, and required verification.
@@ -153,5 +153,4 @@ These instructions supplement `/Users/moya/Workspace/AGENTS.md` for work in this
 
 - Run `make check` for Go changes.
 - Run `go test -race -count=1 ./receiver/f1livetimingreceiver` for F1 Live Timing receiver changes.
-- Run `npm run typecheck` while the TypeScript implementation remains in the repository.
 - Run `git diff --check` before committing or opening a pull request.

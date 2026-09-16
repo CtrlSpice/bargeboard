@@ -2,10 +2,9 @@
 
 > OpenTelemetry for floor rockets.
 
-This is the canonical architecture document for bargeboard's active Go
-Collector distribution. It is written for human contributors and coding
-agents. The TypeScript replay CLI remains a useful historical reference, but
-its signal model is not authoritative for new work.
+This is the canonical architecture document for bargeboard's sole
+implementation, the Go Collector distribution. It is written for human
+contributors and coding agents.
 
 The architecture is deliberately evolving. Accepted decisions are precise;
 unresolved candidates stay visibly non-binding until they have completed a
@@ -59,8 +58,27 @@ as the behavior and its tests.
   create unbounded metric series.
 - Bargeboard MUST NOT describe an observed result response as legally final or
   infer when a retirement, disqualification, or correction took effect.
-- The historical TypeScript model MUST NOT be copied into Go without a fresh
+- Removed prototype behavior MUST NOT be copied into Go without a fresh
   architecture decision.
+
+## Implementation and Compatibility
+
+**Status: GREEN**
+
+The Go Collector distribution is the sole implementation. Until the project is
+explicitly declared complete, Bargeboard is greenfield. The obsolete
+pre-completion replay prototype was deleted because it had no users and had
+known correctness defects; its implementation and interfaces are not product
+authority.
+
+Removed pre-completion CLI commands and flags, cache layouts and contents,
+package and configuration formats, and resource, signal, and output schemas
+carry no compatibility or migration contract. Contributors MUST NOT add
+compatibility stubs, deprecation wrappers, cache readers or migrations, aliases,
+or output-schema compatibility for them without a separately approved
+architecture decision. Future Go historical replay and OpenF1 work instead
+follow their accepted source, timing, identity, signal, and verification
+contracts in this document.
 
 ## Layered Unicode and Input Quality
 
@@ -467,7 +485,7 @@ Reporting tests MUST assert bounded warning cadence and complete counters/summar
 Basic/None behavior, fixed cardinality under many unique malformed values, no source
 text leakage, and no false outage, consumer failure, recovery, or export claim.
 All implementation slices retain the repository's required Go, receiver race,
-TypeScript, diff, CI, and independent-review gates.
+diff, CI, and independent-review gates.
 
 ## Current Grid
 
@@ -528,7 +546,7 @@ body parsing or additional retry owner.
 
 #### Configured Endpoint Hostnames (H-HOST)
 
-**Status: GREEN; approved and implemented, pending landing**
+**Status: GREEN; landed in PR #44 at `3ba7b9713ec06dba261a8792af9715785becb50d`**
 
 Configured `endpoint` (`ws`/`wss`) and `negotiate_endpoint` (`http`/`https`)
 MUST parse with `net/url` and have a nonempty `URL.Hostname()`. A nonempty
@@ -1633,9 +1651,9 @@ instead fixes its accepted timestamp and derivation contract.
 **Status: FORMATION LAP**
 
 This section accepts the timing substrate for future Go historical replay. It
-does not promote a TypeScript signal mapping, grant a new source authority, or
-accept replay of a captured Live Timing transport stream. Every replay domain
-still requires its own GREEN source and signal contract.
+does not promote a removed prototype's signal mapping, grant a new source
+authority, or accept replay of a captured Live Timing transport stream. Every
+replay domain still requires its own GREEN source and signal contract.
 
 The first conforming mode consumes a fully materialized, immutable normalized
 input. Before replay starts, it freezes the per-domain source-authority plan,
@@ -1741,14 +1759,14 @@ repeating a session into the same destination. An unbounded replay-run value
 MUST NOT be added to metric attributes as an idempotency workaround. Dry-run and
 pure projection work may proceed without that policy.
 
-The historical TypeScript CLI predates this contract and remains a reference,
-not a conforming implementation. It builds endpoint-grouped events and globally
-sorts them by relative event time; its tick loop can place observations after a
-five-second boundary into the preceding metric flush at accelerated speeds; its
-`--from` path drains earlier queued events into the first tick rather than
-performing an accepted seek or warm-up; log event and observation timestamps are
-equal; and repeated network export has no declared delivery policy. These known
-limitations MUST NOT be copied into Go.
+A deleted pre-completion replay prototype was not conforming: it grouped events
+by endpoint and globally sorted them by relative event time; a coarse tick could
+place observations after a five-second boundary into the preceding metric flush
+at accelerated speeds; partial replay drained earlier queued events into the
+first tick rather than performing an accepted seek or warm-up; log event and
+observation timestamps were equal; and repeated network export had no declared
+delivery policy. These rejected designs are rationale for the contracts above,
+not implementation or compatibility authority, and MUST NOT be copied into Go.
 
 Required replay verification uses the same frozen fixture, authority plan, and
 semantic configuration at slow, normal, accelerated, and unpaced delivery. It
@@ -4000,8 +4018,8 @@ interpolation, expiry signal, driver fanout, or WeatherDataSeries replay.
 The wire topic `Position.z` remains compressed and normalizes to semantic topic
 `Position`. Its coordinates are bounded internal context only. Position cadence
 MUST NOT create Gauges, histograms, sums, logs, spans, events, exemplars, links,
-or driver identity. In particular, Bargeboard MUST NOT port the historical
-TypeScript coordinate metrics.
+or driver identity. In particular, Bargeboard MUST NOT restore the deleted
+prototype's standalone coordinate metrics.
 
 The decompressed root has a `Position` array. Each item is one observation with
 strict RFC3339 `Timestamp` and object-valued `Entries`; the inner timestamp is
@@ -4936,7 +4954,7 @@ implementation:
   input-operation metrics accepted under Live Timing Operational Visibility are
   the sole operational promotion from this list.
 
-Pending candidates MUST NOT be inferred from the historical TypeScript metrics.
+Pending candidates MUST NOT be inferred from deleted prototype metrics.
 
 ## Logs
 
@@ -5436,7 +5454,6 @@ Current implementation seams:
 | Pure SessionInfo normalized-batch adapter | `receiver/f1livetimingreceiver/session_info_batch.go` |
 | Pure aggregate batch identity gate | `receiver/f1livetimingreceiver/state.go` |
 | Shared receiver lifecycle and consumer seam | `receiver/f1livetimingreceiver/receiver.go` |
-| Historical TypeScript reference | `src/` |
 
 Other suggested future Go files such as `projection.go` are not
 normative until their behavior slice begins.
@@ -5469,7 +5486,6 @@ Every Go change MUST run:
 
 ```bash
 make check
-npm run typecheck
 git diff --check
 ```
 
@@ -5506,13 +5522,14 @@ Before committing a behavior slice:
 - [ ] Derived facts state their evidence and limitations.
 - [ ] Logs and errors were checked for payloads and credentials.
 - [ ] This document changed in the same commit when architecture changed.
-- [ ] Required Go, race, TypeScript, config, and diff checks passed.
+- [ ] Required Go, race, config, and diff checks passed.
 - [ ] Applicable dependency checks passed.
 
 ## Decision Ledger
 
 | Decision | Status | Consequence |
 |---|---|---|
+| Go-only greenfield implementation | GREEN | Removed pre-completion interfaces and data formats carry no compatibility or migration contract. |
 | Hybrid signal model led by traces and metrics | GREEN | Logs remain curated and raw capture is opt-in. |
 | Per-domain source authority | GREEN | Live Timing owns live chronology; OpenF1 owns explicit observed post-session domains. |
 | Logical Live Timing session identity | GREEN | A same-session source-key correction changes routing without replacing the generation or emitted identity. |

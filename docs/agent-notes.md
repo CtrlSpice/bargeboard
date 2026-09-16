@@ -7,6 +7,37 @@ landing. Notes, issue assignments, and milestones cannot override either source.
 
 ## Approved Decisions
 
+### DEL-TS — Remove the obsolete replay implementation
+
+**Approved and implemented on `chore/remove-typescript-replay`; pending landing.**
+The Go Collector distribution is the sole implementation, and the application
+remains greenfield until explicitly declared complete. The deleted replay had no
+users and known correctness defects, so its pre-completion CLI, cache, package,
+configuration, resource, signal, and output formats have no compatibility or
+migration contract.
+
+The implementation deletes all 18 tracked files under `src/`,
+`scripts/cache-season.ts`, `scripts/smoke.ts`, `package.json`,
+`package-lock.json`, `tsconfig.json`, and `tsconfig.smoke.json`. It removes their
+CI, Dependabot, ignore, README, architecture, and current-verification references.
+No compatibility stub, deprecation wrapper, or cache migration is retained.
+
+`scripts/publish-release.cjs` and `scripts/publish-release_test.cjs` remain as
+Node-built-in-only privileged release tooling. The package job retains pinned
+`actions/setup-node` with Node 24 and `node --test`; release-workflow CommonJS
+loads remain unchanged. Repository-default CodeQL JavaScript analysis remains
+enabled without a checked-in CodeQL workflow. The Go release archive shape,
+third-party notices, source payloads, and SBOM policy are unchanged. Pre-existing
+ignored `dist/` and `node_modules/` artifacts were removed from the working copy
+after inspection; they were never tracked repository or release artifacts.
+
+Local verification passed with pinned Go 1.26.8: `make check` and the full receiver
+race suite. Both CJS files pass `node --check`; all 91 publication tests pass under
+local Node 26.7.0. Pinned actionlint 1.7.12, GoReleaser Pro 2.18.1 configuration
+validation, release-workflow tests, shell syntax, exact deletion/reference oracles,
+and `git diff --check` pass. A clean five-platform release snapshot and complete
+archive/SBOM/checksum verification also pass. Independent reviews remain pending.
+
 ### U-POLICY — Layered Unicode and input quality
 
 **Approved policy; U1/U2/U3 landed.** The user approved the strategy and
@@ -57,7 +88,8 @@ It groups the implementation work; issue text links back to the canonical policy
 | F-SCAN | Landed in PR #41 at `2ca79a5a91e46ca6bda2576ddd74c40dd5403b46` | Linear separator scanning across tiny fragments in runtime hub and handshake framing. Saved byte-relative cursors, deterministic scan-start and complete buffer-state oracles, bounds/ownership/failure checks, and a one-byte-fragment benchmark. |
 | WS-ERROR | Upstream-first approved; local proposal prepared; dependency integration blocked | The pinned codec does not expose a typed identity for locally detected malformed frames. Prepare upstream classification support locally; public submission remains a separate decision. No dependency fork, replacement, or production classifier change is approved by this decision. |
 | N-CONTROL | Landed in PR #43 at `6d2ce49b8fe1512699dd612db07c12256ee422ed` | Negotiation-only duplicate-known, case-alias, and present-null/entry rejection supersedes U1's negotiation compatibility policy. Fresh atomic capability replacement prevents inheritance. Attributed protocol examples and synthetic regression/matrix/setup oracles accompany the canonical update. |
-| H-HOST | Approved; implemented locally; pending landing | Configured endpoints require a nonempty parsed hostname, with the existing bounded field error. Pure helper/configuration and all-signal factory regressions preserve full-authority/security/loopback rules and accepted nonempty-host syntax. |
+| H-HOST | Landed in PR #44 at `3ba7b9713ec06dba261a8792af9715785becb50d` | Configured endpoints require a nonempty parsed hostname, with the existing bounded field error. Pure helper/configuration and all-signal factory regressions preserve full-authority/security/loopback rules and accepted nonempty-host syntax. |
+| DEL-TS | Approved; implemented on `chore/remove-typescript-replay`; pending landing | Delete the obsolete replay implementation and package surface; retain only the Node-built-in release CJS boundary and future Go replay/OpenF1 architecture. No compatibility or cache migration. |
 
 U1 landed in PR #38 at `e2afacb0d6071f0a8e6a5c790c9039a3f52070d2`, the base of
 the U2 implementation. U2 landed in PR #39 at `0284a62`, the U3 implementation base.
@@ -161,13 +193,14 @@ a no-op and SessionInfo helpers remain unwired.
 - Local verification uses pinned Go 1.26.8 with `GOTOOLCHAIN=local`:
   `go test ./receiver/f1livetimingreceiver -run 'Test(NegotiationControls|ParseNegotiateResponse|UnicodeControls)' -count=1`
   and `go test -race -count=1 ./receiver/f1livetimingreceiver` passed. Full
-  `make check` and `npm run typecheck` passed; `gofmt -d` for the changed Go files
-  and `git diff --check` are clean. The exact-byte-cap success oracle distinguishes
+  `make check` passed; `gofmt -d` for the changed Go files and `git diff --check`
+  are clean. The exact-byte-cap success oracle distinguishes
   HTTP's empty cookie slice from nil cookies on failure. PR #43 records final
   reviews, CI, and landing evidence under `AGENTS.md`.
 
 ### H-HOST Resume Details
 
+- Landed in PR #44 at `3ba7b9713ec06dba261a8792af9715785becb50d`.
 - After the separate local upstream ARM64 fix, the user confirmed returning to
   endpoint hostname validation. The approved production change is confined to
   `validateEndpoint`: check `parsed.Hostname() == ""` after `url.Parse`, rather
@@ -192,9 +225,8 @@ a no-op and SessionInfo helpers remain unwired.
 - Local verification passed with pinned Go 1.26.8 and `GOTOOLCHAIN=local`:
   `go test -count=1 ./receiver/f1livetimingreceiver -run 'Test(ValidateEndpointHostname|ConfigRejectsEmptyEndpointHostname|ConfigEndpointHostnameCompatibility|ConfigValidate|FactoriesRejectEmptyEndpointHostname)$'`
   and `go test -race -count=1 ./receiver/f1livetimingreceiver`. Full `make check`
-  and `npm run typecheck` passed; `gofmt -d` for the changed Go files and
-  `git diff --check` are clean. Independent reviews, CI, and landing remain
-  governed by `AGENTS.md`.
+  passed; `gofmt -d` for the changed Go files and `git diff --check` are clean.
+  Independent reviews, CI, and landing evidence are recorded in PR #44.
 
 ### F-SCAN Resume Details
 
@@ -224,7 +256,7 @@ a no-op and SessionInfo helpers remain unwired.
   `go test ./receiver/f1livetimingreceiver -run 'Test(FragmentScan|HubRecordBuffer|SplitHubRecord|SplitFirstRecord|HandshakeTiny|HandshakeFragment|Incremental)' -count=1`,
   `go test ./receiver/f1livetimingreceiver -run '^$' -bench '^BenchmarkHubRecordBufferTinyFragments$' -benchtime=100ms -count=1`,
   and `go test -race -count=1 ./receiver/f1livetimingreceiver`.
-  `npm run typecheck`, the full `make check`, and `git diff --check` also passed.
+  The full `make check` and `git diff --check` also passed.
   Three independent reviews and exact-candidate CI passed; PR #41 records the
   final candidate and landing evidence.
 
@@ -267,8 +299,8 @@ a no-op and SessionInfo helpers remain unwired.
   complete summary totals, and unchanged status transitions. Focused root
   verification passed with the same pinned Go environment:
   `go test -count=1 -run '^TestForegroundCollectorOperationalTelemetry$' -v .`
-  (Basic, None, and POSIX SIGINT). The full `make check` rerun, receiver race suite,
-  and `npm run typecheck` passed. CI and independent landing reviews remain
+  (Basic, None, and POSIX SIGINT). The full `make check` rerun and receiver race
+  suite passed. CI and independent landing reviews remain
   governed by `AGENTS.md`; PR #40 records the completed landing and issue #36 tracks
   its evidence.
 
@@ -302,7 +334,7 @@ a no-op and SessionInfo helpers remain unwired.
   `GOTOOLCHAIN=local`: `make check`,
   `go test -race -count=1 ./receiver/f1livetimingreceiver`, and
   `go test -race -count=20 ./receiver/f1livetimingreceiver -run 'Test(SessionInfoUnicode|ParseSessionInfo|ClassifySessionInfo|ParsePositiveCanonicalInt64|ReduceSessionInfo|ReduceLiveTimingBatch)'`.
-  `npm run typecheck` and `git diff --check` also passed. Inspect #35 and its linked
+  `git diff --check` also passed. Inspect #35 and its linked
   PR for final candidate, CI, review, and landing evidence.
 - These are pure helper outcomes, not runtime projection or quarantine. They emit
   no counters or logs and do not establish any other topic's resynchronization.
@@ -336,7 +368,7 @@ a no-op and SessionInfo helpers remain unwired.
   `GOTOOLCHAIN=local`: `make check`,
   `go test -race -count=1 ./receiver/f1livetimingreceiver`, and
   `go test -race -count=20 ./receiver/f1livetimingreceiver -run 'Test(LosslessJSONString|RawJSONObject|NullableControlString|UnicodeControls)'`.
-  `npm run typecheck` and `git diff --check` also passed. The initial focused
+  `git diff --check` also passed. The initial focused
   regressions failed on repaired controls before implementation. Inspect #34 and
   its linked PR for final candidate, CI, review, and landing evidence.
 - The same local checks passed after the depth compatibility fix, including the
@@ -372,26 +404,21 @@ future work. Internal input activity is not a completed race recording.
 ## Remaining Cleanup and Decisions
 
 The broader adversarial cleanup sequence is approved: release integrity, active Go
-transport, retained TypeScript correctness, then test/seam/documentation cleanup.
-Research findings still need adjudication and focused verification in their slices.
+transport, then test/seam/documentation cleanup. Research findings still need
+adjudication and focused verification in their slices.
 
-- Go transport: F-SCAN and N-CONTROL landed; WS-ERROR awaits upstream classification
-  support. H-HOST is approved and locally verified, pending CI, reviews, and
-  landing. The separate upstream ARM64 correction is implemented and reviewed
-  locally; public submission remains unapproved.
+- Go transport: F-SCAN, N-CONTROL, and H-HOST landed; WS-ERROR awaits upstream
+  classification support. The separate upstream ARM64 correction is implemented
+  and reviewed locally; public submission remains unapproved.
 - Pure-test oracles: complete attributable CarData and remaining reducer/gate
   assertions. Keep the existing value-state functional core and idiomatic Go.
-- TypeScript reference: lap/sector ordering and completion, replay termination,
-  cleanup/export failure handling, CLI/cache controls, cache completeness/atomicity,
-  acquisition pagination/retries, histogram correctness, and source ownership.
-  Retain the reference; its model is not authority for Go.
 - Verification engineering: supplied-evidence SPDX tests, structural workflow-gate
   tests, and demonstrated redundant work/dead scaffolding. Preserve independent
   generator/verifier cross-checks and all landing gates.
-- Decisions still pending: broader protocol resubscription after corruption, durable
-  raw capture, topic-specific Unicode integration for unimplemented reducers,
-  qualifying-phase fallback ownership, and unresolved TypeScript source/identity/
-  delivery policies. The layered Unicode approval does not decide these.
+- Decisions still pending: broader protocol resubscription after corruption,
+  durable raw capture, topic-specific Unicode integration for unimplemented
+  reducers, and qualifying-phase fallback ownership. The layered Unicode approval
+  does not decide these.
 
 ## Resume Procedure
 
@@ -401,7 +428,7 @@ Research findings still need adjudication and focused verification in their slic
 3. Select the next approved slice from the queue. Keep proposed or unimplemented
    work distinct from landed behavior.
 4. Include focused tests and the required architecture update. Run the applicable
-   `make check`, receiver race, TypeScript, diff, and CI checks. Final reviews must
+   `make check`, receiver race, diff, and CI checks. Final reviews must
    identify the exact candidate and commit metadata under `AGENTS.md`.
 5. Record the completed slice and any new decision before handing off or moving
    to the next slice. GitHub tracking should link to the canonical contract rather

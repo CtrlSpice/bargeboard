@@ -31,29 +31,11 @@ jobs:
       - name: Set up Go
         uses: ./.github/actions/setup-go
 
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install TypeScript dependencies
-        run: npm ci
-
       - name: Check Go distribution
         run: make check
 
       - name: Check receiver races
         run: go test -mod=readonly -race -count=1 -timeout=5m ./receiver/f1livetimingreceiver
-
-      - name: Check TypeScript reference
-        run: npm run typecheck
-
-      - name: Build TypeScript reference
-        run: npm run build
-
-      - name: Smoke test built TypeScript CLI
-        run: node dist/index.js --help
 
       - name: Check pull request diff
         if: github.event_name == 'pull_request'
@@ -145,7 +127,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: 24
 
       - name: Install release tools
         uses: ./.github/actions/setup-release-tools
