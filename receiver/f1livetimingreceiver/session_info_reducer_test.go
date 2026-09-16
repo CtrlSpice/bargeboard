@@ -481,6 +481,20 @@ func TestReduceSessionInfoRetirementHorizon(t *testing.T) {
 		retirementHorizon = 256
 		finalGeneration   = 2*retirementHorizon + 17
 	)
+	assertStale := func(state sessionInfoState, index int) {
+		t.Helper()
+		before := state
+		got := reduceSessionInfo(state, reducerTestIndexedDescriptor(index))
+		wantState := state
+		wantState.synchronized = false
+		assertSessionInfoReduction(t, got, sessionInfoReduction{
+			state:       wantState,
+			disposition: sessionInfoDispositionStale,
+		})
+		if state != before {
+			t.Fatalf("retained tuple %d replay mutated input state", index)
+		}
+	}
 
 	var state sessionInfoState
 	for generation := 1; generation <= finalGeneration; generation++ {
@@ -513,21 +527,20 @@ func TestReduceSessionInfoRetirementHorizon(t *testing.T) {
 			t.Fatalf("generation %d mutated input state", generation)
 		}
 		state = got.state
+
+		switch generation {
+		case 257:
+			assertStale(state, 0)
+		case 258:
+			assertStale(state, 256)
+		case 513:
+			assertStale(state, 511)
+		}
 	}
 
 	firstRetired := finalGeneration - 1 - retirementHorizon
 	for index := firstRetired; index < finalGeneration-1; index++ {
-		before := state
-		got := reduceSessionInfo(state, reducerTestIndexedDescriptor(index))
-		wantState := state
-		wantState.synchronized = false
-		assertSessionInfoReduction(t, got, sessionInfoReduction{
-			state:       wantState,
-			disposition: sessionInfoDispositionStale,
-		})
-		if state != before {
-			t.Fatalf("retained tuple %d replay mutated input state", index)
-		}
+		assertStale(state, index)
 	}
 
 	evictedIndex := firstRetired - 1
@@ -557,10 +570,21 @@ func TestReduceSessionInfoRetirementHorizon(t *testing.T) {
 		t.Fatal("evicted tuple replay mutated input state")
 	}
 
-	fresh := reduceSessionInfo(sessionInfoState{}, reducerTestIndexedDescriptor(evictedIndex))
-	wantFresh := wantReplay
-	wantFresh.state.generation = 1
-	wantFresh.disposition = sessionInfoDispositionInstalled
+	resetIndex := finalGeneration - 2
+	fresh := reduceSessionInfo(sessionInfoState{}, reducerTestIndexedDescriptor(resetIndex))
+	wantFresh := sessionInfoReduction{
+		state: sessionInfoState{
+			identity:          reducerTestIndexedIdentity(resetIndex),
+			identityAvailable: true,
+			synchronized:      true,
+			routeKey:          99,
+			routeAvailable:    true,
+			schedule:          reducerTestSchedule(1),
+			scheduleAvailable: true,
+			generation:        1,
+		},
+		disposition: sessionInfoDispositionInstalled,
+	}
 	assertSessionInfoReductionWithRetiredRange(t, fresh, wantFresh, 0, -1)
 }
 
