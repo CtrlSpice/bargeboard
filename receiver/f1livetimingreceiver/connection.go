@@ -52,60 +52,85 @@ type negotiateTransport struct {
 	TransferFormats []jsonControlString
 }
 
-// Keep the prior struct decoder's case-insensitive matching, ordered repeated
-// assignments, scalar-null no-ops, and slice-element reuse. Each assignment sees
-// the raw string first, even if a later duplicate overwrites it. Unknown values
-// are skipped rather than decoded; all keys at these control levels are strict.
-func (transport *negotiateTransport) UnmarshalJSON(raw []byte) error {
-	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return nil
-	}
+// visitNegotiateObject applies the negotiation-only known-member policy. There
+// are at most seven known names per object, so duplicate tracking is bounded;
+// unknown values (including nested keys) remain opaque and need no seen state.
+func visitNegotiateObject(raw []byte, names []string, visit func(string, json.RawMessage) error) error {
+	var seen uint8
 	return visitRawJSONObject(raw, func(key, value json.RawMessage) error {
 		field, err := decodeLosslessJSONString(key)
 		if err != nil {
 			return err
 		}
-		switch {
-		case strings.EqualFold(field, "transport"):
-			return json.Unmarshal(value, &transport.Transport)
-		case strings.EqualFold(field, "transferFormats"):
-			return json.Unmarshal(value, &transport.TransferFormats)
-		default:
-			return nil
+		for i, name := range names {
+			if !strings.EqualFold(field, name) {
+				continue
+			}
+			bit := uint8(1 << i)
+			if field != name || seen&bit != 0 || bytes.Equal(value, []byte("null")) {
+				return errors.New("invalid negotiation control member")
+			}
+			seen |= bit
+			return visit(field, value)
 		}
+		return nil
 	})
+}
+
+func (transport *negotiateTransport) UnmarshalJSON(raw []byte) error {
+	// Decode a complete fresh value before committing, even when encoding/json
+	// reuses a destination slice element. Omission must never inherit old fields.
+	var decoded negotiateTransport
+	err := visitNegotiateObject(raw, []string{"transport", "transferFormats"}, func(field string, value json.RawMessage) error {
+		switch field {
+		case "transport":
+			return json.Unmarshal(value, &decoded.Transport)
+		case "transferFormats":
+			var formats []json.RawMessage
+			if err := json.Unmarshal(value, &formats); err != nil {
+				return err
+			}
+			decoded.TransferFormats = make([]jsonControlString, len(formats))
+			for i, rawFormat := range formats {
+				format, err := decodeLosslessJSONString(rawFormat)
+				if err != nil {
+					return err
+				}
+				decoded.TransferFormats[i] = jsonControlString(format)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	*transport = decoded
+	return nil
 }
 
 func decodeNegotiateResponse(raw []byte) (negotiateResponse, error) {
 	var response negotiateResponse
 	// A top-level null previously decoded as the zero response, then failed the
-	// missing-token check. Preserve that policy as well as member-null behavior.
+	// missing-token check. Present known members instead reject null.
 	if bytes.Equal(bytes.Trim(raw, " \t\r\n"), []byte("null")) {
 		return response, nil
 	}
-	err := visitRawJSONObject(raw, func(key, value json.RawMessage) error {
-		field, err := decodeLosslessJSONString(key)
-		if err != nil {
-			return err
-		}
+	err := visitNegotiateObject(raw, []string{"connectionId", "connectionToken", "negotiateVersion", "url", "accessToken", "error", "availableTransports"}, func(field string, value json.RawMessage) error {
 		var destination any
-		switch {
-		case strings.EqualFold(field, "connectionId"):
+		switch field {
+		case "connectionId":
 			destination = &response.ConnectionID
-		case strings.EqualFold(field, "connectionToken"):
+		case "connectionToken":
 			destination = &response.ConnectionToken
-		case strings.EqualFold(field, "negotiateVersion"):
+		case "negotiateVersion":
 			destination = &response.NegotiateVersion
-		case strings.EqualFold(field, "url"):
+		case "url":
 			destination = &response.URL
-		case strings.EqualFold(field, "accessToken"):
+		case "accessToken":
 			destination = &response.AccessToken
-		case strings.EqualFold(field, "availableTransports"):
+		case "availableTransports":
 			destination = &response.AvailableTransports
-		case strings.EqualFold(field, "error"):
-			if bytes.Equal(value, []byte("null")) {
-				return nil
-			}
+		case "error":
 			isString, empty := jsonStringShape(value)
 			if !isString {
 				return errJSONString
