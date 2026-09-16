@@ -43,12 +43,13 @@ exact-candidate CI, including JavaScript CodeQL for the retained CJS, passed.
 
 **Approved test cleanup; implemented on `test/complete-cardata-oracle`; pending
 landing.**
-The first 2025 British Grand Prix race `CarData.z` archive record is now a pinned
-offline fixture with its direct source URL, archive prefix, exact compressed token,
-exact 2,380-byte inflated payload, and explicit synthetic feed-wrapper boundary.
-The pure normalization test compares the complete topic, payload bytes, timestamp,
-and source, preserves the complete input, and proves output storage does not alias
-the compressed input. It does not bind channel semantics or change production.
+The pre-existing inline first 2025 British Grand Prix race `CarData.z` token is now
+paired with pinned offline metadata: its direct source URL, archive prefix,
+compressed-token SHA-256, expected 2,380-byte inflation length and SHA-256, and an
+explicit synthetic feed-wrapper boundary. The pure normalization test compares the
+complete topic, payload byte identity, timestamp, and source, preserves the complete
+input, and proves output storage does not alias the compressed input. It does not
+bind channel semantics or change production.
 
 ### U-POLICY — Layered Unicode and input quality
 
@@ -433,6 +434,10 @@ adjudication and focused verification in their slices.
   tracks that Go 1.27 rejects the accepted JSON-depth boundary while the README
   currently claims Go 1.26 or newer. Pinned Go 1.26.8 and releases remain green;
   no depth-contract or supported-toolchain decision has been made.
+- Fixture licensing: [#48](https://github.com/CtrlSpice/bargeboard/issues/48)
+  tracks the owner/legal decision for pre-existing exact F1 archive bytes. This
+  slice does not add the readable inflated CarData record; its expected length
+  and SHA-256 retain the complete byte oracle without expanding that question.
 - Decisions still pending: broader protocol resubscription after corruption,
   durable raw capture, topic-specific Unicode integration for unimplemented
   reducers, and qualifying-phase fallback ownership. The layered Unicode approval
