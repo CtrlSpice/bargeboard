@@ -15,7 +15,8 @@ The test restores the quotes before normalization. `inflated_payload` is the exa
 `3e2dcbdac301ca7047c6064f4bc8ac0a307e36e0859f3c0c373ae755dbc5c5eb`.
 
 The static archive record is not a complete SignalR feed invocation. Its
-`synthetic_feed_timestamp` copies the first inflated entry's `Utc` solely to test
-feed timestamp normalization and source propagation. It is not captured wrapper
-metadata. This normalization fixture does not establish CarData channel meanings,
-active-driver rules, sentinel handling, or scaling.
+`synthetic_feed_timestamp` is deliberately distinct from every inflated entry's
+`Utc`; it exists solely to test feed timestamp normalization and source
+propagation without conflating wrapper and payload time. It is not captured
+wrapper metadata. This normalization fixture does not establish CarData channel
+meanings, active-driver rules, sentinel handling, or scaling.

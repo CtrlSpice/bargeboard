@@ -48,7 +48,7 @@ func TestNormalizeLiveTimingUpdateDecodesArchivedCarData(t *testing.T) {
 	if fixture.ArchivePrefix != "00:01:50.190" {
 		t.Fatalf("archive prefix = %q", fixture.ArchivePrefix)
 	}
-	if fixture.SyntheticFeedTimestamp != "2025-07-06T13:09:30.402376Z" {
+	if fixture.SyntheticFeedTimestamp != "2025-07-06T13:09:31.123456Z" {
 		t.Fatalf("synthetic feed timestamp = %q", fixture.SyntheticFeedTimestamp)
 	}
 	if got := fmt.Sprintf("%x", sha256.Sum256([]byte(fixture.CompressedPayload))); got != "b21a290f4ffc24800f470fda9a0e7fefcd0a3a33e4bd08974f690aac26340c73" {
@@ -58,10 +58,12 @@ func TestNormalizeLiveTimingUpdateDecodesArchivedCarData(t *testing.T) {
 		t.Fatalf("inflated payload SHA-256 = %s", got)
 	}
 
-	payload, err := json.Marshal(fixture.CompressedPayload)
+	encodedPayload, err := json.Marshal(fixture.CompressedPayload)
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
 	}
+	payload := make(json.RawMessage, len(encodedPayload), len(encodedPayload)+len(fixture.InflatedPayload))
+	copy(payload, encodedPayload)
 	input := liveTimingUpdate{
 		topic:     "CarData.z",
 		payload:   payload,
@@ -81,16 +83,16 @@ func TestNormalizeLiveTimingUpdateDecodesArchivedCarData(t *testing.T) {
 	want := normalizedLiveTimingUpdate{
 		topic:     "CarData",
 		payload:   bytes.Clone(fixture.InflatedPayload),
-		timestamp: time.Date(2025, 7, 6, 13, 9, 30, 402376000, time.UTC),
+		timestamp: time.Date(2025, 7, 6, 13, 9, 31, 123456000, time.UTC),
 		source:    liveTimingUpdateSourceFeed,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("normalizeLiveTimingUpdate() = %#v, want complete archived result %#v", got, want)
 	}
 
-	input.payload[0] = 'x'
+	clear(input.payload[:cap(input.payload)])
 	if !reflect.DeepEqual(got, want) {
-		t.Fatal("normalized result aliases compressed input storage")
+		t.Fatal("normalized result aliases compressed input backing storage")
 	}
 }
 
