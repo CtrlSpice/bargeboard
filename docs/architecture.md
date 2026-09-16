@@ -253,21 +253,24 @@ Negotiation keys, capability-object keys, handshake keys, hub-envelope keys, and
 snapshot manifest keys are validated before matching or map insertion. Every
 assigned negotiation control string is validated, including connection ID/token,
 URL/access-token controls, transport names, and every transfer format. This
-includes assignments later overwritten by a duplicate and v0's unused token
-field: accepting such assignments through a repairing decoder is not lossless.
+includes v0's unused token field: accepting such assignments through a repairing
+decoder is not lossless. N-CONTROL below now rejects duplicate negotiation controls
+before they can overwrite an assignment.
 Hub invocation IDs and targets, consumed feed topics and timestamps, and the
 compressed payload's outer base64 string use the same lossless string decoder.
 The base64, DEFLATE, UTF-8, JSON, timestamp, and size grammars retain their
 existing rejection boundaries.
 
-U1 preserves the pre-existing negotiation decoder's case-insensitive matching,
-ordered repeated assignments, scalar-null no-ops, and slice-element reuse across
-repeated capability arrays. Handshake keys remain case-sensitive, with the last
-raw value for a repeated `error` and presence-based rejection of `type`. Hub keys
+U1 originally preserved the pre-existing negotiation decoder's case-insensitive
+matching, ordered repeated assignments, scalar-null no-ops, and slice-element
+reuse across repeated capability arrays. The separately approved **N-CONTROL**
+policy under Live Timing Setup Boundaries supersedes only that negotiation
+compatibility contract. Handshake keys remain case-sensitive, with the last raw
+value for a repeated `error` and presence-based rejection of `type`. Hub keys
 retain strict duplicate and case-alias rejection; snapshots retain exact wire
 membership and decoded-key duplicate rejection before `.z` normalization.
-Escaped-equivalent valid keys follow those owning policies. Broader negotiation
-and handshake duplicate/casing/null tightening is a separate audit, not U1.
+Escaped-equivalent valid keys follow those owning policies. Handshake tightening
+remains a separate audit; N-CONTROL does not change shared nullable-string helpers.
 
 Server error descriptions are never decoded: validated token shape, presence,
 and emptiness suffice for the existing handshake/negotiation rejection and hub
@@ -522,6 +525,82 @@ The preflight body has no source authority. Draining it for connection reuse
 would make setup depend on irrelevant, potentially unbounded or stalled input.
 Body-close errors do not alter the header decision. This boundary introduces no
 body parsing or additional retry owner.
+
+#### Negotiation Control Acceptance (N-CONTROL)
+
+**Status: GREEN; approved and implemented, pending landing**
+
+Negotiation response known names are `connectionId`, `connectionToken`,
+`negotiateVersion`, `url`, `accessToken`, `error`, and `availableTransports`.
+Within each capability object the known names are `transport` and
+`transferFormats`. At these two levels the decoder MUST:
+
+- Decode every inspected key losslessly under U1 before matching. Canonical names
+  expressed with JSON escapes are accepted; matching uses the exact decoded name.
+- Reject any repeated known name, even with identical values or an
+  escaped-equivalent spelling. Reject every noncanonical case-fold alias of a
+  known name, including when the canonical spelling is absent. Case folding is
+  used only to detect and reject aliases, never to assign a control value.
+- Reject a present null known member, a null capability entry, and a null transfer
+  format entry. Every capability and format is checked, including entries after a
+  usable WebSockets/Text capability and entries for irrelevant transports.
+- Preserve tolerance for unknown members, including duplicate unknown names and
+  scalar-invalid nested strings/keys. Their values remain opaque. Raw UTF-8, JSON
+  grammar, and the whole-response 10,000-depth budget still apply to all content;
+  successful HTTP negotiation bodies retain the 64 KiB cap.
+
+These are newly approved local acceptance rules, not a correction to U1's original
+compatibility promise or a claim that SignalR mandates duplicate rejection.
+ASP.NET Core v8.0.0
+[`TransportProtocols.md`](https://github.com/dotnet/aspnetcore/blob/v8.0.0/src/SignalR/docs/specs/TransportProtocols.md)
+and
+[`NegotiateProtocol.cs`](https://github.com/dotnet/aspnetcore/blob/v8.0.0/src/SignalR/common/Http.Connections.Common/src/NegotiateProtocol.cs)
+support canonical names, response shapes, version-dependent identities, and
+unknown-extension tolerance. The reference parser uses exact decoded-name
+matching and fresh capability objects, but assigns repeated properties; its writer
+can emit a null transport name. It is not authority for blanket null or duplicate
+rejection. Compact transcribed examples and explicit synthetic mutations are
+attributed in `receiver/f1livetimingreceiver/testdata/negotiation/SOURCES.md`;
+they are not captured F1 responses.
+
+The stricter policy prevents an `error:"denied"` followed by `ERROR:""` from
+erasing rejection, and repeated capability arrays from combining WebSockets/Binary
+with a later `{transferFormats:["Text"]}` object. Last-wins assignment,
+case-insensitive assignment, and null-as-omission for known controls are rejected
+because they make those decisions ambiguous. Rejecting all unknown extensions or
+recursively applying the known-field policy to them is also rejected.
+
+Omitted `negotiateVersion` still means v0; explicit 0 selects `connectionId`, and
+explicit 1 requires both ID and token and selects `connectionToken`. Unsupported
+versions, final missing identity, nonempty error, unsupported redirect/access
+token, and absence of a WebSockets/Text capability retain their existing domain
+failures. Empty strings and incomplete capability objects still reach those domain
+checks; an incomplete object MUST NOT inherit fields from a previous destination
+or another capability. Top-level null may retain the terminal missing-token
+classification. Descriptive error strings use raw shape/emptiness rather than
+decoded text, preserving sanitized rejection even for unpaired surrogate escapes.
+
+The implementation stays local to negotiation in `connection.go`:
+`visitNegotiateObject` applies bounded known-member seen state over U1's raw
+visitor, and capability decoding stages a fresh value before assignment. A failed
+response decode MUST return the zero result; failed capability decoding MUST leave
+its destination and backing storage unchanged. Original input bytes remain
+unchanged. Invalid negotiation MUST terminate setup before URL construction or
+WebSocket upgrade, return neither partial identity/connection nor response cookies,
+close the response body, and expose only the existing bounded invalid-data error.
+Handshake, hub, manifest, retry, and shared nullable-string policies are unchanged.
+
+Verification MUST cover every known name's duplicate/escaped/case/null matrix at
+both object levels, irrelevant capability entries, exact decoded names, lossless
+controls/keys, opaque duplicate extensions, retained Unicode/depth/byte boundaries,
+v0/v1 selection, and final domain failures. Complete decoded/selected results,
+zero-on-failure results, destination/backing-storage preservation, and unchanged
+input bytes are required oracles. Synthetic in-memory HTTP tests MUST observe only
+OPTIONS and POST on invalid negotiation, no URL construction/upgrade, no returned
+cookies or partial connection, sanitized error chains, and body closure. The
+rejection-erasure and array-inheritance regressions MUST fail against the original
+decoder. Repository-wide checks, receiver race tests, CI, and independent reviews
+remain landing gates.
 
 #### HTTP Setup Failure Policy
 

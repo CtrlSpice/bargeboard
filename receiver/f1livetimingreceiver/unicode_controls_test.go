@@ -207,22 +207,23 @@ func TestUnicodeControlsHubMessageCompleteResult(t *testing.T) {
 }
 
 func TestUnicodeControlsNegotiationCompatibility(t *testing.T) {
+	// N-CONTROL supersedes only U1's negotiation duplicate/case/null tolerance.
 	const capabilities = `"availableTransports":[{"transport":"WebSockets","transferFormats":["Text"]}]`
 	for _, test := range []struct{ members, want, reason string }{
 		{`"connectionId":"id",` + capabilities, "id", ""},
-		{`"connectionId":"first","connection\u0049d":"last",` + capabilities, "last", ""},
-		{`"CONNECTIONID":"id","negotiateVersion":null,` + capabilities, "id", ""},
-		{`"connectionId":"id","connectionId":null,` + capabilities, "id", ""},
-		{`"connectionId":"id","connectionToken":"token","negotiateVersion":1,"negotiateVersion":null,` + capabilities, "token", ""},
-		{`"connectionId":"id","error":"denied","ERROR":"",` + capabilities, "id", ""},
-		{`"connectionId":"id","error":"\uD800","error":null,` + capabilities, "", "rejected the connection"},
-		{`"connectionId":"id","error":null,"url":null,"accessToken":null,` + capabilities, "id", ""},
-		{`"connectionId":"id",` + capabilities + `,"availableTransports":[{}]`, "id", ""},
-		{`"connectionId":"id",` + capabilities + `,"availableTransports":[null]`, "id", ""},
-		{`"connectionId":"id",` + capabilities + `,"availableTransports":[{"Transport":null,"TRANSFERFORMATS":[null]}]`, "id", ""},
-		{`"connectionId":"id",` + capabilities + `,"availableTransports":null`, "", "does not support"},
-		{`"connectionId":"id",` + capabilities + `,"availableTransports":[]`, "", "does not support"},
-		{`"connectionId":"id",` + capabilities + `,"availableTransports":[{"transferFormats":[]}]`, "", "does not support"},
+		{`"connectionId":"first","connection\u0049d":"last",` + capabilities, "", "decode"},
+		{`"CONNECTIONID":"id","negotiateVersion":null,` + capabilities, "", "decode"},
+		{`"connectionId":"id","connectionId":null,` + capabilities, "", "decode"},
+		{`"connectionId":"id","connectionToken":"token","negotiateVersion":1,"negotiateVersion":null,` + capabilities, "", "decode"},
+		{`"connectionId":"id","error":"denied","ERROR":"",` + capabilities, "", "decode"},
+		{`"connectionId":"id","error":"\uD800","error":null,` + capabilities, "", "decode"},
+		{`"connectionId":"id","error":null,"url":null,"accessToken":null,` + capabilities, "", "decode"},
+		{`"connectionId":"id",` + capabilities + `,"availableTransports":[{}]`, "", "decode"},
+		{`"connectionId":"id",` + capabilities + `,"availableTransports":[null]`, "", "decode"},
+		{`"connectionId":"id",` + capabilities + `,"availableTransports":[{"Transport":null,"TRANSFERFORMATS":[null]}]`, "", "decode"},
+		{`"connectionId":"id",` + capabilities + `,"availableTransports":null`, "", "decode"},
+		{`"connectionId":"id",` + capabilities + `,"availableTransports":[]`, "", "decode"},
+		{`"connectionId":"id",` + capabilities + `,"availableTransports":[{"transferFormats":[]}]`, "", "decode"},
 		{`"connectionId":123,"connectionId":"id",` + capabilities, "", "decode"},
 		{`"connectionId":"\uD800","connectionId":"id",` + capabilities, "", "decode"},
 		{`"connectionId":"id","connectionToken":"\uD800",` + capabilities, "", "decode"}, // Even unused v0 token assignments validate.

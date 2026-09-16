@@ -56,7 +56,7 @@ It groups the implementation work; issue text links back to the canonical policy
 | [U3 / #36](https://github.com/CtrlSpice/bargeboard/issues/36) | Landed in PR #40 at `7018b2a0e173b5619650498c71e6a7ef0636e0c9` | Nonfatal plain/inflated payload-quality findings after full batch validation; initial/coalesced warnings on the existing cadence; receiver-only affected-envelope counter and final summaries. Complete pure, byte/manifest/depth/limit, runtime-boundary, metrics-None, cardinality, and callback-summary oracles. |
 | F-SCAN | Landed in PR #41 at `2ca79a5a91e46ca6bda2576ddd74c40dd5403b46` | Linear separator scanning across tiny fragments in runtime hub and handshake framing. Saved byte-relative cursors, deterministic scan-start and complete buffer-state oracles, bounds/ownership/failure checks, and a one-byte-fragment benchmark. |
 | WS-ERROR | Upstream-first approved; local proposal prepared; dependency integration blocked | The pinned codec does not expose a typed identity for locally detected malformed frames. Prepare upstream classification support locally; public submission remains a separate decision. No dependency fork, replacement, or production classifier change is approved by this decision. |
-| N-CONTROL | Investigated; stricter acceptance policy pending approval | Duplicate negotiation controls can erase rejection or inherit capability fields. Exact-name, duplicate, and null rejection is a non-binding recommendation, not an amendment to U1's compatibility contract. |
+| N-CONTROL | Approved; implemented locally; pending landing | Negotiation-only duplicate-known, case-alias, and present-null/entry rejection supersedes U1's negotiation compatibility policy. Fresh atomic capability replacement prevents inheritance. Attributed protocol examples and synthetic regression/matrix/setup oracles accompany the canonical update. |
 
 U1 landed in PR #38 at `e2afacb0d6071f0a8e6a5c790c9039a3f52070d2`, the base of
 the U2 implementation. U2 landed in PR #39 at `0284a62`, the U3 implementation base.
@@ -104,25 +104,57 @@ a no-op and SessionInfo helpers remain unwired.
   and candidate; Autobahn could not run without the Docker daemon. js/Linux
   compilation is not execution evidence. The local report records exact commands
   and verification scope; resolve remaining upstream checks before submission.
+- The separate ARM64 investigation traced vet's assembly-declaration failure to
+  symbolic names `b_ptr+0`/`b_len+8` mismatching Go's `b+0`/`len+8`; the numeric ABI
+  offsets are correct. A two-line names-only overlay makes full upstream vet pass
+  on both base and candidate and produces identical 48 ARM64 instruction words.
+  Production `mask` and the upstream `TestMaskASM` both call Go, so passing those
+  tests alone does not exercise assembly. A separate direct ARM64 oracle passed
+  alignment, tail, guard-byte, returned-key, and streaming checks. Evidence is local
+  under `$TMPDIR/opencode/websocket-protocol-violation-report/arm64-investigation`.
+  The assembly correction is **not applied or approved for public submission**;
+  it remains a separate recommended upstream fix. No suppression was added.
+  Bargeboard's `go vet ./...` package selection does not directly target dependency
+  assembly declarations. WS-ERROR remains local, upstream-first, and integration
+  blocked as above.
 
-### N-CONTROL Pending Decision
+### N-CONTROL Resume Details
 
-The current U1 compatibility behavior remains authoritative. Investigation found
-that ordered duplicate assignments can clear a nonempty error/redirect control;
-reused capability slice elements can combine WebSockets from one array with Text
-from another. Existing synthetic acceptance tests in `unicode_controls_test.go`
-exercise related cases. These are hardening candidates, not U1 regressions.
-
-The non-binding recommendation is to reject duplicate known controls, noncanonical
-case aliases, and present null controls/array entries at the response and capability
-levels. Preserve unknown extensions, escaped canonical names, omitted-version v0,
-v0/v1 identity selection, and existing final capability checks. The version-tagged
-ASP.NET Core v8.0.0 `TransportProtocols.md` and `NegotiateProtocol.cs` support names
-and response structure, but do not mandate blanket duplicate rejection. Approval
-must settle the stricter policy before implementation. Its tests must cover
-rejection erasure, capability inheritance, duplicate/case/null matrices, preserved
-extensions and Unicode/depth behavior, complete zero-on-error results, input
-ownership, and prevention of WebSocket upgrade after invalid negotiation.
+- The user explicitly approved the stricter negotiation-only policy. The canonical
+  [N-CONTROL contract](architecture.md#negotiation-control-acceptance-n-control)
+  supersedes only U1's negotiation duplicate/case/null/slice-reuse compatibility.
+  It rejects duplicate known controls (including identical/escaped equivalents),
+  noncanonical case-fold aliases, present null known members, null capabilities,
+  and null transfer formats. Unknown extensions stay opaque, including duplicate
+  unknowns and malformed nested scalar content; inspected keys remain lossless.
+- `visitNegotiateObject` keeps only bounded known-member seen state. Capabilities
+  decode into fresh local values and commit only on success. Omitted-version v0,
+  explicit v0/v1 identity selection, empty strings/incomplete objects, final
+  token/error/redirect/capability decisions, and top-level-null missing-token
+  classification retain their domain behavior. Handshake, hub, manifest, retry,
+  global nullable helpers, and dependencies are outside this slice.
+- ASP.NET Core v8.0.0 `TransportProtocols.md` examples and `NegotiateProtocol.cs`
+  ground names/structure, not protocol-mandated duplicate or blanket null rejection.
+  `testdata/negotiation/SOURCES.md` attributes the four compact examples and labels
+  mutations as synthetic, with no claim of captured F1 wire evidence.
+- Before implementation, both new rejection-erasure and array-inheritance tests
+  failed on base `fc85d39a9a85ab2625bdbd139d1394bff6f85966`: `error:"denied"`
+  followed by `ERROR:""` was accepted, and WebSockets/Binary plus a later
+  `{transferFormats:["Text"]}` array element produced a usable capability.
+  Existing U1 acceptance oracles now reflect the newly approved policy.
+- Tests cover every known field's duplicate/case/null matrix (including irrelevant
+  capabilities), exact escaped names and Unicode aliases, opaque extensions,
+  domain decisions, complete decoded/selected results and zero-on-failure,
+  unchanged input/destination/backing storage, depth/byte caps, and in-memory HTTP
+  prevention of URL construction/upgrade with body closure and no returned
+  cookies/partial connection.
+- Local verification uses pinned Go 1.26.8 with `GOTOOLCHAIN=local`:
+  `go test ./receiver/f1livetimingreceiver -run 'Test(NegotiationControls|ParseNegotiateResponse|UnicodeControls)' -count=1`
+  and `go test -race -count=1 ./receiver/f1livetimingreceiver` passed. Full
+  `make check` and `npm run typecheck` passed; `gofmt -d` for the changed Go files
+  and `git diff --check` are clean. The exact-byte-cap success oracle distinguishes
+  HTTP's empty cookie slice from nil cookies on failure. Independent reviews, CI,
+  and landing remain governed by `AGENTS.md`.
 
 ### F-SCAN Resume Details
 
@@ -249,8 +281,9 @@ ownership, and prevention of WebSocket upgrade after invalid negotiation.
   accepted and limit-plus-one depths against the pre-U1 decoding pattern, and
   verify A/deep-valid-B/C continuation, snapshot atomicity, and shallow grammar
   equivalence with raw-view/input preservation.
-- Negotiation preserves case-insensitive assignment, duplicates, null no-ops,
-  and capability slice reuse; handshake preserves case-sensitive keys and last
+- U1 originally preserved negotiation case-insensitive assignment, duplicates,
+  null no-ops, and capability slice reuse; approved N-CONTROL supersedes only that
+  compatibility policy. Handshake preserves case-sensitive keys and last
   raw error value. Hub and manifest policies remain strict. Invalid control keys
   cannot become unknown keys or collide through U+FFFD repair.
 - Error descriptions use presence/string-shape/empty metadata only. Control
@@ -303,7 +336,7 @@ transport, retained TypeScript correctness, then test/seam/documentation cleanup
 Research findings still need adjudication and focused verification in their slices.
 
 - Go transport: F-SCAN landed; WS-ERROR awaits upstream classification support;
-  N-CONTROL awaits a stricter negotiation policy decision. Endpoint hostname
+  N-CONTROL is approved and implemented locally, pending landing. Endpoint hostname
   validation remains an independent audit item.
 - Pure-test oracles: complete attributable CarData and remaining reducer/gate
   assertions. Keep the existing value-state functional core and idiomatic Go.
