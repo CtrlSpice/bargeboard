@@ -276,17 +276,57 @@ func TestReduceSessionInfoBatchKeepsFeedWireOrder(t *testing.T) {
 	feedA := normalizeSessionInfoTestFeed(t, sessionInfoBatchDescriptorA, "2022-01-01T00:00:02Z")
 	feedB := normalizeSessionInfoTestFeed(t, sessionInfoBatchDescriptorB, "2022-01-01T00:00:01Z")
 
-	stateAB := reduceAuthoritativeSessionInfoTestBatch(t, sessionInfoState{}, feedA).state
-	stateAB = reduceAuthoritativeSessionInfoTestBatch(t, stateAB, feedB).state
-	stateBA := reduceAuthoritativeSessionInfoTestBatch(t, sessionInfoState{}, feedB).state
-	stateBA = reduceAuthoritativeSessionInfoTestBatch(t, stateBA, feedA).state
+	wantA := expectedSessionInfoBatchReductionA(t)
+	installedA := reduceAuthoritativeSessionInfoTestBatch(t, sessionInfoState{}, feedA)
+	assertSessionInfoReduction(t, installedA, wantA)
 
-	if stateAB.identity.meetingKey != 1200 || stateBA.identity.meetingKey != 1107 {
-		t.Fatalf("feed order produced meeting keys %d and %d", stateAB.identity.meetingKey, stateBA.identity.meetingKey)
+	wantB := sessionInfoReduction{
+		state: sessionInfoState{
+			identity: sessionInfoIdentity{
+				season:      2022,
+				meetingKey:  1200,
+				sessionType: canonicalSessionTypeRace,
+				sessionName: canonicalSessionNameRace,
+			},
+			identityAvailable: true,
+			synchronized:      true,
+			routeKey:          7000,
+			routeAvailable:    true,
+			schedule: sessionInfoSchedule{
+				startUTC: mustSessionInfoTime(t, "2022-01-01T12:00:00Z"),
+				endUTC:   mustSessionInfoTime(t, "2022-01-01T14:00:00Z"),
+			},
+			scheduleAvailable: true,
+			generation:        1,
+		},
+		disposition: sessionInfoDispositionInstalled,
 	}
-	if stateAB.generation != 2 || stateBA.generation != 2 {
-		t.Fatalf("feed order generations = %d and %d, want 2", stateAB.generation, stateBA.generation)
+	installedB := reduceAuthoritativeSessionInfoTestBatch(t, sessionInfoState{}, feedB)
+	assertSessionInfoReduction(t, installedB, wantB)
+
+	wantAB := wantB
+	wantAB.state.generation = 2
+	wantAB.state.retired.tuples[0] = sessionInfoLogicalTuple{
+		season:      2021,
+		meetingKey:  1107,
+		sessionName: canonicalSessionNamePractice1,
 	}
+	wantAB.state.retired.count = 1
+	wantAB.disposition = sessionInfoDispositionReplaced
+	gotAB := reduceAuthoritativeSessionInfoTestBatch(t, installedA.state, feedB)
+	assertSessionInfoReduction(t, gotAB, wantAB)
+
+	wantBA := wantA
+	wantBA.state.generation = 2
+	wantBA.state.retired.tuples[0] = sessionInfoLogicalTuple{
+		season:      2022,
+		meetingKey:  1200,
+		sessionName: canonicalSessionNameRace,
+	}
+	wantBA.state.retired.count = 1
+	wantBA.disposition = sessionInfoDispositionReplaced
+	gotBA := reduceAuthoritativeSessionInfoTestBatch(t, installedB.state, feedA)
+	assertSessionInfoReduction(t, gotBA, wantBA)
 }
 
 func TestReduceSessionInfoBatchRejectsInvalidNormalizedShape(t *testing.T) {
