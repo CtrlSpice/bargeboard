@@ -161,6 +161,7 @@ jobs:
           bash scripts/verify-release-ref_test.sh
           bash scripts/validate-release-controls_test.sh
           bash scripts/validate-release-binary_test.sh
+          bash scripts/validate-release-sbom_test.sh
           node --test scripts/publish-release_test.cjs
 
       - name: Check release scripts

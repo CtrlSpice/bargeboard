@@ -103,9 +103,14 @@ refresh_checksum() {
 mutate_sbom() {
   local dist="${1:?distribution required}"
   local filter="${2:?jq filter required}"
+  local requested="${3:-}"
   local sboms sbom
-  sboms=("$dist"/*.sbom.spdx.json)
-  sbom="${sboms[0]}"
+  if [[ -n "$requested" ]]; then
+    sbom="$dist/$requested"
+  else
+    sboms=("$dist"/*.sbom.spdx.json)
+    sbom="${sboms[0]}"
+  fi
   jq "$filter" "$sbom" >"$work/mutated-sbom.json"
   mv "$work/mutated-sbom.json" "$sbom"
   refresh_checksum "$dist" "$sbom"
@@ -115,6 +120,17 @@ bash "$verifier" "$source_dist"
 
 source_version="$(jq -er '.version' "$source_dist/metadata.json")"
 readonly source_version
+
+cp -R "$source_dist" "$work/dist-invalid-final-sbom"
+mutate_sbom \
+  "$work/dist-invalid-final-sbom" \
+  '.dataLicense = "MIT"' \
+  "bargeboard_${source_version}_windows_amd64.zip.sbom.spdx.json"
+expect_failure \
+  'non-first SPDX profile' \
+  "invalid release SPDX document: $work/dist-invalid-final-sbom/bargeboard_${source_version}_windows_amd64.zip.sbom.spdx.json" \
+  "$work/dist-invalid-final-sbom"
+
 mismatched_tag=v0.0.0
 if [[ "$source_version" == "${mismatched_tag#v}" ]]; then
   mismatched_tag=v0.0.1
