@@ -478,9 +478,10 @@ adjudication and focused verification in their slices.
   Supplied generator/module evidence, structural workflow-gate tests, and
   demonstrated redundant work/dead scaffolding remain research findings. Preserve
   independent generator/verifier cross-checks and all landing gates.
-- Release SBOM hardening: single-value JSON cardinality and semantic rather than
-  serialized runner-path detection are unapproved research findings. The current
-  profile retains its existing jq stream and literal grep behavior.
+- Release SBOM hardening: single-value JSON cardinality, terminal-newline-safe
+  SPDX ID and checksum anchoring, and semantic fail-closed runner-path detection
+  are unapproved research findings. The current profile retains its existing jq
+  stream, jq regex, and literal grep behavior.
 - Toolchain verification: [#46](https://github.com/CtrlSpice/bargeboard/issues/46)
   tracks that Go 1.27 rejects the accepted JSON-depth boundary while the README
   currently claims Go 1.26 or newer. Pinned Go 1.26.8 and releases remain green;
