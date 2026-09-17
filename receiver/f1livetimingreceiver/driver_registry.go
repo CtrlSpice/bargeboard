@@ -60,6 +60,9 @@ func reduceDriverRegistryFeed(
 		reduction.disposition = driverRegistryDispositionUnavailable
 		return reduction
 	}
+	if !state.frozen && parsed.issues&driverListIssueLimit != 0 {
+		return reduction
+	}
 
 	if state.frozen {
 		conflict := parsed.issues&driverListIssueLimit != 0

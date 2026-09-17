@@ -137,18 +137,23 @@ func TestReduceDriverRegistryFeedScopesInvalidEntries(t *testing.T) {
 }
 
 func TestReduceDriverRegistryBoundsStagedFeed(t *testing.T) {
-	first := reduceDriverRegistryRaw(t, driverRegistryState{}, liveTimingUpdateSourceFeed, syntheticDriverList(1, 33))
-	wantEntries := syntheticRegistryEntries(1, maxDriverRegistryEntries)
-	for index := range wantEntries {
-		wantEntries[index].racingNumberState = driverListFieldValid
+	overLimit := reduceDriverRegistryRaw(t, driverRegistryState{}, liveTimingUpdateSourceFeed, syntheticDriverList(1, 33))
+	wantOverLimit := driverRegistryReduction{issues: driverListIssueLimit}
+	if !reflect.DeepEqual(overLimit, wantOverLimit) {
+		t.Fatalf("33-entry feed reduction =\n%#v\nwant\n%#v", overLimit, wantOverLimit)
 	}
-	wantFirst := driverRegistryReduction{
-		state:       driverRegistryTestState(wantEntries...),
-		disposition: driverRegistryDispositionStaged,
-		issues:      driverListIssueLimit,
-	}
-	if !reflect.DeepEqual(first, wantFirst) {
-		t.Fatalf("33-entry feed reduction =\n%#v\nwant\n%#v", first, wantFirst)
+
+	staged := driverRegistryTestState(driverRegistryEntry{number: 99, tla: "OLD", tlaState: driverListFieldValid})
+	thirtyTwo := syntheticDriverList(1, maxDriverRegistryEntries)
+	for _, payload := range []string{
+		thirtyTwo[:len(thirtyTwo)-1] + `,"99":{"Tla":"NEW"}}`,
+		`{"99":{"Tla":"NEW"},` + thirtyTwo[1:],
+	} {
+		got := reduceDriverRegistryRaw(t, staged, liveTimingUpdateSourceFeed, payload)
+		want := driverRegistryReduction{state: staged, issues: driverListIssueLimit}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("over-limit feed order changed state =\n%#v\nwant\n%#v", got, want)
+		}
 	}
 
 	full := driverRegistryTestState(syntheticRegistryEntries(100, maxDriverRegistryEntries)...)
@@ -160,6 +165,21 @@ func TestReduceDriverRegistryBoundsStagedFeed(t *testing.T) {
 	}
 	if !reflect.DeepEqual(overflow, want) {
 		t.Fatalf("full-state overflow =\n%#v\nwant\n%#v", overflow, want)
+	}
+
+	updated := full
+	updated.drivers[0].tla = "NEW"
+	for _, payload := range []string{
+		`{"999":{"Tla":"ZZZ"},"100":{"Tla":"NEW"}}`,
+		`{"100":{"Tla":"NEW"},"999":{"Tla":"ZZZ"}}`,
+	} {
+		got := reduceDriverRegistryRaw(t, full, liveTimingUpdateSourceFeed, payload)
+		want := driverRegistryReduction{
+			state: updated, disposition: driverRegistryDispositionStaged, issues: driverListIssueLimit,
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("bounded feed lost known-driver update =\n%#v\nwant\n%#v", got, want)
+		}
 	}
 }
 

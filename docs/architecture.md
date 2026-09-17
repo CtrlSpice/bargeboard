@@ -2171,7 +2171,11 @@ count, and frozen and synchronized flags. Before freeze, each entry records `Tla
 and `RacingNumber` as absent, valid, or invalid; no map, raw payload, delayed
 update, diagnostic history, or signal candidate is retained. Feed updates apply
 sparse field presence and can stage incomplete entries, but never freeze or
-synchronize the registry. A 33rd previously unseen staged driver is discarded.
+synchronize the registry. A feed object with more than 32 unique canonical keys
+is over-limit and does not mutate staging, independent of member order. When an
+otherwise bounded feed reaches an already-full staged registry, previously unseen
+entries are discarded while patches for known drivers in that same feed still
+apply. Either limit outcome returns one bounded occurrence.
 
 A coherent authoritative snapshot must be non-empty, contain at most 32 unique
 canonical entries, provide one valid `Tla` for every entry, and contain no invalid
@@ -2209,8 +2213,9 @@ Focused tests use only compact synthetic JSON documented under
 `testdata/driver_list/SOURCES.md`. They cover lossless keys and strings, canonical
 integer and acronym boundaries, sparse invalid-present preservation, valid sibling
 reduction, deterministic ordering, the 32/33-entry bound, cold freeze, incoherent
-snapshot preservation, frozen agreement and conflicts, issue/result bounds, and
-input preservation. Exact source-derived bytes remain deferred under issue #48;
+snapshot preservation, known-driver updates after bounded overflow, frozen
+agreement and conflicts, issue/result bounds, and input preservation. Exact
+source-derived bytes remain deferred under issue #48;
 the canonical-session-type and SessionInfo replacement matrices belong to the
 future aggregate integration because the pure topic reducer has no session-type
 input.
