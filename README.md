@@ -6,7 +6,7 @@ A custom OpenTelemetry Collector distribution for Formula 1 telemetry. Designed 
 
 ## Implementation
 
-The Go Collector distribution is the sole implementation. Its baseline accepts OTLP traces, metrics, and logs, batches them, and writes them to the Collector's `debug` exporter. The compiled F1 Live Timing receiver authenticates, subscribes, reconnects, decodes, validates, and normalizes the live feed. It reports input activity and interruptions in the terminal and through Collector internal metrics. **F1 race export is not implemented:** the normalized-batch consumer is a no-op. Pure SessionInfo parsing, state reduction, and aggregate identity gating remain unwired; multi-topic reduction, runtime ownership, and OTLP projection are the next behavior slices. An OpenF1 receiver does not exist yet.
+The Go Collector distribution is the sole implementation. Its baseline accepts OTLP traces, metrics, and logs, batches them, and writes them to the Collector's `debug` exporter. The compiled F1 Live Timing receiver authenticates, subscribes, reconnects, decodes, validates, and normalizes the live feed. It reports input activity and interruptions in the terminal and through Collector internal metrics. **F1 race export is not implemented:** normalized batches update receiver-owned SessionInfo state, but the post-reduction consumer remains a no-op. Multi-topic reduction and OTLP projection are the next behavior slices. An OpenF1 receiver does not exist yet.
 
 The canonical design is the evolving [Bargeboard architecture](docs/architecture.md). It records accepted decisions, source limitations, pending candidates, implementation seams, and the required checks for future human and agent contributors.
 

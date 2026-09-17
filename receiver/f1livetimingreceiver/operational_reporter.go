@@ -77,7 +77,7 @@ func newOperationalReporter(ctx context.Context, settings receiver.Settings) (*o
 		{"reconnect_attempts", "{attempt}", "Actual Live Timing reconnect calls, excluding initial startup and canceled waits."},
 		{"recoveries", "{recovery}", "Input outages closed by validated subscription and normalized updates; not racing export success."},
 		{"normalized_updates", "{update}", "Envelopes in fully normalized input batches, not cars, datapoints, or exported racing signals."},
-		{"consumer_failures", "{failure}", "Failed normalized-batch consumer calls, counted independently of input outages."},
+		{"consumer_failures", "{failure}", "Failed normalized-batch state reductions or post-reduction consumer calls, counted independently of input outages."},
 		{"invalid_unicode_updates", "{update}", "Envelopes with malformed Unicode scalar escapes in fully normalized payloads; not rejected input or dropped racing signals."},
 	} {
 		var err error

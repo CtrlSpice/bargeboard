@@ -337,7 +337,9 @@ func TestOperationalInputDoesNotImplyRacingEmission(t *testing.T) {
 			_, _, _ = socket.Read(t.Context())
 			_ = socket.Write(t.Context(), websocket.MessageText, []byte("{}\x1e"))
 			_, _, _ = socket.Read(t.Context())
-			_ = socket.Write(t.Context(), websocket.MessageText, []byte(`{"type":3,"invocationId":"0","result":{"SessionStatus":{"Status":"Started"}}}`+"\x1e"+incrementalClose))
+			_ = socket.Write(t.Context(), websocket.MessageText, []byte(
+				`{"type":3,"invocationId":"0","result":{"SessionInfo":`+identityGateDescriptorA+`}}`+"\x1e"+incrementalClose,
+			))
 		})
 		if err := shared.Start(t.Context(), nil); err != nil {
 			t.Fatal(err)
@@ -350,6 +352,9 @@ func TestOperationalInputDoesNotImplyRacingEmission(t *testing.T) {
 		want[metricPrefix+"last_update_age"] = metricResult{"s", "Float64Gauge", []metricPoint{{"f1livetiming", 0}}}
 		if got := collectOperational(t, reader); !reflect.DeepEqual(got, want) {
 			t.Fatalf("input metrics = %#v, want %#v", got, want)
+		}
+		if shared.receiver.state != identityGateTestState() {
+			t.Fatalf("receiver state = %#v, want synchronized SessionInfo", shared.receiver.state)
 		}
 		if len(traces.AllTraces()) != 0 || len(metrics.AllMetrics()) != 0 || len(logs.AllLogs()) != 0 {
 			t.Fatal("unwired racing projection emitted data")

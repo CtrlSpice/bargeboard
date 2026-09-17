@@ -25,6 +25,8 @@ type liveTimingReceiver struct {
 
 	cancel      context.CancelFunc
 	done        chan struct{}
+	state       liveTimingState
+	reduce      func(liveTimingState, normalizedLiveTimingBatch) (liveTimingReduction, error)
 	consume     func(context.Context, normalizedLiveTimingBatch) error
 	now         func() time.Time
 	retryDelay  func(int) time.Duration
@@ -46,6 +48,7 @@ func newLiveTimingReceiver(config *Config, settings receiver.Settings) *liveTimi
 				return http.ErrUseLastResponse
 			},
 		},
+		reduce: reduceLiveTimingBatch,
 		consume: func(context.Context, normalizedLiveTimingBatch) error {
 			return nil
 		},
@@ -106,6 +109,15 @@ func (r *liveTimingReceiver) connect(ctx context.Context) (*signalRConnection, e
 	return connection, nil
 }
 
+func (r *liveTimingReceiver) reduceNormalizedBatch(batch normalizedLiveTimingBatch) error {
+	reduction, err := r.reduce(r.state, batch)
+	if err != nil {
+		return err
+	}
+	r.state = reduction.state
+	return nil
+}
+
 func (r *liveTimingReceiver) run(
 	ctx context.Context,
 	connection *signalRConnection,
@@ -126,6 +138,10 @@ func (r *liveTimingReceiver) run(
 			receivedBatch = true
 			r.operational.apply(operationalInput{event: opBatch, snapshot: normalized.source == liveTimingUpdateSourceSnapshot,
 				updates: len(normalized.updates), invalidUnicodeUpdates: normalized.invalidUnicodeUpdates})
+			if err := r.reduceNormalizedBatch(normalized); err != nil {
+				r.operational.apply(operationalInput{event: opConsumerFailure})
+				return nil
+			}
 			if err := r.consume(ctx, normalized); err != nil {
 				r.operational.apply(operationalInput{event: opConsumerFailure})
 			}
