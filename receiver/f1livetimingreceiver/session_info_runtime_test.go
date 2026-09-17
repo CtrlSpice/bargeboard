@@ -3,14 +3,14 @@ package f1livetimingreceiver
 import (
 	"context"
 	"errors"
-	"fmt"
 	"reflect"
-	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
+	"go.opentelemetry.io/collector/component/componentstatus"
 	"go.opentelemetry.io/collector/receiver/receivertest"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
@@ -101,6 +101,7 @@ func TestReceiverOwnsSessionInfoStateAcrossReconnect(t *testing.T) {
 
 func TestReceiverContainsReductionFailure(t *testing.T) {
 	var connections atomic.Int32
+	releaseClose := make(chan struct{})
 	server := newConnectionTestServer(t, func(connection *websocket.Conn) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -111,13 +112,19 @@ func TestReceiverContainsReductionFailure(t *testing.T) {
 		connections.Add(1)
 		_ = connection.Write(ctx, websocket.MessageText, []byte(
 			sessionInfoRuntimeFeed(identityGateDescriptorA, "2022-01-01T00:00:00Z")+
-				incrementalFeedA+incrementalFeedC+incrementalClose,
+				incrementalFeedA+incrementalFeedC,
 		))
+		<-releaseClose
+		_ = connection.Write(ctx, websocket.MessageText, []byte(incrementalClose))
 	})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseClose) }) }
+	t.Cleanup(release)
 
 	core, observedLogs := observer.New(zap.WarnLevel)
 	settings := receivertest.NewNopSettings(Type)
 	settings.Logger = zap.New(core)
+	host := &statusHost{events: make(chan *componentstatus.Event, 8)}
 	receiver := newLiveTimingReceiver(connectionTestConfig(t, server.URL), settings)
 	baseReduce := receiver.reduce
 	var reduceCalls atomic.Int32
@@ -144,19 +151,15 @@ func TestReceiverContainsReductionFailure(t *testing.T) {
 		return nil
 	}
 
-	if err := receiver.Start(context.Background(), nil); err != nil {
+	if err := receiver.Start(context.Background(), host); err != nil {
 		t.Fatal(err)
 	}
+	requireAwaitingInput(t, host)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		_ = receiver.Shutdown(ctx)
 	})
-	select {
-	case <-receiver.done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for receiver completion")
-	}
 
 	for _, want := range []consumedBatch{
 		{topic: "SessionInfo", payload: identityGateDescriptorA},
@@ -167,8 +170,10 @@ func TestReceiverContainsReductionFailure(t *testing.T) {
 			if got != want {
 				t.Fatalf("consumed batch = %#v, want %#v", got, want)
 			}
-		default:
-			t.Fatalf("successful batch %#v was not consumed", want)
+		case <-receiver.done:
+			t.Fatalf("receiver stopped before consuming batch %#v", want)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for successful batch %#v", want)
 		}
 	}
 	if want := []int64{1, 2, 3}; !reflect.DeepEqual(accountedUpdates, want) {
@@ -180,21 +185,34 @@ func TestReceiverContainsReductionFailure(t *testing.T) {
 	if receiver.state != identityGateTestState() {
 		t.Fatalf("failed reduction did not preserve receiver state: %#v", receiver.state)
 	}
-	if got := receiver.operational.state.Load(); got.consumerFailures != 1 || got.updates != 3 {
-		t.Fatalf("operational state = %+v", got)
+	gotOperational := *receiver.operational.state.Load()
+	wantOperational := operationalState{
+		started: gotOperational.started, lastUpdate: gotOperational.lastUpdate,
+		connection: true, connectionData: true, updates: 3, consumerFailures: 1,
 	}
-	consumerLogs := observedLogs.FilterMessage("F1 live timing batch consumer failed; input observation does not imply export").All()
-	if len(consumerLogs) != 1 {
+	if gotOperational.started.IsZero() || gotOperational.lastUpdate.IsZero() || gotOperational != wantOperational {
+		t.Fatalf("operational state before source close = %+v, want %+v", gotOperational, wantOperational)
+	}
+	if len(host.events) != 0 {
+		t.Fatalf("reduction failure emitted status events: %#v", host.events)
+	}
+	consumerLogs := observedLogs.All()
+	if len(consumerLogs) != 1 || consumerLogs[0].Level != zap.WarnLevel ||
+		consumerLogs[0].Message != "F1 live timing batch consumer failed; input observation does not imply export" {
 		t.Fatalf("reduction failure logs = %#v", observedLogs.All())
 	}
 	if len(consumerLogs[0].Context) != 0 {
 		t.Fatalf("reduction failure log fields = %#v, want none", consumerLogs[0].ContextMap())
 	}
-	for _, entry := range observedLogs.All() {
-		output := entry.Message + fmt.Sprint(entry.ContextMap())
-		if strings.Contains(output, "sensitive synthetic reduction failure") {
-			t.Fatalf("reduction failure log exposed internal error: %q", output)
-		}
+
+	release()
+	select {
+	case <-receiver.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for receiver completion")
+	}
+	if connections.Load() != 1 || retries.Load() != 0 {
+		t.Fatalf("connections = %d, retries = %d after source close", connections.Load(), retries.Load())
 	}
 }
 
