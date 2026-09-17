@@ -2200,6 +2200,12 @@ issue bit or latch is retained in registry state, and this slice adds no runtime
 log, metric, label, cadence, or summary. The existing U3 affected-envelope
 warning and counter remain the only runtime Unicode visibility.
 
+Parser-local duplicate tracking covers every canonical member, including keys
+discarded after the 32-entry result bound, and is bounded by the already-bounded
+normalized payload. It is discarded with the parse call and never enters registry
+state. A duplicate overflow key therefore returns shape and identity occurrences
+alongside the limit occurrence without enlarging the retained result.
+
 This core is deliberately not part of `liveTimingState` or
 `reduceLiveTimingBatch`. It does not receive production batches, reset on a
 SessionInfo generation replacement, process requested snapshot omission, or
@@ -2214,8 +2220,8 @@ Focused tests use only compact synthetic JSON documented under
 integer and acronym boundaries, sparse invalid-present preservation, valid sibling
 reduction, deterministic ordering, the 32/33-entry bound, cold freeze, incoherent
 snapshot preservation, known-driver updates after bounded overflow, frozen
-agreement and conflicts, issue/result bounds, and input preservation. Exact
-source-derived bytes remain deferred under issue #48;
+agreement and conflicts, duplicate overflow keys, issue/result bounds, and input
+preservation. Exact source-derived bytes remain deferred under issue #48;
 the canonical-session-type and SessionInfo replacement matrices belong to the
 future aggregate integration because the pure topic reducer has no session-type
 input.

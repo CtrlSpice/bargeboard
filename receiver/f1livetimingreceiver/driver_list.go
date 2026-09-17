@@ -51,6 +51,7 @@ func parseDriverList(payload json.RawMessage) (driverListParseResult, error) {
 	}
 
 	var result driverListParseResult
+	seen := make(map[int64]int, maxDriverRegistryEntries+1)
 	err := visitRawJSONObject(payload, func(key, value json.RawMessage) error {
 		name, err := decodeLosslessJSONString(key)
 		if errors.Is(err, errJSONScalar) {
@@ -70,7 +71,12 @@ func parseDriverList(payload json.RawMessage) (driverListParseResult, error) {
 			return err
 		}
 		result.issues |= issues
-		if index := driverListPatchIndex(&result, number); index >= 0 {
+		if storedIndex, duplicate := seen[number]; duplicate {
+			if storedIndex == 0 {
+				result.issues |= driverListIssueShape | driverListIssueIdentity
+				return nil
+			}
+			index := storedIndex - 1
 			prior := result.entries[index]
 			result.entries[index] = driverListEntryPatch{
 				number:            number,
@@ -83,10 +89,12 @@ func parseDriverList(payload json.RawMessage) (driverListParseResult, error) {
 			return nil
 		}
 		if int(result.count) == len(result.entries) {
+			seen[number] = 0
 			result.issues |= driverListIssueLimit
 			return nil
 		}
 		result.entries[result.count] = entry
+		seen[number] = int(result.count) + 1
 		result.count++
 		return nil
 	})
@@ -216,13 +224,4 @@ func parseCanonicalDriverNumber(value string) (int64, bool) {
 	}
 	number, err := strconv.ParseInt(value, 10, 64)
 	return number, err == nil
-}
-
-func driverListPatchIndex(result *driverListParseResult, number int64) int {
-	for index := 0; index < int(result.count); index++ {
-		if result.entries[index].number == number {
-			return index
-		}
-	}
-	return -1
 }

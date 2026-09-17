@@ -198,3 +198,21 @@ func TestParseDriverListIssueOccurrencesStayBounded(t *testing.T) {
 		t.Fatalf("issues = %b, want %b", got.issues, want)
 	}
 }
+
+func TestParseDriverListReportsDuplicateOverflowEntry(t *testing.T) {
+	firstThirtyTwo, err := parseDriverList(json.RawMessage(syntheticDriverList(1, maxDriverRegistryEntries)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	thirtyThree := syntheticDriverList(1, maxDriverRegistryEntries+1)
+	payload := thirtyThree[:len(thirtyThree)-1] + `,"\u0033\u0033":{"Tla":"ZZZ"}}`
+	got, err := parseDriverList(json.RawMessage(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := firstThirtyTwo
+	want.issues = driverListIssueLimit | driverListIssueShape | driverListIssueIdentity
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("overflow duplicate result =\n%#v\nwant\n%#v", got, want)
+	}
+}
