@@ -1,0 +1,293 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly script_dir
+readonly validator="$script_dir/validate-release-sbom.sh"
+readonly archive=bargeboard_1.2.3_linux_amd64.tar.gz
+readonly archive_digest=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+readonly namespace="https://github.com/CtrlSpice/bargeboard/sbom/sha256-$archive_digest"
+readonly created=2026-09-09T00:00:00Z
+readonly archive_version="sha256:$archive_digest"
+readonly go_version=go1.26.8
+readonly source=bargeboard_1.2.3_linux_amd64/bargeboard
+readonly project_package=github.com/CtrlSpice/bargeboard
+readonly other_relationship_comment="evident-by: indicates the package's existence is evident by the given file"
+work="$(mktemp -d)"
+readonly work
+trap 'rm -rf "$work"' EXIT
+
+fixture() {
+  jq -cn \
+    --arg archive "$archive" \
+    --arg archive_digest "$archive_digest" \
+    --arg namespace "$namespace" \
+    --arg created "$created" \
+    --arg archive_version "$archive_version" \
+    --arg go_version "$go_version" \
+    --arg source "$source" \
+    --arg project "$project_package" \
+    --arg other_relationship_comment "$other_relationship_comment" '
+    {
+      SPDXID: "SPDXRef-DOCUMENT",
+      creationInfo: {
+        created: $created,
+        creators: ["Organization: Anchore, Inc", "Tool: syft-1.51.1"],
+        licenseListVersion: "3.28"
+      },
+      dataLicense: "CC0-1.0",
+      documentNamespace: $namespace,
+      files: [{
+        SPDXID: "SPDXRef-File-bargeboard",
+        checksums: [
+          {algorithm: "SHA1", checksumValue: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+          {algorithm: "SHA256", checksumValue: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
+        ],
+        copyrightText: "NOASSERTION",
+        fileName: $source,
+        fileTypes: ["APPLICATION", "BINARY"],
+        licenseConcluded: "NOASSERTION",
+        licenseInfoInFiles: ["NOASSERTION"]
+      }],
+      name: $archive,
+      packages: [
+        {
+          SPDXID: "SPDXRef-Package-archive",
+          checksums: [{algorithm: "SHA256", checksumValue: $archive_digest}],
+          copyrightText: "NOASSERTION",
+          downloadLocation: "NOASSERTION",
+          filesAnalyzed: false,
+          licenseConcluded: "NOASSERTION",
+          licenseDeclared: "NOASSERTION",
+          name: $archive,
+          primaryPackagePurpose: "ARCHIVE",
+          supplier: "NOASSERTION",
+          versionInfo: $archive_version
+        },
+        {
+          SPDXID: "SPDXRef-Package-project",
+          copyrightText: "NOASSERTION",
+          downloadLocation: "NOASSERTION",
+          externalRefs: [{
+            referenceCategory: "PACKAGE-MANAGER",
+            referenceLocator: "pkg:golang/github.com/ctrlspice/bargeboard@v1.2.3",
+            referenceType: "purl"
+          }],
+          filesAnalyzed: false,
+          licenseConcluded: "Apache-2.0",
+          licenseDeclared: "Apache-2.0",
+          name: $project,
+          sourceInfo: ("acquired package info from go module information: " + $source),
+          supplier: "NOASSERTION",
+          versionInfo: "v1.2.3"
+        },
+        {
+          SPDXID: "SPDXRef-Package-stdlib",
+          copyrightText: "NOASSERTION",
+          downloadLocation: "NOASSERTION",
+          filesAnalyzed: false,
+          licenseConcluded: "NOASSERTION",
+          licenseDeclared: "BSD-3-Clause",
+          name: "stdlib",
+          sourceInfo: ("acquired package info from go module information: " + $source),
+          supplier: "NOASSERTION",
+          versionInfo: $go_version
+        },
+        {
+          SPDXID: "SPDXRef-Package-dependency",
+          checksums: [{
+            algorithm: "SHA256",
+            checksumValue: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+          }],
+          copyrightText: "NOASSERTION",
+          downloadLocation: "NOASSERTION",
+          externalRefs: [{
+            referenceCategory: "PACKAGE-MANAGER",
+            referenceLocator: "pkg:golang/example.com/dependency@v1.0.0",
+            referenceType: "purl"
+          }],
+          filesAnalyzed: false,
+          licenseConcluded: "NOASSERTION",
+          licenseDeclared: "NOASSERTION",
+          name: "example.com/dependency",
+          sourceInfo: ("acquired package info from go module information: " + $source),
+          supplier: "NOASSERTION",
+          versionInfo: "v1.0.0"
+        }
+      ],
+      relationships: [
+        {
+          spdxElementId: "SPDXRef-DOCUMENT",
+          relationshipType: "DESCRIBES",
+          relatedSpdxElement: "SPDXRef-Package-archive"
+        },
+        {
+          spdxElementId: "SPDXRef-Package-archive",
+          relationshipType: "CONTAINS",
+          relatedSpdxElement: "SPDXRef-Package-project"
+        },
+        {
+          spdxElementId: "SPDXRef-Package-dependency",
+          relationshipType: "DEPENDENCY_OF",
+          relatedSpdxElement: "SPDXRef-Package-project"
+        },
+        {
+          spdxElementId: "SPDXRef-Package-dependency",
+          relationshipType: "OTHER",
+          relatedSpdxElement: "SPDXRef-File-bargeboard",
+          comment: $other_relationship_comment
+        }
+      ],
+      spdxVersion: "SPDX-2.3"
+    }
+  '
+}
+
+validate() {
+  local document="${1:?document required}"
+  bash "$validator" \
+    "$document" \
+    "$archive" \
+    "$namespace" \
+    "$created" \
+    "$archive_version" \
+    "$go_version" \
+    "$source"
+}
+
+reject() {
+  local description="${1:?description required}"
+  local filter="${2:?jq filter required}"
+  local document="$work/rejected.json"
+  local output
+  fixture | jq "$filter" >"$document"
+  if output="$(validate "$document" 2>&1)"; then
+    printf 'expected invalid supplied SPDX evidence: %s\n' "$description" >&2
+    exit 1
+  fi
+  if [[ "$output" != "invalid release SPDX document: $document" ]]; then
+    printf 'unexpected SPDX rejection for %s: %s\n' "$description" "$output" >&2
+    exit 1
+  fi
+}
+
+fixture >"$work/accepted.json"
+validate "$work/accepted.json"
+
+reject 'unknown top-level field' '.unexpected = true'
+reject 'SPDX version' '.spdxVersion = "SPDX-2.2"'
+reject 'document SPDX ID' '.SPDXID = "SPDXRef-Other"'
+reject 'data license' '.dataLicense = "MIT"'
+reject 'document name' '.name = "other.tar.gz"'
+reject 'document namespace' '.documentNamespace = "https://example.invalid/sbom"'
+reject 'creation time' '.creationInfo.created = "2099-01-01T00:00:00Z"'
+reject 'creator identity' '.creationInfo.creators[1] = "Tool: unrelated"'
+reject 'license-list version' '.creationInfo.licenseListVersion = "0.0"'
+reject 'unknown creation-info field' '.creationInfo.unexpected = true'
+reject 'unknown package field' \
+  '(.packages[] | select(.name == "example.com/dependency") | .unexpected) = true'
+reject 'package SPDX ID grammar' '
+  (.packages[] | select(.name == "example.com/dependency") | .SPDXID) as $original |
+  (.packages[] | select(.name == "example.com/dependency") | .SPDXID) = "SPDXRef-invalid id" |
+  .relationships |= map(
+    if .spdxElementId == $original then .spdxElementId = "SPDXRef-invalid id"
+    elif .relatedSpdxElement == $original then .relatedSpdxElement = "SPDXRef-invalid id"
+    else . end
+  )
+'
+reject 'package name' \
+  '(.packages[] | select(.name == "example.com/dependency") | .name) = ""'
+reject 'package version' \
+  '(.packages[] | select(.name == "example.com/dependency") | .versionInfo) = ""'
+reject 'package supplier' \
+  '(.packages[] | select(.name == "example.com/dependency") | .supplier) = "Organization: Other"'
+reject 'package download location' \
+  '(.packages[] | select(.name == "example.com/dependency") | .downloadLocation) = "https://example.invalid"'
+reject 'package file analysis' \
+  '(.packages[] | select(.name == "example.com/dependency") | .filesAnalyzed) = true'
+reject 'package copyright' \
+  '(.packages[] | select(.name == "example.com/dependency") | .copyrightText) = "Copyright"'
+reject 'package checksum shape' \
+  '(.packages[] | select(.name == "example.com/dependency") | .checksums[0].algorithm) = "SHA1"'
+reject 'package external-reference shape' \
+  '(.packages[] | select(.name == "example.com/dependency") | .externalRefs[0].referenceCategory) = "SECURITY"'
+reject 'project concluded license' \
+  '(.packages[] | select(.name == "github.com/CtrlSpice/bargeboard") | .licenseConcluded) = "NOASSERTION"'
+reject 'project declared license' \
+  '(.packages[] | select(.name == "github.com/CtrlSpice/bargeboard") | .licenseDeclared) = "NOASSERTION"'
+reject 'project package shape' '
+  (.packages[] | select(.name == "github.com/CtrlSpice/bargeboard") | .checksums) = [{
+    algorithm: "SHA256",
+    checksumValue: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  }]
+'
+reject 'archive checksum' \
+  '(.packages[] | select(.primaryPackagePurpose == "ARCHIVE") | .checksums[0].checksumValue) = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"'
+reject 'archive purpose' \
+  '(.packages[] | select(.primaryPackagePurpose == "ARCHIVE") | .primaryPackagePurpose) = "SOURCE"'
+reject 'archive concluded license' \
+  '(.packages[] | select(.primaryPackagePurpose == "ARCHIVE") | .licenseConcluded) = "MIT"'
+reject 'archive declared license' \
+  '(.packages[] | select(.primaryPackagePurpose == "ARCHIVE") | .licenseDeclared) = "MIT"'
+reject 'archive package shape' '
+  (.packages[] | select(.primaryPackagePurpose == "ARCHIVE") | .sourceInfo) = "extra source"
+'
+reject 'standard-library concluded license' \
+  '(.packages[] | select(.name == "stdlib") | .licenseConcluded) = "BSD-3-Clause"'
+reject 'standard-library declared license' \
+  '(.packages[] | select(.name == "stdlib") | .licenseDeclared) = "NOASSERTION"'
+reject 'standard-library version' \
+  '(.packages[] | select(.name == "stdlib") | .versionInfo) = "go1.99.0"'
+reject 'standard-library source' \
+  '(.packages[] | select(.name == "stdlib") | .sourceInfo) = "unrelated source"'
+reject 'standard-library package shape' '
+  (.packages[] | select(.name == "stdlib") | .externalRefs) = [{
+    referenceCategory: "PACKAGE-MANAGER",
+    referenceLocator: "pkg:golang/stdlib@go1.26.8",
+    referenceType: "purl"
+  }]
+'
+reject 'file cardinality' \
+  '.files += [(.files[0] | .SPDXID = "SPDXRef-File-other")]'
+reject 'unknown file field' '.files[0].unexpected = true'
+reject 'file SPDX ID grammar' '
+  .files[0].SPDXID as $original |
+  .files[0].SPDXID = "SPDXRef-invalid id" |
+  .relationships |= map(
+    if .spdxElementId == $original then .spdxElementId = "SPDXRef-invalid id"
+    elif .relatedSpdxElement == $original then .relatedSpdxElement = "SPDXRef-invalid id"
+    else . end
+  )
+'
+reject 'file checksum shape' '.files[0].checksums[0].algorithm = "MD5"'
+reject 'duplicate valid SPDX ID' '
+  (.packages[] | select(.name == "example.com/dependency") | .SPDXID) as $dependency |
+  (.packages[] | select(.name == "example.com/dependency") | .SPDXID) = "SPDXRef-Package-stdlib" |
+  .relationships |= map(
+    if .spdxElementId == $dependency then .spdxElementId = "SPDXRef-Package-stdlib"
+    elif .relatedSpdxElement == $dependency then .relatedSpdxElement = "SPDXRef-Package-stdlib"
+    else . end
+  )
+'
+reject 'cross-category duplicate SPDX ID' '
+  .files[0].SPDXID = "SPDXRef-Package-dependency" |
+  (.relationships[] | select(.relationshipType == "OTHER") | .relatedSpdxElement) =
+    "SPDXRef-Package-dependency"
+'
+reject 'dangling relationship' '.relationships[0].relatedSpdxElement = "SPDXRef-Missing"'
+reject 'ordinary relationship shape' '.relationships[0].comment = "unexpected"'
+reject 'OTHER relationship meaning' '
+  (.relationships[] | select(.relationshipType == "OTHER") | .comment) = "unverified claim"
+'
+
+fixture | jq --arg workspace "$work/workspace" \
+  '(.packages[] | select(.name == "example.com/dependency") | .sourceInfo) = $workspace' \
+  >"$work/workspace.json"
+if output="$(GITHUB_WORKSPACE="$work/workspace" validate "$work/workspace.json" 2>&1)"; then
+  printf 'expected runner workspace path in supplied SPDX evidence to fail\n' >&2
+  exit 1
+fi
+if [[ "$output" != "SBOM leaks the runner workspace path: $work/workspace.json" ]]; then
+  printf 'unexpected workspace-path rejection: %s\n' "$output" >&2
+  exit 1
+fi

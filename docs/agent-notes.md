@@ -81,6 +81,19 @@ retirement cursor wraps, then proves complete adjacent-eviction replay and
 process-reset acceptance. Production and the canonical FIFO contract are
 unchanged.
 
+### SPDX-PROFILE-EVIDENCE — Validate supplied release SBOM profiles
+
+**Approved verification cleanup; implemented on `test/validate-supplied-spdx-profile`;
+pending landing.** The existing closed SPDX document profile is isolated in a
+standalone validator used by the complete artifact verifier. Compact synthetic
+evidence supplies an accepted document and mutations across document closure,
+package-role, license, checksum, relationship, ID-uniqueness, and runner-path
+rejection boundaries. A full release mutation proves the final Windows SBOM
+reaches the same validator. License policy, notices, corresponding source,
+archive shape, and generator/verifier independence are unchanged. Generator
+normalization and supplied module/notices
+binding remain separate research findings.
+
 ### U-POLICY — Layered Unicode and input quality
 
 **Approved policy; U1/U2/U3 landed.** The user approved the strategy and
@@ -137,6 +150,7 @@ It groups the implementation work; issue text links back to the canonical policy
 | FEED-ORDER-ORACLE | Landed in PR #49 at `97424b134b81886bd116ec365ec46e28bf244ff7` | Assert complete SessionInfo descriptor reductions in both feed delivery orders while reversed timestamps prove strict callback order. |
 | TOKEN-BOUNDARY-ORACLE | Landed in PR #50 at `f7acdb62f8be32349896920f3315c364c88044d4` | Assert complete generation and routing-epoch results at the final legal increment, exhaustion, recovery, and generation replacement boundaries. |
 | RETIREMENT-HORIZON-ORACLE | Landed in PR #52 at `8567109947b798c3b8ae3f574efa1553d5d4b89e` | Independently bind the exact 256-tuple replay-defense horizon and assert complete reductions, membership, eviction, cursor-wrap, and process-reset behavior. |
+| SPDX-PROFILE-EVIDENCE | Approved verification cleanup; implemented on `test/validate-supplied-spdx-profile`; pending landing | Isolate the unchanged closed SPDX profile validator, prove accepted supplied-document handling and central rejection boundaries, and exercise a non-first release SBOM. |
 
 U1 landed in PR #38 at `e2afacb0d6071f0a8e6a5c790c9039a3f52070d2`, the base of
 the U2 implementation. U2 landed in PR #39 at `0284a62`, the U3 implementation base.
@@ -460,9 +474,14 @@ adjudication and focused verification in their slices.
 - Pure-test oracles: CAR-ORACLE, FEED-ORDER-ORACLE, TOKEN-BOUNDARY-ORACLE, and
   RETIREMENT-HORIZON-ORACLE landed. Keep the existing value-state functional core
   and idiomatic Go.
-- Verification engineering: supplied-evidence SPDX tests, structural workflow-gate
-  tests, and demonstrated redundant work/dead scaffolding. Preserve independent
-  generator/verifier cross-checks and all landing gates.
+- Verification engineering: SPDX-PROFILE-EVIDENCE is implemented pending landing.
+  Supplied generator/module evidence, structural workflow-gate tests, and
+  demonstrated redundant work/dead scaffolding remain research findings. Preserve
+  independent generator/verifier cross-checks and all landing gates.
+- Release SBOM hardening: single-value JSON cardinality, terminal-newline-safe
+  SPDX ID and checksum anchoring, and semantic fail-closed runner-path detection
+  are unapproved research findings. The current profile retains its existing jq
+  stream, jq regex, and literal grep behavior.
 - Toolchain verification: [#46](https://github.com/CtrlSpice/bargeboard/issues/46)
   tracks that Go 1.27 rejects the accepted JSON-depth boundary while the README
   currently claims Go 1.26 or newer. Pinned Go 1.26.8 and releases remain green;
