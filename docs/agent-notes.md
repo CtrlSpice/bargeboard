@@ -96,7 +96,7 @@ binding remain separate research findings.
 
 ### SESSION-OWNER — Wire SessionInfo runtime state ownership
 
-**Approved; implemented on `feat/wire-session-info-state-owner`; pending landing.**
+**Implementation lands with PR #56.**
 The shared receiver owns one aggregate value state on its existing read goroutine
 and applies every normalized batch through the pure SessionInfo-first gate before
 the post-reduction callback. Accepted state survives transport reconnects and
@@ -163,7 +163,7 @@ It groups the implementation work; issue text links back to the canonical policy
 | TOKEN-BOUNDARY-ORACLE | Landed in PR #50 at `f7acdb62f8be32349896920f3315c364c88044d4` | Assert complete generation and routing-epoch results at the final legal increment, exhaustion, recovery, and generation replacement boundaries. |
 | RETIREMENT-HORIZON-ORACLE | Landed in PR #52 at `8567109947b798c3b8ae3f574efa1553d5d4b89e` | Independently bind the exact 256-tuple replay-defense horizon and assert complete reductions, membership, eviction, cursor-wrap, and process-reset behavior. |
 | SPDX-PROFILE-EVIDENCE | Landed in PR #54 at `3ed5bd953006cfda5c0b03937ac50b8a6c2aebd5` | Isolate the unchanged closed SPDX profile validator, prove accepted supplied-document handling and central rejection boundaries, and exercise a non-first release SBOM. |
-| SESSION-OWNER | Approved; implemented on `feat/wire-session-info-state-owner`; pending landing | Own aggregate SessionInfo state on the read goroutine across reconnects, contain reducer failures, and retain the no-export boundary. |
+| SESSION-OWNER | Lands with PR #56 | Own aggregate SessionInfo state on the read goroutine across reconnects, contain reducer failures, and retain the no-export boundary. |
 
 U1 landed in PR #38 at `e2afacb0d6071f0a8e6a5c790c9039a3f52070d2`, the base of
 the U2 implementation. U2 landed in PR #39 at `0284a62`, the U3 implementation base.
@@ -490,9 +490,9 @@ adjudication and focused verification in their slices.
 - Pure-test oracles: CAR-ORACLE, FEED-ORDER-ORACLE, TOKEN-BOUNDARY-ORACLE, and
   RETIREMENT-HORIZON-ORACLE landed. Keep the existing value-state functional core
   and idiomatic Go.
-- Runtime state: SESSION-OWNER is implemented pending landing. DriverList remains a
-  separate candidate requiring topic-specific Unicode, diagnostic, and attributable
-  fixture decisions before implementation.
+- Runtime state: SESSION-OWNER lands with PR #56. DriverList remains a separate
+  candidate requiring topic-specific Unicode, diagnostic, and attributable fixture
+  decisions before implementation.
 - Verification engineering: SPDX-PROFILE-EVIDENCE landed. Supplied
   generator/module evidence, structural workflow-gate tests, and demonstrated
   redundant work/dead scaffolding remain research findings. Preserve independent
