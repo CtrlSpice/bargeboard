@@ -96,7 +96,7 @@ binding remain separate research findings.
 
 ### SESSION-OWNER — Wire SessionInfo runtime state ownership
 
-**Implementation lands with PR #56.**
+**Landed in PR #56 at `bf7772c14689d6ab157555f18316fe67c3871aa2`.**
 The shared receiver owns one aggregate value state on its existing read goroutine
 and applies every normalized batch through the pure SessionInfo-first gate before
 the post-reduction callback. Accepted state survives transport reconnects and
@@ -105,6 +105,23 @@ internal reducer invariant failure preserves state, skips the callback for that
 batch, records the existing bounded consumer failure, and continues without a
 reconnect. No topic other than SessionInfo is reduced, and no transition metadata,
 issue occurrence, diagnostic, effect, command, or OTLP signal is emitted.
+
+### DRIVER-REGISTRY-PURE — Implement the pure DriverList registry core
+
+**Implementation lands with PR #57.** The pure lossless parser and bounded value
+reducer implement canonical driver keys, matching optional `RacingNumber`, required
+one-to-four-letter uppercase ASCII `Tla`, sparse pre-freeze staging, the 32-entry
+bound, authoritative freeze, frozen agreement, and conflict preservation. Present
+invalid identity fields remain distinct from omission; entry-local feed failures
+preserve valid siblings, while one incoherent canonical entry invalidates an
+authoritative snapshot.
+
+Unicode, shape, identity, limit, and frozen-conflict occurrences remain a fixed
+internal bitset with no retained latch, runtime log, metric, or dynamic value.
+Fixtures are entirely synthetic and documented as such; issue #48 still governs
+any future exact source-derived bytes. The core is deliberately absent from
+`liveTimingState` and `reduceLiveTimingBatch`, so runtime continues to reduce only
+SessionInfo and emits no racing OTLP data or DriverList lifecycle effect.
 
 ### U-POLICY — Layered Unicode and input quality
 
@@ -163,14 +180,16 @@ It groups the implementation work; issue text links back to the canonical policy
 | TOKEN-BOUNDARY-ORACLE | Landed in PR #50 at `f7acdb62f8be32349896920f3315c364c88044d4` | Assert complete generation and routing-epoch results at the final legal increment, exhaustion, recovery, and generation replacement boundaries. |
 | RETIREMENT-HORIZON-ORACLE | Landed in PR #52 at `8567109947b798c3b8ae3f574efa1553d5d4b89e` | Independently bind the exact 256-tuple replay-defense horizon and assert complete reductions, membership, eviction, cursor-wrap, and process-reset behavior. |
 | SPDX-PROFILE-EVIDENCE | Landed in PR #54 at `3ed5bd953006cfda5c0b03937ac50b8a6c2aebd5` | Isolate the unchanged closed SPDX profile validator, prove accepted supplied-document handling and central rejection boundaries, and exercise a non-first release SBOM. |
-| SESSION-OWNER | Lands with PR #56 | Own aggregate SessionInfo state on the read goroutine across reconnects, contain reducer failures, and retain the no-export boundary. |
+| SESSION-OWNER | Landed in PR #56 at `bf7772c` | Own aggregate SessionInfo state on the read goroutine across reconnects, contain reducer failures, and retain the no-export boundary. |
+| DRIVER-REGISTRY-PURE | Lands with PR #57 | Parse and reduce bounded DriverList identity state with synthetic fixtures while leaving aggregate/runtime integration, diagnostics, and projection disabled. |
 
 U1 landed in PR #38 at `e2afacb0d6071f0a8e6a5c790c9039a3f52070d2`, the base of
 the U2 implementation. U2 landed in PR #39 at `0284a62`, the U3 implementation base.
 U3 landed in PR #40 at `7018b2a`, the F-SCAN implementation base. The
 approved policy remains GREEN with partial FORMATION LAP implementation until
 future topic integrations are complete. The receiver now owns SessionInfo aggregate
-state, while the post-reduction consumer remains a no-op.
+state, while the separate pure DriverList core remains unwired and the
+post-reduction consumer remains a no-op.
 
 ### WS-ERROR Resume Details
 
@@ -490,9 +509,10 @@ adjudication and focused verification in their slices.
 - Pure-test oracles: CAR-ORACLE, FEED-ORDER-ORACLE, TOKEN-BOUNDARY-ORACLE, and
   RETIREMENT-HORIZON-ORACLE landed. Keep the existing value-state functional core
   and idiomatic Go.
-- Runtime state: SESSION-OWNER lands with PR #56. DriverList remains a separate
-  candidate requiring topic-specific Unicode, diagnostic, and attributable fixture
-  decisions before implementation.
+- Runtime state: SESSION-OWNER landed in PR #56. DRIVER-REGISTRY-PURE lands with
+  PR #57 using the approved topic-specific Unicode, internal-issue, and synthetic
+  fixture boundaries. DriverList aggregate/runtime ownership remains a separate
+  unapproved integration slice.
 - Verification engineering: SPDX-PROFILE-EVIDENCE landed. Supplied
   generator/module evidence, structural workflow-gate tests, and demonstrated
   redundant work/dead scaffolding remain research findings. Preserve independent

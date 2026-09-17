@@ -1573,6 +1573,13 @@ cannot replay after recovery. It implements the admission decision after steps 1
 and 2 above, not steps 3 through 5, and is now wired only to the receiver-owned
 aggregate state.
 
+A separate pure DriverList parser and bounded registry reducer implement the
+topic-local identity, sparse staging, authoritative freeze, reconnect-agreement,
+Unicode, and issue-result contract under Session Driver Registry. They are not
+called by the aggregate identity gate or receiver. DriverList omission,
+SessionInfo generation replacement, unbound-update rejection, same-snapshot
+coordination, runtime diagnostics, and projection therefore remain unimplemented.
+
 End-to-end reducer and projection verification still requires testing with no
 phase layer, `Started` root opening, `Finalised` closure, singular best-lap state,
 and no race-like lap or gap signal; the Abu Dhabi 2021 Practice 1 `6594` to
@@ -2070,7 +2077,7 @@ series.
 
 ### Session Driver Registry
 
-**Status: GREEN**
+**Status: GREEN policy; pure topic core implemented; aggregate/runtime integration pending**
 
 `DriverList` is the sole Live Timing owner of the all-session driver registry.
 A non-empty authoritative snapshot object establishes the complete roster for
@@ -2131,6 +2138,93 @@ state; cold mid-session freeze; agreeing and conflicting reconnect snapshots;
 late metadata fill; signals before and after resolution; late root activation
 without replay; a reconnect-recovered missed `Started`; terminal non-activation;
 and session replacement.
+
+#### Pure DriverList Registry Core
+
+The implemented pure topic core accepts only already-normalized UTF-8 JSON.
+Invalid UTF-8, JSON grammar, or nesting is an invariant error with a zero parse
+result. A non-object root is instead a semantic whole-topic failure. The parser
+uses original quoted key and value tokens: canonical entry keys, `RacingNumber`,
+and `Tla` are decoded losslessly before use. Escaped ASCII spellings are accepted.
+No trimming, case folding, Unicode normalization, replacement-character search,
+or guessed repair is performed.
+
+A scalar-invalid top-level key cannot be a canonical decimal driver key and is
+ignored with one Unicode issue occurrence. Valid noncanonical keys are ignored as
+non-driver content. Within a canonical entry, a scalar-invalid field key cannot
+name the recognized ASCII `RacingNumber` or `Tla` fields and is likewise ignored
+with a Unicode occurrence. Unknown values remain opaque to this parser; the U3
+normalized-envelope scan retains its independent payload-wide visibility.
+
+Malformed scalar content in a recognized `RacingNumber` or `Tla`, a wrong field
+type, invalid grammar, a mismatching racing number, a duplicate recognized field,
+or a duplicate canonical entry makes that canonical entry incoherent. In a feed,
+that is an entry-local outcome and valid sibling entries still reduce. A present
+invalid identity field is retained as invalid rather than converted to omission,
+so a later patch that omits it cannot restore stale identity. In an authoritative
+snapshot, any incoherent canonical entry makes the complete snapshot incoherent;
+valid siblings cannot form a partial roster. Literal or escaped U+FFFD is
+Unicode-valid but fails the uppercase-ASCII `Tla` grammar.
+
+The registry is bounded value state: one ascending fixed array of 32 entries, a
+count, and frozen and synchronized flags. Before freeze, each entry records `Tla`
+and `RacingNumber` as absent, valid, or invalid; no map, raw payload, delayed
+update, diagnostic history, or signal candidate is retained. Feed updates apply
+sparse field presence and can stage incomplete entries, but never freeze or
+synchronize the registry. A feed object with more than 32 unique canonical keys
+is over-limit and does not mutate staging, independent of member order. When an
+otherwise bounded feed reaches an already-full staged registry, previously unseen
+entries are discarded while patches for known drivers in that same feed still
+apply. Either limit outcome returns one bounded occurrence.
+
+A coherent authoritative snapshot must be non-empty, contain at most 32 unique
+canonical entries, provide one valid `Tla` for every entry, and contain no invalid
+present `RacingNumber`. The first such snapshot atomically replaces staging,
+sorts entries by canonical number, normalizes their identity-field state, and
+freezes and synchronizes the registry. An empty, malformed, duplicate, over-limit,
+or otherwise incoherent snapshot preserves prior value state only as
+unsynchronized recovery state.
+
+Once frozen, feed identity observations can agree but cannot rewrite identities
+or restore synchronization. A new driver, malformed canonical entry, conflicting
+`RacingNumber`, or conflicting `Tla` preserves the frozen roster, marks it
+unsynchronized, and returns a conflict occurrence. Only a later coherent
+authoritative snapshot with the exact frozen numbers and acronyms restores
+synchronization; presence of a matching `RacingNumber` is optional.
+
+DriverList parse and reduction occurrences use a fixed `uint8` issue set for
+Unicode, shape, identity, limit, and frozen-conflict categories. Each category
+appears at most once per parsed update, carries no driver number, acronym, path,
+payload text, or other dynamic value, and is returned separately from state. No
+issue bit or latch is retained in registry state, and this slice adds no runtime
+log, metric, label, cadence, or summary. The existing U3 affected-envelope
+warning and counter remain the only runtime Unicode visibility.
+
+Parser-local duplicate tracking covers every canonical member, including keys
+discarded after the 32-entry result bound, and is bounded by the already-bounded
+normalized payload. It is discarded with the parse call and never enters registry
+state. A duplicate overflow key therefore returns shape and identity occurrences
+alongside the limit occurrence without enlarging the retained result.
+
+This core is deliberately not part of `liveTimingState` or
+`reduceLiveTimingBatch`. It does not receive production batches, reset on a
+SessionInfo generation replacement, process requested snapshot omission, or
+exercise the SessionInfo admission gate yet. Those aggregate responsibilities,
+same-snapshot ordering, and runtime ownership require a separate approved slice.
+Accordingly, only SessionInfo still reduces at runtime; no DriverList issue,
+transition, racing OTLP signal, lifecycle effect, status change, retry, or
+reconnect is produced.
+
+Focused tests use only compact synthetic JSON documented under
+`testdata/driver_list/SOURCES.md`. They cover lossless keys and strings, canonical
+integer and acronym boundaries, sparse invalid-present preservation, valid sibling
+reduction, deterministic ordering, the 32/33-entry bound, cold freeze, incoherent
+snapshot preservation, known-driver updates after bounded overflow, frozen
+agreement and conflicts, duplicate overflow keys, issue/result bounds, and input
+preservation. Exact source-derived bytes remain deferred under issue #48;
+the canonical-session-type and SessionInfo replacement matrices belong to the
+future aggregate integration because the pure topic reducer has no session-type
+input.
 
 Metric series MUST NOT use:
 
@@ -5172,6 +5266,12 @@ post-reduction consumer for that batch, records the existing bounded consumer
 failure, and continues reading without reconnecting. The aggregate result still
 does not retain ineligible updates or implement another topic, cross-topic
 reconciliation, effects, commands, diagnostics, or projection.
+
+The pure DriverList parser and registry reducer are implemented outside that
+aggregate state. Their returned state, dispositions, and bounded issue occurrences
+are test-only until a separately approved aggregate integration wires DriverList
+after the SessionInfo gate. No current runtime behavior or output follows from
+their existence.
 
 Reducer requirements:
 
