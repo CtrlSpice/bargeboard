@@ -94,6 +94,18 @@ archive shape, and generator/verifier independence are unchanged. Generator
 normalization and supplied module/notices
 binding remain separate research findings.
 
+### SESSION-OWNER — Wire SessionInfo runtime state ownership
+
+**Implementation lands with PR #56.**
+The shared receiver owns one aggregate value state on its existing read goroutine
+and applies every normalized batch through the pure SessionInfo-first gate before
+the post-reduction callback. Accepted state survives transport reconnects and
+downstream callback failures and resets with a newly created shared receiver. An
+internal reducer invariant failure preserves state, skips the callback for that
+batch, records the existing bounded consumer failure, and continues without a
+reconnect. No topic other than SessionInfo is reduced, and no transition metadata,
+issue occurrence, diagnostic, effect, command, or OTLP signal is emitted.
+
 ### U-POLICY — Layered Unicode and input quality
 
 **Approved policy; U1/U2/U3 landed.** The user approved the strategy and
@@ -151,13 +163,14 @@ It groups the implementation work; issue text links back to the canonical policy
 | TOKEN-BOUNDARY-ORACLE | Landed in PR #50 at `f7acdb62f8be32349896920f3315c364c88044d4` | Assert complete generation and routing-epoch results at the final legal increment, exhaustion, recovery, and generation replacement boundaries. |
 | RETIREMENT-HORIZON-ORACLE | Landed in PR #52 at `8567109947b798c3b8ae3f574efa1553d5d4b89e` | Independently bind the exact 256-tuple replay-defense horizon and assert complete reductions, membership, eviction, cursor-wrap, and process-reset behavior. |
 | SPDX-PROFILE-EVIDENCE | Landed in PR #54 at `3ed5bd953006cfda5c0b03937ac50b8a6c2aebd5` | Isolate the unchanged closed SPDX profile validator, prove accepted supplied-document handling and central rejection boundaries, and exercise a non-first release SBOM. |
+| SESSION-OWNER | Lands with PR #56 | Own aggregate SessionInfo state on the read goroutine across reconnects, contain reducer failures, and retain the no-export boundary. |
 
 U1 landed in PR #38 at `e2afacb0d6071f0a8e6a5c790c9039a3f52070d2`, the base of
 the U2 implementation. U2 landed in PR #39 at `0284a62`, the U3 implementation base.
 U3 landed in PR #40 at `7018b2a`, the F-SCAN implementation base. The
-approved policy remains GREEN with partial FORMATION LAP implementation until the
-future topic integrations are complete. The production normalized consumer remains
-a no-op and SessionInfo helpers remain unwired.
+approved policy remains GREEN with partial FORMATION LAP implementation until
+future topic integrations are complete. The receiver now owns SessionInfo aggregate
+state, while the post-reduction consumer remains a no-op.
 
 ### WS-ERROR Resume Details
 
@@ -332,8 +345,9 @@ a no-op and SessionInfo helpers remain unwired.
   after updates and manifests validate. A rejected batch returns zero findings;
   multiple bad strings in one envelope count once. Payload bytes, source ownership,
   and complete normalized manifests are preserved.
-- `opBatch` commits the count before the consumer call. The operational reducer
-  retains a total and reported-total watermark; first findings warn immediately,
+- `opBatch` commits the count before state reduction and the post-reduction
+  consumer. The operational reducer retains a total and reported-total watermark;
+  first findings warn immediately,
   repeats flush only on the existing ticker's `opPeriodicTick`. Retry progress's
   separate `opTick` does not flush quality reports. The warning carries only total
   and newly reported affected-envelope counts, alongside any independent readiness
@@ -397,8 +411,9 @@ a no-op and SessionInfo helpers remain unwired.
   `go test -race -count=20 ./receiver/f1livetimingreceiver -run 'Test(SessionInfoUnicode|ParseSessionInfo|ClassifySessionInfo|ParsePositiveCanonicalInt64|ReduceSessionInfo|ReduceLiveTimingBatch)'`.
   `git diff --check` also passed. Inspect #35 and its linked
   PR for final candidate, CI, review, and landing evidence.
-- These are pure helper outcomes, not runtime projection or quarantine. They emit
-  no counters or logs and do not establish any other topic's resynchronization.
+- These outcomes now update receiver-owned SessionInfo value state, but they remain
+  neither runtime projection nor quarantine. Their issue occurrences emit no
+  counters or logs and establish no other topic's resynchronization.
 
 ### U1 Resume Details
 
@@ -422,9 +437,9 @@ a no-op and SessionInfo helpers remain unwired.
 - Error descriptions use presence/string-shape/empty metadata only. Control
   failures retain setup rejection and runtime stop; scalar-invalid opaque payload
   bytes remain deliverable, including inflated JSON and all snapshot siblings.
-- Current Grid semantics remain input-only: no-op normalized consumer, unwired
-  SessionInfo helpers, no racing projection. U1 adds no quality counters or
-  claims about semantic quarantine, dropped signals, or recovery.
+- Current Grid semantics remain input-only: receiver-owned SessionInfo state,
+  no-op post-reduction consumer, and no racing projection. U1 adds no quality
+  counters or claims about semantic quarantine, dropped signals, or recovery.
 - Local verification passed with repository-pinned Go 1.26.8 and
   `GOTOOLCHAIN=local`: `make check`,
   `go test -race -count=1 ./receiver/f1livetimingreceiver`, and
@@ -459,8 +474,9 @@ about the current checkout; inspect Git status and current refs before acting.
 
 These PRs passed their required checks and independent landing reviews. The active
 Go receiver still does not export racing signals: the normalized consumer is a
-no-op, identity helpers are unwired, and multi-topic coordination/projection remain
-future work. Internal input activity is not a completed race recording.
+post-reduction no-op, only SessionInfo identity owns runtime state, and multi-topic
+coordination/projection remain future work. Internal input activity is not a
+completed race recording.
 
 ## Remaining Cleanup and Decisions
 
@@ -474,6 +490,9 @@ adjudication and focused verification in their slices.
 - Pure-test oracles: CAR-ORACLE, FEED-ORDER-ORACLE, TOKEN-BOUNDARY-ORACLE, and
   RETIREMENT-HORIZON-ORACLE landed. Keep the existing value-state functional core
   and idiomatic Go.
+- Runtime state: SESSION-OWNER lands with PR #56. DriverList remains a separate
+  candidate requiring topic-specific Unicode, diagnostic, and attributable fixture
+  decisions before implementation.
 - Verification engineering: SPDX-PROFILE-EVIDENCE landed. Supplied
   generator/module evidence, structural workflow-gate tests, and demonstrated
   redundant work/dead scaffolding remain research findings. Preserve independent

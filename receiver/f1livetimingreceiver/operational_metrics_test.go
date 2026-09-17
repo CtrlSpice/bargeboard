@@ -44,7 +44,7 @@ var expectedOperationalDescriptions = map[string]string{
 	"otelcol_f1livetiming_outage_duration":         "Process seconds in the current unresolved input outage; zero after recovery.",
 	"otelcol_f1livetiming_normalized_updates":      "Envelopes in fully normalized input batches, not cars, datapoints, or exported racing signals.",
 	"otelcol_f1livetiming_last_update_age":         "Process seconds since local acceptance of a nonempty normalized batch; omitted before first input, not source freshness.",
-	"otelcol_f1livetiming_consumer_failures":       "Failed normalized-batch consumer calls, counted independently of input outages.",
+	"otelcol_f1livetiming_consumer_failures":       "Failed normalized-batch state reductions or post-reduction consumer calls, counted independently of input outages.",
 	"otelcol_f1livetiming_invalid_unicode_updates": "Envelopes with malformed Unicode scalar escapes in fully normalized payloads; not rejected input or dropped racing signals.",
 }
 

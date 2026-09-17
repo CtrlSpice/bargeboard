@@ -381,8 +381,9 @@ cannot apply independently parsed replacement metadata. Route-only and
 schedule-only failures keep the existing independent scopes and counter rules.
 The aggregate gate retains no payload or delayed update queue. Restoring its
 identity admission decision does not establish topic resynchronization or replay
-earlier input. These helpers remain unwired; they emit no counters, logs, semantic
-quarantine effects, or racing projection.
+earlier input. The receiver now commits its value state on the read goroutine, but
+the transition and issue results emit no counters, logs, semantic quarantine
+effects, or racing projection.
 
 Focused tests mutate attributed SessionInfo fixtures synthetically, including
 `"\uD800 Grand Prix"`, and compare complete parse/reduction/gate results. They cover
@@ -416,15 +417,15 @@ error returns the zero batch, including zero quality findings. Detecting quality
 only after complete validation prevents partial observations from rejected batches.
 
 The production run passes this count to `opBatch` alongside the existing envelope
-count, before calling the normalized consumer. `operationalState` retains two
-fixed-size integers: the run's affected-envelope total and its reported-total
-watermark. The first affected batch advances both immediately. Later batches add
-only to the total; the existing 30-second ticker advances the watermark and emits
-one coalesced warning when there are new findings. The timer uses
-`opPeriodicTick`; retry progress's `opTick` cannot flush quality warnings. Cadence
-is anchored to the existing reporter start, so a first finding at second 29 warns
-immediately and repetitions can coalesce at second 30. No second timer or per-input
-diagnostic history is introduced.
+count, before state reduction and the post-reduction consumer. `operationalState`
+retains two fixed-size integers: the run's affected-envelope total and its
+reported-total watermark. The first affected batch advances both immediately.
+Later batches add only to the total; the existing 30-second ticker advances the
+watermark and emits one coalesced warning when there are new findings. The timer
+uses `opPeriodicTick`; retry progress's `opTick` cannot flush quality warnings.
+Cadence is anchored to the existing reporter start, so a first finding at second
+29 warns immediately and repetitions can coalesce at second 30. No second timer or
+per-input diagnostic history is introduced.
 
 An advancing watermark produces this bounded warning independently of the existing
 readiness/outage notice, under the same reporting mutex:
@@ -446,8 +447,9 @@ findings pending at shutdown or permanent stop. Summary emission still waits for
 the consumer callback to finish; a shutdown timeout cannot manufacture completion.
 After summary, periodic stopped notices do not reissue pending quality warnings.
 Metrics-None retains the same terminal notices and per-run totals. The production
-consumer remains a no-op and U2 remains unwired; these findings establish no actual
-projection, quarantine, dropped signals, or semantic recovery.
+post-reduction consumer remains a no-op, and U2 issue results remain unreported;
+these findings establish no actual projection, quarantine, dropped signals, or
+semantic recovery.
 
 Focused synthetic tests compare complete scanner/normalization and operational
 results, plain/inflated byte ownership, duplicate/nested keys, full depth and
@@ -503,20 +505,22 @@ token file through `${env:HOME}/.config/bargeboard/f1tv-token`.
 The F1 Live Timing receiver currently authenticates, negotiates SignalR,
 subscribes, reconnects, decodes records, distinguishes feed updates from
 subscription snapshots, validates timestamps and JSON, and inflates compressed
-telemetry. Pure SessionInfo parsing, descriptor reduction, and aggregate identity
-gating are implemented but remain unwired. The multi-topic coordinator and OTLP
-projector are not implemented, so the normalized-batch consumer is currently a
-no-op. Input notices and Collector
-internal metrics are implemented under Live Timing Operational Visibility below;
-they MUST NOT imply racing projection or export. The transport shell retains its
-valid-batch backoff reset even if that consumer fails, emits one sanitized
-consumer warning per run, and continues reading rather than reconnecting.
+telemetry. SessionInfo parsing, descriptor reduction, and aggregate identity
+gating now feed one receiver-owned state value on the read goroutine. The
+multi-topic coordinator and OTLP projector are not implemented, so the
+post-reduction normalized-batch consumer is currently a no-op. Input notices and
+Collector internal metrics are implemented under Live Timing Operational
+Visibility below; they MUST NOT imply racing projection or export. The transport
+shell retains its valid-batch backoff reset even if state reduction or that
+consumer fails, emits one sanitized consumer warning per run, and continues
+reading rather than reconnecting.
 
 U1 lossless JSON controls and raw manifest-key handling are implemented. Opaque
 plain and inflated payloads may still contain scalar-invalid strings; delivery
 continues under valid envelopes without repairing those bytes. SessionInfo's
-scoped Unicode integration and bounded pure issue propagation (U2) are implemented
-but remain unwired. Payload-quality diagnostics/counters (U3) detect malformed
+scoped Unicode integration and bounded pure issue propagation (U2) now participate
+in receiver-owned state reduction, but their issue results remain unreported.
+Payload-quality diagnostics/counters (U3) detect malformed
 scalar escapes in fully normalized payloads, with bounded warnings and affected
 envelope totals. These input findings do not claim semantic quarantine or
 racing-signal delivery.
@@ -892,8 +896,8 @@ This contract promotes only bounded input-operation metrics and foreground
 notices. Source lag, payload sizes, validation-failure metrics, and other pending
 metric candidates remain **YELLOW**. Operational activity MUST NOT substitute
 for evidence of F1 racing emission. Startup notices MUST state that F1 race
-export is unimplemented while the normalized consumer and projector remain
-unwired.
+export is unimplemented while the post-reduction consumer emits no racing data
+and the projector remains unwired.
 
 The receiver MUST distinguish established transport, validated subscription
 completion, normalized update observations, and actual racing export. After an
@@ -1024,7 +1028,7 @@ it. The only datapoint attribute is `receiver=settings.ID.String()`.
 | `normalized_updates` | Int64 counter | `{update}` | Update envelopes in fully normalized nonempty batches, independent of consumer success. |
 | `invalid_unicode_updates` | Int64 counter | `{update}` | Envelopes containing one or more malformed Unicode scalar escapes in plain or inflated normalized payload keys/values; once per affected envelope in a fully accepted batch, independent of consumer success. No contribution from rejected batches; not a count of rejected input or dropped racing signals. |
 | `last_update_age` | Float64 observable gauge | `s` | Process seconds since acceptance of the last normalized nonempty batch; omitted until one exists. |
-| `consumer_failures` | Int64 counter | `{failure}` | Failed normalized-batch consumer calls; this is not a count of failed racing signals. |
+| `consumer_failures` | Int64 counter | `{failure}` | Failed normalized-batch state reductions or post-reduction consumer calls; this is not a count of failed racing signals. |
 
 Every instrument MUST have a concise description identifying its input count or
 state and its limits, including local acceptance age versus source freshness
@@ -1551,10 +1555,11 @@ and the exact 256-tuple FIFO horizon. The batch adapter locates exact
 `SessionInfo` updates independent of snapshot order, distinguishes feed or
 unrequested-snapshot no-update from requested snapshot omission, and composes
 parsing with descriptor reduction. It returns value state, transition metadata,
-and bounded parse-issue occurrences as defined by U2. It has no runtime wiring
-and cannot stage or clear other topic state, return effects or commands, emit
-diagnostics, or project telemetry. No diagnostic-frequency or latching policy is
-accepted by this slice. The full
+and bounded parse-issue occurrences as defined by U2. The receiver now commits the
+returned value state synchronously, but it does not retain or publish transition
+metadata or issue occurrences and cannot stage or clear other topic state, return
+effects or commands, emit diagnostics, or project telemetry. No
+diagnostic-frequency or latching policy is accepted by this slice. The full
 transactional coordinator and all cross-topic projection remain disabled until
 that coordinator lands.
 
@@ -1564,8 +1569,9 @@ remaining session-scoped outcomes are eligible for future staging, and preserves
 the descriptor disposition, routing-transition metadata, and bounded issue set.
 Eligibility requires synchronized `E`; route and schedule availability do not
 decide it. The gate retains no normalized update or payload, so an ineligible batch
-cannot replay after recovery. It implements the admission decision after steps 1 and 2 above,
-not steps 3 through 5, and remains unwired from the receiver.
+cannot replay after recovery. It implements the admission decision after steps 1
+and 2 above, not steps 3 through 5, and is now wired only to the receiver-owned
+aggregate state.
 
 End-to-end reducer and projection verification still requires testing with no
 phase layer, `Started` root opening, `Finalised` closure, singular best-lap state,
@@ -5151,16 +5157,21 @@ signed URL secrets MUST NOT be emitted.
 **Status: FORMATION LAP**
 
 The receiver has one shared instance across traces, metrics, and logs. That
-instance SHOULD own one session state machine on its read goroutine.
+instance MUST own one session state machine on its read goroutine.
 
 The functional core SHOULD expose deterministic transformations with no
 network, Collector consumer, logger, context, or wall-clock dependency.
 
 The current Go aggregate core implements only the SessionInfo-first identity
-gate. It returns aggregate value state and whether the remaining session-scoped
-outcomes are eligible for future staging. It does not retain ineligible updates
-or implement another topic, cross-topic reconciliation, effects, commands,
-diagnostics, projection, or runtime state ownership.
+gate. One `liveTimingReceiver` owns its aggregate value state on the existing read
+goroutine. Every normalized batch reduces synchronously after input accounting and
+before the post-reduction consumer. Successful state commits survive transport
+reconnects and downstream consumer failures; a newly created shared receiver starts
+from zero state. A reducer invariant error preserves prior state, skips the
+post-reduction consumer for that batch, records the existing bounded consumer
+failure, and continues reading without reconnecting. The aggregate result still
+does not retain ineligible updates or implement another topic, cross-topic
+reconciliation, effects, commands, diagnostics, or projection.
 
 Reducer requirements:
 
@@ -5241,10 +5252,10 @@ connection MUST frame, decode, and deliver one record before inspecting the next
 in wire order. Given valid A, protocol-invalid B, and valid C, A remains delivered, B is
 rejected, and processing stops before C. This commitment boundary is one feed
 invocation or subscription completion: the receiver MUST normalize the whole
-batch before calling its normalized consumer. A snapshot with one invalid
-compressed sibling delivers no normalized batch. WebSocket messages are not
-transactions; whole-message staging and rollback are rejected because unrelated
-later framing errors must not erase an already accepted record. A failed
+batch before reducing it and calling its post-reduction consumer. A snapshot with
+one invalid compressed sibling delivers no normalized batch. WebSocket messages
+are not transactions; whole-message staging and rollback are rejected because
+unrelated later framing errors must not erase an already accepted record. A failed
 WebSocket read still discards every byte returned by that read, including any
 complete hub record inside its partial message.
 
