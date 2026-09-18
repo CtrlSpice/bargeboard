@@ -171,7 +171,8 @@ insert_duplicate_workspace() {
           sub($needle; "\"supplier\":" + $encoded_workspace + "," + $needle)
         elif $placement == "key" then
           sub($needle;
-            "\"supplier\":{" + $encoded_workspace + ":null}," + $needle
+            "\"supplier\":{" + $encoded_workspace + ":{\"leaf\":null}}," +
+            $needle
           )
         else
           error("unknown duplicate workspace placement")
@@ -221,7 +222,7 @@ reject() {
 }
 
 fixture >"$work/accepted.json"
-validate "$work/accepted.json"
+GITHUB_WORKSPACE=/runner/workspace validate "$work/accepted.json"
 
 {
   printf '{}\n'
@@ -430,6 +431,16 @@ GITHUB_WORKSPACE="$workspace" expect_rejection \
   "$work/escaped-workspace.json" \
   "SBOM leaks the runner workspace path: $work/escaped-workspace.json"
 
+workspace=/runner/workspace
+fixture | jq --arg workspace "$workspace" '
+  (.packages[] | select(.name == "example.com/dependency") | .sourceInfo) =
+    ("prefix:" + $workspace + ":suffix")
+' >"$work/embedded-workspace.json"
+GITHUB_WORKSPACE="$workspace" expect_rejection \
+  'runner workspace path embedded in a string' \
+  "$work/embedded-workspace.json" \
+  "SBOM leaks the runner workspace path: $work/embedded-workspace.json"
+
 duplicate_workspace=/runner/workspace
 insert_duplicate_workspace \
   "$work/accepted.json" \
@@ -454,7 +465,7 @@ if grep -F "$duplicate_workspace" "$work/duplicate-workspace-key.json" >/dev/nul
   exit 1
 fi
 GITHUB_WORKSPACE="$duplicate_workspace" expect_rejection \
-  'JSON-escaped runner workspace path in an overwritten duplicate object key' \
+  'JSON-escaped workspace path in an overwritten ancestor key' \
   "$work/duplicate-workspace-key.json" \
   "SBOM leaks the runner workspace path: $work/duplicate-workspace-key.json"
 

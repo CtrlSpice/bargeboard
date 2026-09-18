@@ -132,7 +132,8 @@ insert_duplicate_workspace() {
           sub($needle; "\"supplier\":" + $encoded_workspace + "," + $needle)
         elif $placement == "key" then
           sub($needle;
-            "\"supplier\":{" + $encoded_workspace + ":null}," + $needle
+            "\"supplier\":{" + $encoded_workspace + ":{\"leaf\":null}}," +
+            $needle
           )
         else
           error("unknown duplicate workspace placement")
@@ -143,7 +144,7 @@ insert_duplicate_workspace() {
     ' >"$output"
 }
 
-bash "$verifier" "$source_dist"
+GITHUB_WORKSPACE=/runner/workspace bash "$verifier" "$source_dist"
 
 source_version="$(jq -er '.version' "$source_dist/metadata.json")"
 readonly source_version
