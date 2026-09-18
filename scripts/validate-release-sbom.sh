@@ -152,9 +152,20 @@ if ! jq --exit-status --slurp \
   exit 1
 fi
 
-if [[ -n "${GITHUB_WORKSPACE:-}" ]] && ! jq --exit-status --slurp \
+if [[ -n "${GITHUB_WORKSPACE:-}" ]] && ! jq --exit-status --stream \
   --arg workspace "$GITHUB_WORKSPACE" '
-  length == 1 and (.[0] | all(.. | strings; contains($workspace) | not))
+  def contains_workspace:
+    (.[0] | any(.[]; type == "string" and contains($workspace))) or
+    (
+      length == 2 and
+      (.[1] | type) == "string" and
+      (.[1] | contains($workspace))
+    );
+
+  reduce (., inputs) as $event (
+    true;
+    . and ($event | contains_workspace | not)
+  )
 ' "$document" >/dev/null; then
   printf 'SBOM leaks the runner workspace path: %s\n' "$document" >&2
   exit 1

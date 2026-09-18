@@ -155,6 +155,33 @@ validate() {
     "$source"
 }
 
+insert_duplicate_workspace() {
+  local input="${1:?input required}"
+  local output="${2:?output required}"
+  local workspace="${3:?workspace required}"
+  local placement="${4:-value}"
+  jq --compact-output --ascii-output . "$input" |
+    jq --raw-input --slurp --raw-output \
+      --arg workspace "$workspace" \
+      --arg placement "$placement" '
+      "\"supplier\":\"NOASSERTION\"" as $needle |
+      if contains($needle) then
+        ($workspace | tojson | gsub("/"; "\\u002f")) as $encoded_workspace |
+        if $placement == "value" then
+          sub($needle; "\"supplier\":" + $encoded_workspace + "," + $needle)
+        elif $placement == "key" then
+          sub($needle;
+            "\"supplier\":{" + $encoded_workspace + ":null}," + $needle
+          )
+        else
+          error("unknown duplicate workspace placement")
+        end
+      else
+        error("duplicate workspace fixture has no insertion point")
+      end
+    ' >"$output"
+}
+
 expect_rejection() {
   local description="${1:?description required}"
   local document="${2:?document required}"
@@ -229,6 +256,15 @@ reject 'package SPDX ID terminal newline' '
     else . end
   )
 '
+reject 'package SPDX ID leading line' '
+  (.packages[] | select(.name == "example.com/dependency") | .SPDXID) as $original |
+  (.packages[] | select(.name == "example.com/dependency") | .SPDXID) = ("ignored\n" + $original) |
+  .relationships |= map(
+    if .spdxElementId == $original then .spdxElementId = ("ignored\n" + $original)
+    elif .relatedSpdxElement == $original then .relatedSpdxElement = ("ignored\n" + $original)
+    else . end
+  )
+'
 reject 'package name' \
   '(.packages[] | select(.name == "example.com/dependency") | .name) = ""'
 reject 'package version' \
@@ -245,6 +281,8 @@ reject 'package checksum shape' \
   '(.packages[] | select(.name == "example.com/dependency") | .checksums[0].algorithm) = "SHA1"'
 reject 'package checksum terminal newline' \
   '(.packages[] | select(.name == "example.com/dependency") | .checksums[0].checksumValue) += "\n"'
+reject 'package checksum leading line' \
+  '(.packages[] | select(.name == "example.com/dependency") | .checksums[0].checksumValue) |= ("ignored\n" + .)'
 reject 'package external-reference shape' \
   '(.packages[] | select(.name == "example.com/dependency") | .externalRefs[0].referenceCategory) = "SECURITY"'
 reject 'project concluded license' \
@@ -304,8 +342,18 @@ reject 'file SPDX ID terminal newline' '
     else . end
   )
 '
+reject 'file SPDX ID leading line' '
+  .files[0].SPDXID as $original |
+  .files[0].SPDXID = ("ignored\n" + $original) |
+  .relationships |= map(
+    if .spdxElementId == $original then .spdxElementId = ("ignored\n" + $original)
+    elif .relatedSpdxElement == $original then .relatedSpdxElement = ("ignored\n" + $original)
+    else . end
+  )
+'
 reject 'file checksum shape' '.files[0].checksums[0].algorithm = "MD5"'
 reject 'file checksum terminal newline' '.files[0].checksums[0].checksumValue += "\n"'
+reject 'file checksum leading line' '.files[0].checksums[0].checksumValue |= ("ignored\n" + .)'
 reject 'duplicate valid SPDX ID' '
   (.packages[] | select(.name == "example.com/dependency") | .SPDXID) as $dependency |
   (.packages[] | select(.name == "example.com/dependency") | .SPDXID) = "SPDXRef-Package-stdlib" |
@@ -347,3 +395,31 @@ GITHUB_WORKSPACE="$workspace" expect_rejection \
   'JSON-escaped runner workspace path' \
   "$work/escaped-workspace.json" \
   "SBOM leaks the runner workspace path: $work/escaped-workspace.json"
+
+duplicate_workspace=/runner/workspace
+insert_duplicate_workspace \
+  "$work/accepted.json" \
+  "$work/duplicate-workspace.json" \
+  "$duplicate_workspace"
+if grep -F "$duplicate_workspace" "$work/duplicate-workspace.json" >/dev/null; then
+  printf 'duplicate workspace fixture contains the decoded path\n' >&2
+  exit 1
+fi
+GITHUB_WORKSPACE="$duplicate_workspace" expect_rejection \
+  'JSON-escaped runner workspace path in an overwritten duplicate member' \
+  "$work/duplicate-workspace.json" \
+  "SBOM leaks the runner workspace path: $work/duplicate-workspace.json"
+
+insert_duplicate_workspace \
+  "$work/accepted.json" \
+  "$work/duplicate-workspace-key.json" \
+  "$duplicate_workspace" \
+  key
+if grep -F "$duplicate_workspace" "$work/duplicate-workspace-key.json" >/dev/null; then
+  printf 'duplicate workspace-key fixture contains the decoded path\n' >&2
+  exit 1
+fi
+GITHUB_WORKSPACE="$duplicate_workspace" expect_rejection \
+  'JSON-escaped runner workspace path in an overwritten duplicate object key' \
+  "$work/duplicate-workspace-key.json" \
+  "SBOM leaks the runner workspace path: $work/duplicate-workspace-key.json"

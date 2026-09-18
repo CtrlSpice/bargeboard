@@ -98,13 +98,14 @@ binding remain separate research findings.
 
 **Implementation lands with PR #58.** The closed release SBOM validator now
 requires exactly one top-level JSON value, uses absolute anchors for package/file
-SPDX identifiers and checksums, and searches decoded string values for the runner
-workspace path. Invalid prefixes, duplicate valid documents, terminal-newline
-identifiers/checksums, and JSON-escaped workspace paths fail at the central
-validator before archive-specific verification continues. Compact validator
-mutations and complete five-platform artifact verification cover the same gate.
-The SPDX profile, generator, license policy, package roles, archive shape, and
-generator/verifier independence are unchanged.
+SPDX identifiers and checksums, and streams every decoded JSON string token when
+checking for the runner workspace path. Invalid prefixes, duplicate valid
+documents, terminal-newline identifiers/checksums, JSON-escaped paths, and paths
+hidden in overwritten duplicate members fail at the central validator before
+archive-specific verification continues. Compact validator mutations and complete
+five-platform artifact verification cover the same gate. The SPDX profile,
+generator, license policy, package roles, archive shape, and generator/verifier
+independence are unchanged.
 
 ### SESSION-OWNER — Wire SessionInfo runtime state ownership
 
@@ -193,7 +194,7 @@ It groups the implementation work; issue text links back to the canonical policy
 | TOKEN-BOUNDARY-ORACLE | Landed in PR #50 at `f7acdb62f8be32349896920f3315c364c88044d4` | Assert complete generation and routing-epoch results at the final legal increment, exhaustion, recovery, and generation replacement boundaries. |
 | RETIREMENT-HORIZON-ORACLE | Landed in PR #52 at `8567109947b798c3b8ae3f574efa1553d5d4b89e` | Independently bind the exact 256-tuple replay-defense horizon and assert complete reductions, membership, eviction, cursor-wrap, and process-reset behavior. |
 | SPDX-PROFILE-EVIDENCE | Landed in PR #54 at `3ed5bd953006cfda5c0b03937ac50b8a6c2aebd5` | Isolate the unchanged closed SPDX profile validator, prove accepted supplied-document handling and central rejection boundaries, and exercise a non-first release SBOM. |
-| SPDX-CANONICAL | Lands with PR #58 | Require one supplied JSON document, absolute SPDX identifier/checksum anchors, and semantic runner-path rejection at the central validator. |
+| SPDX-CANONICAL | Lands with PR #58 | Require one supplied JSON document, absolute SPDX identifier/checksum anchors, and lossless semantic runner-path rejection at the central validator. |
 | SESSION-OWNER | Landed in PR #56 at `bf7772c` | Own aggregate SessionInfo state on the read goroutine across reconnects, contain reducer failures, and retain the no-export boundary. |
 | DRIVER-REGISTRY-PURE | Landed in PR #57 at `87d8cef` | Parse and reduce bounded DriverList identity state with synthetic fixtures while leaving aggregate/runtime integration, diagnostics, and projection disabled. |
 
