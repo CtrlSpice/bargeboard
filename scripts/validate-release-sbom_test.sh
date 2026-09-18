@@ -226,6 +226,16 @@ expect_rejection \
   "$work/duplicated-document.json" \
   "invalid release SPDX document: $work/duplicated-document.json"
 
+{
+  fixture
+  fixture
+  printf '{"unterminated"\n'
+} >"$work/bounded-document-lookahead.json"
+expect_rejection \
+  'second document rejects before a malformed third document is parsed' \
+  "$work/bounded-document-lookahead.json" \
+  "invalid release SPDX document: $work/bounded-document-lookahead.json"
+
 reject 'unknown top-level field' '.unexpected = true'
 reject 'SPDX version' '.spdxVersion = "SPDX-2.2"'
 reject 'document SPDX ID' '.SPDXID = "SPDXRef-Other"'
