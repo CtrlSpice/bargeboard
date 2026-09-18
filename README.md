@@ -12,7 +12,8 @@ The canonical design is the evolving [Bargeboard architecture](docs/architecture
 
 ## Quick start
 
-Requires Go 1.26 or newer.
+The supported development range is Go 1.26 through Go 1.27. CI authenticates and
+verifies Go 1.26.8 and Go 1.27.1; release archives remain built with Go 1.26.8.
 
 ```bash
 make check

@@ -80,6 +80,18 @@ architecture decision. Future Go historical replay and OpenF1 work instead
 follow their accepted source, timing, identity, signal, and verification
 contracts in this document.
 
+The supported development toolchain range is Go 1.26 through Go 1.27. CI MUST
+authenticate and run the complete quality and receiver race suites with Go
+1.26.8 and Go 1.27.1. The module language version remains Go 1.26. Native
+release builds, package verification, standard-library attribution, and SBOM
+identity MUST remain pinned to Go 1.26.8 until a separate release-toolchain
+decision updates that complete provenance boundary.
+
+Compatibility evidence and release provenance are deliberately separate.
+Changing Bargeboard's accepted JSON depth boundaries to follow incidental mixed
+`Decoder.Token`/`Decoder.Decode` accounting, or rebuilding release subjects with
+the compatibility toolchain merely to test source support, is rejected.
+
 ## Release SBOM Canonical Representation
 
 **Status: GREEN**
@@ -281,8 +293,11 @@ The profiles preserve the owning decoder's pre-U1 nesting budget:
   their existing byte caps; in particular, the handshake's 16 KiB cap is tighter
   than the bytes needed to reach the JSON nesting limit.
 - `visitRawJSONObjectMembers` gives each member value the full 10,000-depth
-  budget, matching hub and snapshot parsing's former outer `Token` followed by
-  per-value `Decode`. Its first pass checks outer braces, quoted-key shape,
+  budget, preserving the hub and snapshot contract established by the former
+  outer `Token` followed by per-value `Decode`. That former Go 1.26 behavior is
+  historical rationale, not a cross-version depth oracle: Go 1.27 charges an
+  open streaming-token context against the following decoded value. The first
+  pass checks outer braces, quoted-key shape,
   colons, commas, ASCII JSON whitespace, and complete input consumption, then
   uses `json.Valid` on every original key/value token. A second pass invokes
   callbacks only after the entire first pass succeeds. Malformed suffixes or
@@ -349,11 +364,14 @@ Focused synthetic tests cover the scalar ranges and boundaries, repair-key
 collisions, owning duplicate/null/casing policies, all control assignments,
 unchanged payload bytes and retained-copy ownership, error-description decisions,
 visitor storage/nesting bounds, URL/upgrade prevention, and ordered/atomic batch
-results. Depth regressions verify each profile's exact accepted limit and
-limit-plus-one, the pre-U1 Token/Decode budget, and A/deep-valid-B/C continuation.
-Adversarial outer-grammar, truncation, byte-mutation, and shallow fuzz cases compare
-both profiles with `encoding/json` and the pre-U1 decoding pattern, including
-original views, input preservation, and zero callbacks on malformed input.
+results. Depth regressions derive each profile's exact accepted limit and
+limit-plus-one directly from Bargeboard's contract and cover A/deep-valid-B/C
+continuation under both supported toolchains. Mixed `Token`/`Decode` behavior
+MUST NOT serve as a deep-input oracle. Adversarial outer-grammar, truncation,
+byte-mutation, and shallow fuzz cases MAY compare both profiles with
+`encoding/json` and the pre-U1 decoding pattern where input size cannot reach a
+nesting limit; they still verify original views, input preservation, and zero
+callbacks on malformed input.
 Existing framing, decompression, size, and receiver-stop tests remain required
 alongside them. These fixtures are boundary probes, not live F1 samples.
 

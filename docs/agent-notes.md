@@ -96,10 +96,11 @@ binding remain separate research findings.
 
 ### SPDX-CANONICAL — Fail closed on supplied SBOM representation
 
-**Implementation lands with PR #58.** The closed release SBOM validator now
-requires exactly one top-level JSON value with a bounded two-value lookahead,
-uses absolute anchors for package/file SPDX identifiers and checksums, and streams
-every decoded JSON string token when checking for the runner workspace path.
+**Landed in PR #58 at `83f21e91b076fc02f340d8a63d361105fde3fa33`.**
+The closed release SBOM validator now requires exactly one top-level JSON value
+with a bounded two-value lookahead, uses absolute anchors for package/file SPDX
+identifiers and checksums, and streams every decoded JSON string token when
+checking for the runner workspace path.
 Invalid prefixes, duplicate valid
 documents, terminal-newline identifiers/checksums, JSON-escaped paths, and paths
 hidden in overwritten duplicate members fail at the central validator before
@@ -108,6 +109,17 @@ five-platform artifact verification cover the same gate; a streaming scanner
 failure is classified as an invalid document rather than a workspace-leak match.
 The SPDX profile, generator, license policy, package roles, archive shape, and
 generator/verifier independence are unchanged.
+
+### GO127-COMPAT — Verify the explicit receiver contract on Go 1.27
+
+**Implementation lands with PR #59.** The receiver's accepted and limit-plus-one
+JSON depth boundaries remain unchanged. The former mixed
+`Decoder.Token`/`Decoder.Decode` implementation is retained only as a shallow
+grammar/member oracle because Go 1.27 accounts its open outer context against the
+following value. CI authenticates Go 1.26.8 and Go 1.27.1 and runs the complete
+quality and receiver race suites with both. The module stays at Go 1.26, while
+release builds, notices, SBOM identity, and artifact verification remain pinned
+to Go 1.26.8.
 
 ### SESSION-OWNER — Wire SessionInfo runtime state ownership
 
@@ -196,7 +208,8 @@ It groups the implementation work; issue text links back to the canonical policy
 | TOKEN-BOUNDARY-ORACLE | Landed in PR #50 at `f7acdb62f8be32349896920f3315c364c88044d4` | Assert complete generation and routing-epoch results at the final legal increment, exhaustion, recovery, and generation replacement boundaries. |
 | RETIREMENT-HORIZON-ORACLE | Landed in PR #52 at `8567109947b798c3b8ae3f574efa1553d5d4b89e` | Independently bind the exact 256-tuple replay-defense horizon and assert complete reductions, membership, eviction, cursor-wrap, and process-reset behavior. |
 | SPDX-PROFILE-EVIDENCE | Landed in PR #54 at `3ed5bd953006cfda5c0b03937ac50b8a6c2aebd5` | Isolate the unchanged closed SPDX profile validator, prove accepted supplied-document handling and central rejection boundaries, and exercise a non-first release SBOM. |
-| SPDX-CANONICAL | Lands with PR #58 | Require one supplied JSON document, absolute SPDX identifier/checksum anchors, and lossless semantic runner-path rejection at the central validator. |
+| SPDX-CANONICAL | Landed in PR #58 at `83f21e9` | Require one supplied JSON document, absolute SPDX identifier/checksum anchors, and lossless semantic runner-path rejection at the central validator. |
+| [GO127-COMPAT / #46](https://github.com/CtrlSpice/bargeboard/issues/46) | Lands with PR #59 | Preserve explicit hub, snapshot, setup, and negotiation depth profiles independently of mixed standard-library decoder accounting; run full quality/race checks with authenticated Go 1.26.8 and Go 1.27.1 while releases remain pinned to Go 1.26.8. |
 | SESSION-OWNER | Landed in PR #56 at `bf7772c` | Own aggregate SessionInfo state on the read goroutine across reconnects, contain reducer failures, and retain the no-export boundary. |
 | DRIVER-REGISTRY-PURE | Landed in PR #57 at `87d8cef` | Parse and reduce bounded DriverList identity state with synthetic fixtures while leaving aggregate/runtime integration, diagnostics, and projection disabled. |
 
@@ -461,10 +474,12 @@ post-reduction consumer remains a no-op.
   hub/snapshot objects. The latter restores the pre-U1 outer-Token/per-value-Decode
   10,000-depth budget. A complete grammar-validation pass precedes callbacks;
   bounded raw token location handles malformed/truncated input without an AST.
-  Regression tests reproduce the rejected boundary at U1 head `edf973f`, check
-  accepted and limit-plus-one depths against the pre-U1 decoding pattern, and
-  verify A/deep-valid-B/C continuation, snapshot atomicity, and shallow grammar
-  equivalence with raw-view/input preservation.
+  Regression tests reproduce the rejected boundary at U1 head `edf973f`, derive
+  accepted and limit-plus-one depths from Bargeboard's explicit profiles, and
+  verify A/deep-valid-B/C continuation and snapshot atomicity under Go 1.26.8 and
+  Go 1.27.1. Shallow grammar equivalence still compares the historical decoding
+  pattern where input size cannot reach a nesting limit, with raw-view and input
+  preservation.
 - U1 originally preserved negotiation case-insensitive assignment, duplicates,
   null no-ops, and capability slice reuse; approved N-CONTROL supersedes only that
   compatibility policy. Handshake preserves case-sensitive keys and last
@@ -534,14 +549,14 @@ adjudication and focused verification in their slices.
   generator/module evidence, structural workflow-gate tests, and demonstrated
   redundant work/dead scaffolding remain research findings. Preserve independent
   generator/verifier cross-checks and all landing gates.
-- Release SBOM hardening: SPDX-CANONICAL lands in PR #58 with single-value JSON
+- Release SBOM hardening: SPDX-CANONICAL landed in PR #58 at `83f21e9` with single-value JSON
   cardinality, terminal-newline-safe SPDX ID and checksum anchoring, and semantic
   fail-closed runner-path detection. Supplied generator/module evidence and the
   profile's license and package-role policy remain separate.
-- Toolchain verification: [#46](https://github.com/CtrlSpice/bargeboard/issues/46)
-  tracks that Go 1.27 rejects the accepted JSON-depth boundary while the README
-  currently claims Go 1.26 or newer. Pinned Go 1.26.8 and releases remain green;
-  no depth-contract or supported-toolchain decision has been made.
+- Toolchain verification: GO127-COMPAT preserves the accepted JSON-depth contract
+  and verifies it with authenticated Go 1.26.8 and Go 1.27.1. Release builds and
+  their complete provenance boundary remain pinned to Go 1.26.8; landing is
+  pending.
 - Fixture licensing: [#48](https://github.com/CtrlSpice/bargeboard/issues/48)
   tracks the owner/legal decision for pre-existing exact F1 archive bytes. This
   slice does not add the readable inflated CarData record; its expected length

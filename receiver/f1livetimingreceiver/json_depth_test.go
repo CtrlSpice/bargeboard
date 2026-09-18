@@ -22,11 +22,12 @@ func nestedJSONArrays(depth int) string {
 
 type rawJSONTestMember struct{ key, value string }
 
-// Depth/grammar oracle from the outer Token + per-value Decode pattern in
-// protocol.go at b222a3c305a8e3b03ad0eae03b98de5c1b1a978e. Token's decoded key
-// is used ONLY in this test oracle; original key spellings come from offsets.
-// Production must never use Token to validate a key after its lossy conversion.
-func legacyJSONMemberOracle(raw []byte) ([]rawJSONTestMember, error) {
+// Shallow grammar/member oracle from the outer Token + per-value Decode pattern
+// in protocol.go at b222a3c305a8e3b03ad0eae03b98de5c1b1a978e. Its callers stay
+// below nesting limits because mixed Token/Decode depth accounting is not stable
+// across Go releases. Production must never use Token to validate a key after
+// its lossy conversion.
+func shallowJSONMemberOracle(raw []byte) ([]rawJSONTestMember, error) {
 	if !utf8.Valid(raw) {
 		return nil, errJSONUTF8
 	}
@@ -86,10 +87,6 @@ func TestUnicodeControlsDepthHubBoundaries(t *testing.T) {
 				if len(input) >= maxHubRecordSize || len(input) >= maxWebSocketMessage {
 					t.Fatal("depth probe exceeds wire byte caps")
 				}
-				_, legacyErr := legacyJSONMemberOracle(input)
-				if (legacyErr == nil) != (extra == 0) {
-					t.Fatalf("old Token/Decode contract: %v", legacyErr)
-				}
 				got, err := decodeHubRecord(input, requested)
 				if extra == 1 {
 					if got != nil || !errors.Is(err, errInvalidLiveTimingData) {
@@ -113,10 +110,6 @@ func TestUnicodeControlsDepthSnapshotMemberBoundary(t *testing.T) {
 		before := bytes.Clone(result)
 		if len(result) >= maxHubRecordSize {
 			t.Fatal("snapshot probe exceeds record byte cap")
-		}
-		_, legacyErr := legacyJSONMemberOracle(result)
-		if (legacyErr == nil) != (depth == 10000) {
-			t.Fatalf("legacy snapshot depth %d: %v", depth, legacyErr)
 		}
 		topics, payloads, err := decodeSubscriptionSnapshot(result, map[string]struct{}{"Heartbeat": {}, "SessionInfo": {}})
 		if depth == 10001 {
