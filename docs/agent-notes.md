@@ -104,9 +104,10 @@ Invalid prefixes, duplicate valid
 documents, terminal-newline identifiers/checksums, JSON-escaped paths, and paths
 hidden in overwritten duplicate members fail at the central validator before
 archive-specific verification continues. Compact validator mutations and complete
-five-platform artifact verification cover the same gate. The SPDX profile,
-generator, license policy, package roles, archive shape, and generator/verifier
-independence are unchanged.
+five-platform artifact verification cover the same gate; a streaming scanner
+failure is classified as an invalid document rather than a workspace-leak match.
+The SPDX profile, generator, license policy, package roles, archive shape, and
+generator/verifier independence are unchanged.
 
 ### SESSION-OWNER — Wire SessionInfo runtime state ownership
 

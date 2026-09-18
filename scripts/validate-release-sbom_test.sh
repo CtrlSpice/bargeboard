@@ -197,6 +197,21 @@ expect_rejection() {
   fi
 }
 
+expect_rejection_containing() {
+  local description="${1:?description required}"
+  local document="${2:?document required}"
+  local expected="${3:?expected output required}"
+  local output
+  if output="$(validate "$document" 2>&1)"; then
+    printf 'expected invalid supplied SPDX evidence: %s\n' "$description" >&2
+    exit 1
+  fi
+  if [[ "$output" != *"$expected"* ]]; then
+    printf 'unexpected SPDX rejection for %s: %s\n' "$description" "$output" >&2
+    exit 1
+  fi
+}
+
 reject() {
   local description="${1:?description required}"
   local filter="${2:?jq filter required}"
@@ -235,6 +250,15 @@ expect_rejection \
   'second document rejects before a malformed third document is parsed' \
   "$work/bounded-document-lookahead.json" \
   "invalid release SPDX document: $work/bounded-document-lookahead.json"
+
+{
+  fixture
+  printf '{"unterminated"\n'
+} >"$work/malformed-second-document.json"
+expect_rejection_containing \
+  'malformed second document' \
+  "$work/malformed-second-document.json" \
+  "invalid release SPDX document: $work/malformed-second-document.json"
 
 reject 'unknown top-level field' '.unexpected = true'
 reject 'SPDX version' '.spdxVersion = "SPDX-2.2"'
@@ -433,3 +457,30 @@ GITHUB_WORKSPACE="$duplicate_workspace" expect_rejection \
   'JSON-escaped runner workspace path in an overwritten duplicate object key' \
   "$work/duplicate-workspace-key.json" \
   "SBOM leaks the runner workspace path: $work/duplicate-workspace-key.json"
+
+real_jq="$(command -v jq)"
+mkdir "$work/bin"
+cat >"$work/bin/jq" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+for argument in "$@"; do
+  if [[ "$argument" == --stream ]]; then
+    exit 5
+  fi
+done
+exec "${REAL_JQ:?real jq required}" "$@"
+EOF
+chmod +x "$work/bin/jq"
+if output="$(
+  PATH="$work/bin:$PATH" \
+    REAL_JQ="$real_jq" \
+    GITHUB_WORKSPACE=/runner/workspace \
+    validate "$work/accepted.json" 2>&1
+)"; then
+  printf 'expected workspace scanner failure to reject supplied SPDX evidence\n' >&2
+  exit 1
+fi
+if [[ "$output" != "invalid release SPDX document: $work/accepted.json" ]]; then
+  printf 'unexpected workspace-scanner rejection: %s\n' "$output" >&2
+  exit 1
+fi

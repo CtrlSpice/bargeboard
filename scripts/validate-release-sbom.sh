@@ -153,21 +153,29 @@ if ! jq --exit-status --null-input \
   exit 1
 fi
 
-if [[ -n "${GITHUB_WORKSPACE:-}" ]] && ! jq --exit-status --stream \
-  --arg workspace "$GITHUB_WORKSPACE" '
-  def contains_workspace:
-    (.[0] | any(.[]; type == "string" and contains($workspace))) or
-    (
-      length == 2 and
-      (.[1] | type) == "string" and
-      (.[1] | contains($workspace))
-    );
+if [[ -n "${GITHUB_WORKSPACE:-}" ]]; then
+  workspace_status=0
+  jq --exit-status --stream \
+    --arg workspace "$GITHUB_WORKSPACE" '
+    def contains_workspace:
+      (.[0] | any(.[]; type == "string" and contains($workspace))) or
+      (
+        length == 2 and
+        (.[1] | type) == "string" and
+        (.[1] | contains($workspace))
+      );
 
-  reduce (., inputs) as $event (
-    true;
-    . and ($event | contains_workspace | not)
-  )
-' "$document" >/dev/null; then
-  printf 'SBOM leaks the runner workspace path: %s\n' "$document" >&2
-  exit 1
+    reduce (., inputs) as $event (
+      true;
+      . and ($event | contains_workspace | not)
+    )
+  ' "$document" >/dev/null || workspace_status=$?
+  if ((workspace_status == 1)); then
+    printf 'SBOM leaks the runner workspace path: %s\n' "$document" >&2
+    exit 1
+  fi
+  if ((workspace_status != 0)); then
+    printf 'invalid release SPDX document: %s\n' "$document" >&2
+    exit 1
+  fi
 fi
