@@ -474,10 +474,12 @@ post-reduction consumer remains a no-op.
   hub/snapshot objects. The latter restores the pre-U1 outer-Token/per-value-Decode
   10,000-depth budget. A complete grammar-validation pass precedes callbacks;
   bounded raw token location handles malformed/truncated input without an AST.
-  Regression tests reproduce the rejected boundary at U1 head `edf973f`, check
-  accepted and limit-plus-one depths against the pre-U1 decoding pattern, and
-  verify A/deep-valid-B/C continuation, snapshot atomicity, and shallow grammar
-  equivalence with raw-view/input preservation.
+  Regression tests reproduce the rejected boundary at U1 head `edf973f`, derive
+  accepted and limit-plus-one depths from Bargeboard's explicit profiles, and
+  verify A/deep-valid-B/C continuation and snapshot atomicity under Go 1.26.8 and
+  Go 1.27.1. Shallow grammar equivalence still compares the historical decoding
+  pattern where input size cannot reach a nesting limit, with raw-view and input
+  preservation.
 - U1 originally preserved negotiation case-insensitive assignment, duplicates,
   null no-ops, and capability slice reuse; approved N-CONTROL supersedes only that
   compatibility policy. Handshake preserves case-sensitive keys and last
