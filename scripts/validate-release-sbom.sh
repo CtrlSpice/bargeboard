@@ -11,7 +11,7 @@ readonly source="${7:?usage: validate-release-sbom.sh DOCUMENT ARCHIVE NAMESPACE
 readonly project_package=github.com/CtrlSpice/bargeboard
 readonly other_relationship_comment="evident-by: indicates the package's existence is evident by the given file"
 
-if ! jq --exit-status --slurp \
+if ! jq --exit-status --null-input \
   --arg name "$archive" \
   --arg namespace "$namespace" \
   --arg created "$created" \
@@ -20,7 +20,8 @@ if ! jq --exit-status --slurp \
   --arg go_version "$go_version" \
   --arg other_relationship_comment "$other_relationship_comment" \
   --arg source "$source" '
-  length == 1 and (.[0] |
+  [limit(2; inputs)] as $documents |
+  ($documents | length) == 1 and ($documents[0] |
   (keys | sort) == [
     "SPDXID", "creationInfo", "dataLicense", "documentNamespace", "files",
     "name", "packages", "relationships", "spdxVersion"

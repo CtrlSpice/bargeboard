@@ -97,9 +97,10 @@ binding remain separate research findings.
 ### SPDX-CANONICAL — Fail closed on supplied SBOM representation
 
 **Implementation lands with PR #58.** The closed release SBOM validator now
-requires exactly one top-level JSON value, uses absolute anchors for package/file
-SPDX identifiers and checksums, and streams every decoded JSON string token when
-checking for the runner workspace path. Invalid prefixes, duplicate valid
+requires exactly one top-level JSON value with a bounded two-value lookahead,
+uses absolute anchors for package/file SPDX identifiers and checksums, and streams
+every decoded JSON string token when checking for the runner workspace path.
+Invalid prefixes, duplicate valid
 documents, terminal-newline identifiers/checksums, JSON-escaped paths, and paths
 hidden in overwritten duplicate members fail at the central validator before
 archive-specific verification continues. Compact validator mutations and complete
