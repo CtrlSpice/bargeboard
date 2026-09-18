@@ -82,9 +82,9 @@ func checkRawJSONObjectGrammar(t *testing.T, raw []byte) {
 	case len(trimmed) == 0 || trimmed[0] != '{':
 		wantErr = errJSONObject
 	}
-	want, legacyErr := legacyJSONMemberOracle(raw)
-	if (legacyErr == nil) != (wantErr == nil) {
-		t.Fatalf("legacy/whole grammar disagreement for %q: %v / %v", raw, legacyErr, wantErr)
+	want, shallowErr := shallowJSONMemberOracle(raw)
+	if (shallowErr == nil) != (wantErr == nil) {
+		t.Fatalf("shallow/whole grammar disagreement for %q: %v / %v", raw, shallowErr, wantErr)
 	}
 	for _, profile := range []struct {
 		name  string

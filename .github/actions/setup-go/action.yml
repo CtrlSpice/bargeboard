@@ -1,5 +1,11 @@
 name: Set up authenticated Go
-description: Install the pinned Go toolchain after authenticating its official archive
+description: Install a repository-approved Go toolchain after authenticating its official archive
+
+inputs:
+  version:
+    description: Exact approved Go version
+    required: false
+    default: "1.26.8"
 
 runs:
   using: composite
@@ -7,10 +13,13 @@ runs:
     - name: Resolve Go archive
       id: archive
       shell: bash
+      env:
+        REQUESTED_GO_VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
         IFS=$'\t' read -r version archive checksum < <(
-          bash "$GITHUB_WORKSPACE/scripts/go-toolchain.sh" "$RUNNER_OS" "$RUNNER_ARCH"
+          bash "$GITHUB_WORKSPACE/scripts/go-toolchain.sh" \
+            "$RUNNER_OS" "$RUNNER_ARCH" "$REQUESTED_GO_VERSION"
         )
         printf 'version=%s\narchive=%s\nchecksum=%s\n' \
           "$version" "$archive" "$checksum" >>"$GITHUB_OUTPUT"
