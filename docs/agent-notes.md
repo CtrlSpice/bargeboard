@@ -94,6 +94,21 @@ archive shape, and generator/verifier independence are unchanged. Generator
 normalization and supplied module/notices
 binding remain separate research findings.
 
+### SPDX-CANONICAL — Fail closed on supplied SBOM representation
+
+**Implementation lands with PR #58.** The closed release SBOM validator now
+requires exactly one top-level JSON value with a bounded two-value lookahead,
+uses absolute anchors for package/file SPDX identifiers and checksums, and streams
+every decoded JSON string token when checking for the runner workspace path.
+Invalid prefixes, duplicate valid
+documents, terminal-newline identifiers/checksums, JSON-escaped paths, and paths
+hidden in overwritten duplicate members fail at the central validator before
+archive-specific verification continues. Compact validator mutations and complete
+five-platform artifact verification cover the same gate; a streaming scanner
+failure is classified as an invalid document rather than a workspace-leak match.
+The SPDX profile, generator, license policy, package roles, archive shape, and
+generator/verifier independence are unchanged.
+
 ### SESSION-OWNER — Wire SessionInfo runtime state ownership
 
 **Landed in PR #56 at `bf7772c14689d6ab157555f18316fe67c3871aa2`.**
@@ -108,8 +123,9 @@ issue occurrence, diagnostic, effect, command, or OTLP signal is emitted.
 
 ### DRIVER-REGISTRY-PURE — Implement the pure DriverList registry core
 
-**Implementation lands with PR #57.** The pure lossless parser and bounded value
-reducer implement canonical driver keys, matching optional `RacingNumber`, required
+**Landed in PR #57 at `87d8cef6a2be487b43f133ee55f172471f720f9c`.**
+The pure lossless parser and bounded value reducer implement canonical driver keys,
+matching optional `RacingNumber`, required
 one-to-four-letter uppercase ASCII `Tla`, sparse pre-freeze staging, the 32-entry
 bound, authoritative freeze, frozen agreement, and conflict preservation. Present
 invalid identity fields remain distinct from omission; entry-local feed failures
@@ -180,8 +196,9 @@ It groups the implementation work; issue text links back to the canonical policy
 | TOKEN-BOUNDARY-ORACLE | Landed in PR #50 at `f7acdb62f8be32349896920f3315c364c88044d4` | Assert complete generation and routing-epoch results at the final legal increment, exhaustion, recovery, and generation replacement boundaries. |
 | RETIREMENT-HORIZON-ORACLE | Landed in PR #52 at `8567109947b798c3b8ae3f574efa1553d5d4b89e` | Independently bind the exact 256-tuple replay-defense horizon and assert complete reductions, membership, eviction, cursor-wrap, and process-reset behavior. |
 | SPDX-PROFILE-EVIDENCE | Landed in PR #54 at `3ed5bd953006cfda5c0b03937ac50b8a6c2aebd5` | Isolate the unchanged closed SPDX profile validator, prove accepted supplied-document handling and central rejection boundaries, and exercise a non-first release SBOM. |
+| SPDX-CANONICAL | Lands with PR #58 | Require one supplied JSON document, absolute SPDX identifier/checksum anchors, and lossless semantic runner-path rejection at the central validator. |
 | SESSION-OWNER | Landed in PR #56 at `bf7772c` | Own aggregate SessionInfo state on the read goroutine across reconnects, contain reducer failures, and retain the no-export boundary. |
-| DRIVER-REGISTRY-PURE | Lands with PR #57 | Parse and reduce bounded DriverList identity state with synthetic fixtures while leaving aggregate/runtime integration, diagnostics, and projection disabled. |
+| DRIVER-REGISTRY-PURE | Landed in PR #57 at `87d8cef` | Parse and reduce bounded DriverList identity state with synthetic fixtures while leaving aggregate/runtime integration, diagnostics, and projection disabled. |
 
 U1 landed in PR #38 at `e2afacb0d6071f0a8e6a5c790c9039a3f52070d2`, the base of
 the U2 implementation. U2 landed in PR #39 at `0284a62`, the U3 implementation base.
@@ -509,7 +526,7 @@ adjudication and focused verification in their slices.
 - Pure-test oracles: CAR-ORACLE, FEED-ORDER-ORACLE, TOKEN-BOUNDARY-ORACLE, and
   RETIREMENT-HORIZON-ORACLE landed. Keep the existing value-state functional core
   and idiomatic Go.
-- Runtime state: SESSION-OWNER landed in PR #56. DRIVER-REGISTRY-PURE lands with
+- Runtime state: SESSION-OWNER landed in PR #56. DRIVER-REGISTRY-PURE landed in
   PR #57 using the approved topic-specific Unicode, internal-issue, and synthetic
   fixture boundaries. DriverList aggregate/runtime ownership remains a separate
   unapproved integration slice.
@@ -517,10 +534,10 @@ adjudication and focused verification in their slices.
   generator/module evidence, structural workflow-gate tests, and demonstrated
   redundant work/dead scaffolding remain research findings. Preserve independent
   generator/verifier cross-checks and all landing gates.
-- Release SBOM hardening: single-value JSON cardinality, terminal-newline-safe
-  SPDX ID and checksum anchoring, and semantic fail-closed runner-path detection
-  are unapproved research findings. The current profile retains its existing jq
-  stream, jq regex, and literal grep behavior.
+- Release SBOM hardening: SPDX-CANONICAL lands in PR #58 with single-value JSON
+  cardinality, terminal-newline-safe SPDX ID and checksum anchoring, and semantic
+  fail-closed runner-path detection. Supplied generator/module evidence and the
+  profile's license and package-role policy remain separate.
 - Toolchain verification: [#46](https://github.com/CtrlSpice/bargeboard/issues/46)
   tracks that Go 1.27 rejects the accepted JSON-depth boundary while the README
   currently claims Go 1.26 or newer. Pinned Go 1.26.8 and releases remain green;

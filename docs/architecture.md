@@ -80,6 +80,45 @@ architecture decision. Future Go historical replay and OpenF1 work instead
 follow their accepted source, timing, identity, signal, and verification
 contracts in this document.
 
+## Release SBOM Canonical Representation
+
+**Status: GREEN**
+
+A supplied release SPDX JSON file MUST contain exactly one top-level JSON value.
+The validator MUST use bounded two-value lookahead: it retains at most the first
+two complete values, accepts only one, and rejects as soon as a second value is
+available without parsing later input. Empty input, a malformed first or second
+value, and any parser failure are invalid. This bounds top-level-value retention;
+it does not establish a new byte-size limit for the single supplied document.
+
+The sole value MUST satisfy the existing closed SPDX document profile. Package
+and file SPDX identifiers and checksums MUST use absolute whole-string grammar;
+line-start or pre-final-newline matches are insufficient. This decision does not
+change accepted package roles, licenses, relationships, archive binding, or
+generator output.
+
+When `GITHUB_WORKSPACE` is nonempty, the validator MUST reject the supplied file
+if that path occurs as a substring of any original decoded JSON string token.
+The scan includes scalar values and every object member name, including nested
+names and values hidden by duplicate-member last-value-wins materialization. It
+therefore runs over a lossless token stream rather than only the materialized
+object. A scanner failure is an invalid SPDX document; only a completed scan that
+finds the path reports a workspace leak. Validation MUST finish before archive
+extraction and downstream package, binary, attestation, or publication checks.
+
+Unbounded slurping to count documents, `$` line anchors, raw-byte workspace
+search, and scanning only a materialized JSON object are rejected. They permit
+resource growth with input count, terminal-newline acceptance, escaped-path
+bypasses, or overwritten duplicate content in the published bytes.
+
+Verification MUST cover one accepted document with workspace scanning enabled;
+an invalid prefix followed by a valid document; two valid documents; rejection
+before a malformed third value is parsed; a malformed consumed second value;
+leading-line and terminal-newline identifier/checksum mutations; direct, escaped,
+and embedded workspace paths; duplicate scalar values and nested ancestor member
+names hidden by later members; scanner failure distinct from a path match; and a
+non-first platform SBOM through complete release-artifact verification.
+
 ## Layered Unicode and Input Quality
 
 **Status: GREEN policy; partial FORMATION LAP implementation (U1/U2 landed; U3 implemented; topic integrations pending)**

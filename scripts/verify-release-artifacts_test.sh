@@ -116,7 +116,35 @@ mutate_sbom() {
   refresh_checksum "$dist" "$sbom"
 }
 
-bash "$verifier" "$source_dist"
+insert_duplicate_workspace() {
+  local input="${1:?input required}"
+  local output="${2:?output required}"
+  local workspace="${3:?workspace required}"
+  local placement="${4:-value}"
+  jq --compact-output --ascii-output . "$input" |
+    jq --raw-input --slurp --raw-output \
+      --arg workspace "$workspace" \
+      --arg placement "$placement" '
+      "\"supplier\":\"NOASSERTION\"" as $needle |
+      if contains($needle) then
+        ($workspace | tojson | gsub("/"; "\\u002f")) as $encoded_workspace |
+        if $placement == "value" then
+          sub($needle; "\"supplier\":" + $encoded_workspace + "," + $needle)
+        elif $placement == "key" then
+          sub($needle;
+            "\"supplier\":{" + $encoded_workspace + ":{\"leaf\":null}}," +
+            $needle
+          )
+        else
+          error("unknown duplicate workspace placement")
+        end
+      else
+        error("duplicate workspace fixture has no insertion point")
+      end
+    ' >"$output"
+}
+
+GITHUB_WORKSPACE=/runner/workspace bash "$verifier" "$source_dist"
 
 source_version="$(jq -er '.version' "$source_dist/metadata.json")"
 readonly source_version
@@ -130,6 +158,53 @@ expect_failure \
   'non-first SPDX profile' \
   "invalid release SPDX document: $work/dist-invalid-final-sbom/bargeboard_${source_version}_windows_amd64.zip.sbom.spdx.json" \
   "$work/dist-invalid-final-sbom"
+
+cp -R "$source_dist" "$work/dist-multiple-sbom-documents"
+multiple_sbom="$work/dist-multiple-sbom-documents/bargeboard_${source_version}_windows_amd64.zip.sbom.spdx.json"
+cp "$multiple_sbom" "$work/original-sbom.json"
+cat "$work/original-sbom.json" >>"$multiple_sbom"
+refresh_checksum "$work/dist-multiple-sbom-documents" "$multiple_sbom"
+expect_failure \
+  'multiple JSON documents in a release SBOM' \
+  "invalid release SPDX document: $multiple_sbom" \
+  "$work/dist-multiple-sbom-documents"
+
+cp -R "$source_dist" "$work/dist-escaped-workspace"
+escaped_sbom="$work/dist-escaped-workspace/bargeboard_${source_version}_windows_amd64.zip.sbom.spdx.json"
+workspace="$work/w"$'\303\266'"rkspace"
+jq --ascii-output --arg workspace "$workspace" '
+  (.packages[] | select(.name == "google.golang.org/grpc") | .sourceInfo) = $workspace
+' "$escaped_sbom" >"$work/escaped-workspace-sbom.json"
+mv "$work/escaped-workspace-sbom.json" "$escaped_sbom"
+refresh_checksum "$work/dist-escaped-workspace" "$escaped_sbom"
+output=''
+if output="$(GITHUB_WORKSPACE="$workspace" bash "$verifier" "$work/dist-escaped-workspace" 2>&1)"; then
+  printf 'expected escaped runner workspace path in release SBOM to fail\n' >&2
+  exit 1
+fi
+if ! grep -F "SBOM leaks the runner workspace path: $escaped_sbom" <<<"$output" >/dev/null; then
+  printf 'escaped workspace path did not reach the canonical SBOM validator:\n%s\n' "$output" >&2
+  exit 1
+fi
+
+cp -R "$source_dist" "$work/dist-duplicate-workspace"
+duplicate_sbom="$work/dist-duplicate-workspace/bargeboard_${source_version}_windows_amd64.zip.sbom.spdx.json"
+duplicate_workspace=/runner/workspace
+insert_duplicate_workspace \
+  "$duplicate_sbom" \
+  "$work/duplicate-workspace-sbom.json" \
+  "$duplicate_workspace"
+mv "$work/duplicate-workspace-sbom.json" "$duplicate_sbom"
+refresh_checksum "$work/dist-duplicate-workspace" "$duplicate_sbom"
+output=''
+if output="$(GITHUB_WORKSPACE="$duplicate_workspace" bash "$verifier" "$work/dist-duplicate-workspace" 2>&1)"; then
+  printf 'expected duplicate-member runner workspace path in release SBOM to fail\n' >&2
+  exit 1
+fi
+if ! grep -F "SBOM leaks the runner workspace path: $duplicate_sbom" <<<"$output" >/dev/null; then
+  printf 'duplicate-member workspace path did not reach the canonical SBOM validator:\n%s\n' "$output" >&2
+  exit 1
+fi
 
 mismatched_tag=v0.0.0
 if [[ "$source_version" == "${mismatched_tag#v}" ]]; then
