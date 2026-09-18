@@ -131,6 +131,34 @@ expect_failure \
   "invalid release SPDX document: $work/dist-invalid-final-sbom/bargeboard_${source_version}_windows_amd64.zip.sbom.spdx.json" \
   "$work/dist-invalid-final-sbom"
 
+cp -R "$source_dist" "$work/dist-multiple-sbom-documents"
+multiple_sbom="$work/dist-multiple-sbom-documents/bargeboard_${source_version}_windows_amd64.zip.sbom.spdx.json"
+cp "$multiple_sbom" "$work/original-sbom.json"
+cat "$work/original-sbom.json" >>"$multiple_sbom"
+refresh_checksum "$work/dist-multiple-sbom-documents" "$multiple_sbom"
+expect_failure \
+  'multiple JSON documents in a release SBOM' \
+  "invalid release SPDX document: $multiple_sbom" \
+  "$work/dist-multiple-sbom-documents"
+
+cp -R "$source_dist" "$work/dist-escaped-workspace"
+escaped_sbom="$work/dist-escaped-workspace/bargeboard_${source_version}_windows_amd64.zip.sbom.spdx.json"
+workspace="$work/w"$'\303\266'"rkspace"
+jq --ascii-output --arg workspace "$workspace" '
+  (.packages[] | select(.name == "google.golang.org/grpc") | .sourceInfo) = $workspace
+' "$escaped_sbom" >"$work/escaped-workspace-sbom.json"
+mv "$work/escaped-workspace-sbom.json" "$escaped_sbom"
+refresh_checksum "$work/dist-escaped-workspace" "$escaped_sbom"
+output=''
+if output="$(GITHUB_WORKSPACE="$workspace" bash "$verifier" "$work/dist-escaped-workspace" 2>&1)"; then
+  printf 'expected escaped runner workspace path in release SBOM to fail\n' >&2
+  exit 1
+fi
+if ! grep -F "SBOM leaks the runner workspace path: $escaped_sbom" <<<"$output" >/dev/null; then
+  printf 'escaped workspace path did not reach the canonical SBOM validator:\n%s\n' "$output" >&2
+  exit 1
+fi
+
 mismatched_tag=v0.0.0
 if [[ "$source_version" == "${mismatched_tag#v}" ]]; then
   mismatched_tag=v0.0.1

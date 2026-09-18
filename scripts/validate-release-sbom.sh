@@ -11,7 +11,7 @@ readonly source="${7:?usage: validate-release-sbom.sh DOCUMENT ARCHIVE NAMESPACE
 readonly project_package=github.com/CtrlSpice/bargeboard
 readonly other_relationship_comment="evident-by: indicates the package's existence is evident by the given file"
 
-if ! jq -e \
+if ! jq --exit-status --slurp \
   --arg name "$archive" \
   --arg namespace "$namespace" \
   --arg created "$created" \
@@ -20,6 +20,7 @@ if ! jq -e \
   --arg go_version "$go_version" \
   --arg other_relationship_comment "$other_relationship_comment" \
   --arg source "$source" '
+  length == 1 and (.[0] |
   (keys | sort) == [
     "SPDXID", "creationInfo", "dataLicense", "documentNamespace", "files",
     "name", "packages", "relationships", "spdxVersion"
@@ -42,7 +43,7 @@ if ! jq -e \
       all(.checksums[];
         (keys | sort) == ["algorithm", "checksumValue"] and
         .algorithm == "SHA256" and
-        (.checksumValue | test("^[0-9a-f]{64}$"))
+        (.checksumValue | test("\\A[0-9a-f]{64}\\z"))
       )
     )) and
     ((has("externalRefs") | not) or (
@@ -61,11 +62,11 @@ if ! jq -e \
       "licenseConcluded", "licenseInfoInFiles"
     ] and
     (.SPDXID | type) == "string" and
-    (.SPDXID | test("^SPDXRef-[A-Za-z0-9.-]+$")) and
+    (.SPDXID | test("\\ASPDXRef-[A-Za-z0-9.-]+\\z")) and
     all(.checksums[];
       (keys | sort) == ["algorithm", "checksumValue"] and
       (.algorithm == "SHA1" or .algorithm == "SHA256") and
-      (.checksumValue | test("^[0-9a-f]+$"))
+      (.checksumValue | test("\\A[0-9a-f]+\\z"))
     )
   ) and
   all(.relationships[];
@@ -94,7 +95,7 @@ if ! jq -e \
   all(.packages[];
     (.name | type) == "string" and (.name | length) > 0 and
     (.SPDXID | type) == "string" and
-    (.SPDXID | test("^SPDXRef-[A-Za-z0-9.-]+$")) and
+    (.SPDXID | test("\\ASPDXRef-[A-Za-z0-9.-]+\\z")) and
     (.versionInfo | type) == "string" and (.versionInfo | length) > 0 and
     .supplier == "NOASSERTION" and
     .downloadLocation == "NOASSERTION" and
@@ -145,12 +146,16 @@ if ! jq -e \
     (.spdxElementId as $from | $ids | index($from)) != null and
     (.relatedSpdxElement as $to | $ids | index($to)) != null
   )
+  )
 ' "$document" >/dev/null; then
   printf 'invalid release SPDX document: %s\n' "$document" >&2
   exit 1
 fi
 
-if [[ -n "${GITHUB_WORKSPACE:-}" ]] && grep -F "$GITHUB_WORKSPACE" "$document" >/dev/null; then
+if [[ -n "${GITHUB_WORKSPACE:-}" ]] && ! jq --exit-status --slurp \
+  --arg workspace "$GITHUB_WORKSPACE" '
+  length == 1 and (.[0] | all(.. | strings; contains($workspace) | not))
+' "$document" >/dev/null; then
   printf 'SBOM leaks the runner workspace path: %s\n' "$document" >&2
   exit 1
 fi

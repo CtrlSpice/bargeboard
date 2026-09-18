@@ -155,24 +155,49 @@ validate() {
     "$source"
 }
 
-reject() {
+expect_rejection() {
   local description="${1:?description required}"
-  local filter="${2:?jq filter required}"
-  local document="$work/rejected.json"
+  local document="${2:?document required}"
+  local expected="${3:?expected output required}"
   local output
-  fixture | jq "$filter" >"$document"
   if output="$(validate "$document" 2>&1)"; then
     printf 'expected invalid supplied SPDX evidence: %s\n' "$description" >&2
     exit 1
   fi
-  if [[ "$output" != "invalid release SPDX document: $document" ]]; then
+  if [[ "$output" != "$expected" ]]; then
     printf 'unexpected SPDX rejection for %s: %s\n' "$description" "$output" >&2
     exit 1
   fi
 }
 
+reject() {
+  local description="${1:?description required}"
+  local filter="${2:?jq filter required}"
+  local document="$work/rejected.json"
+  fixture | jq "$filter" >"$document"
+  expect_rejection "$description" "$document" "invalid release SPDX document: $document"
+}
+
 fixture >"$work/accepted.json"
 validate "$work/accepted.json"
+
+{
+  printf '{}\n'
+  fixture
+} >"$work/prefixed-document.json"
+expect_rejection \
+  'invalid JSON value before the release document' \
+  "$work/prefixed-document.json" \
+  "invalid release SPDX document: $work/prefixed-document.json"
+
+{
+  fixture
+  fixture
+} >"$work/duplicated-document.json"
+expect_rejection \
+  'multiple valid release documents' \
+  "$work/duplicated-document.json" \
+  "invalid release SPDX document: $work/duplicated-document.json"
 
 reject 'unknown top-level field' '.unexpected = true'
 reject 'SPDX version' '.spdxVersion = "SPDX-2.2"'
@@ -195,6 +220,15 @@ reject 'package SPDX ID grammar' '
     else . end
   )
 '
+reject 'package SPDX ID terminal newline' '
+  (.packages[] | select(.name == "example.com/dependency") | .SPDXID) as $original |
+  (.packages[] | select(.name == "example.com/dependency") | .SPDXID) = ($original + "\n") |
+  .relationships |= map(
+    if .spdxElementId == $original then .spdxElementId = ($original + "\n")
+    elif .relatedSpdxElement == $original then .relatedSpdxElement = ($original + "\n")
+    else . end
+  )
+'
 reject 'package name' \
   '(.packages[] | select(.name == "example.com/dependency") | .name) = ""'
 reject 'package version' \
@@ -209,6 +243,8 @@ reject 'package copyright' \
   '(.packages[] | select(.name == "example.com/dependency") | .copyrightText) = "Copyright"'
 reject 'package checksum shape' \
   '(.packages[] | select(.name == "example.com/dependency") | .checksums[0].algorithm) = "SHA1"'
+reject 'package checksum terminal newline' \
+  '(.packages[] | select(.name == "example.com/dependency") | .checksums[0].checksumValue) += "\n"'
 reject 'package external-reference shape' \
   '(.packages[] | select(.name == "example.com/dependency") | .externalRefs[0].referenceCategory) = "SECURITY"'
 reject 'project concluded license' \
@@ -259,7 +295,17 @@ reject 'file SPDX ID grammar' '
     else . end
   )
 '
+reject 'file SPDX ID terminal newline' '
+  .files[0].SPDXID as $original |
+  .files[0].SPDXID = ($original + "\n") |
+  .relationships |= map(
+    if .spdxElementId == $original then .spdxElementId = ($original + "\n")
+    elif .relatedSpdxElement == $original then .relatedSpdxElement = ($original + "\n")
+    else . end
+  )
+'
 reject 'file checksum shape' '.files[0].checksums[0].algorithm = "MD5"'
+reject 'file checksum terminal newline' '.files[0].checksums[0].checksumValue += "\n"'
 reject 'duplicate valid SPDX ID' '
   (.packages[] | select(.name == "example.com/dependency") | .SPDXID) as $dependency |
   (.packages[] | select(.name == "example.com/dependency") | .SPDXID) = "SPDXRef-Package-stdlib" |
@@ -280,14 +326,24 @@ reject 'OTHER relationship meaning' '
   (.relationships[] | select(.relationshipType == "OTHER") | .comment) = "unverified claim"
 '
 
-fixture | jq --arg workspace "$work/workspace" \
+workspace="$work/workspace"
+fixture | jq --arg workspace "$workspace" \
   '(.packages[] | select(.name == "example.com/dependency") | .sourceInfo) = $workspace' \
   >"$work/workspace.json"
-if output="$(GITHUB_WORKSPACE="$work/workspace" validate "$work/workspace.json" 2>&1)"; then
-  printf 'expected runner workspace path in supplied SPDX evidence to fail\n' >&2
+GITHUB_WORKSPACE="$workspace" expect_rejection \
+  'runner workspace path' \
+  "$work/workspace.json" \
+  "SBOM leaks the runner workspace path: $work/workspace.json"
+
+workspace="$work/w"$'\303\266'"rkspace"
+fixture | jq --ascii-output --arg workspace "$workspace" \
+  '(.packages[] | select(.name == "example.com/dependency") | .sourceInfo) = $workspace' \
+  >"$work/escaped-workspace.json"
+if grep -F "$workspace" "$work/escaped-workspace.json" >/dev/null; then
+  printf 'escaped workspace fixture contains the decoded path\n' >&2
   exit 1
 fi
-if [[ "$output" != "SBOM leaks the runner workspace path: $work/workspace.json" ]]; then
-  printf 'unexpected workspace-path rejection: %s\n' "$output" >&2
-  exit 1
-fi
+GITHUB_WORKSPACE="$workspace" expect_rejection \
+  'JSON-escaped runner workspace path' \
+  "$work/escaped-workspace.json" \
+  "SBOM leaks the runner workspace path: $work/escaped-workspace.json"
