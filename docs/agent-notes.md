@@ -112,8 +112,9 @@ generator/verifier independence are unchanged.
 
 ### GO127-COMPAT — Verify the explicit receiver contract on Go 1.27
 
-**Implementation lands with PR #59.** The receiver's accepted and limit-plus-one
-JSON depth boundaries remain unchanged. The former mixed
+**Landed in PR #59 at `ca7580d22a85bd0f97d3936a358b0c4236e57418`.**
+The receiver's accepted and limit-plus-one JSON depth boundaries remain unchanged.
+The former mixed
 `Decoder.Token`/`Decoder.Decode` implementation is retained only as a shallow
 grammar/member oracle because Go 1.27 accounts its open outer context against the
 following value. CI authenticates Go 1.26.8 and Go 1.27.1 and runs the complete
@@ -209,7 +210,7 @@ It groups the implementation work; issue text links back to the canonical policy
 | RETIREMENT-HORIZON-ORACLE | Landed in PR #52 at `8567109947b798c3b8ae3f574efa1553d5d4b89e` | Independently bind the exact 256-tuple replay-defense horizon and assert complete reductions, membership, eviction, cursor-wrap, and process-reset behavior. |
 | SPDX-PROFILE-EVIDENCE | Landed in PR #54 at `3ed5bd953006cfda5c0b03937ac50b8a6c2aebd5` | Isolate the unchanged closed SPDX profile validator, prove accepted supplied-document handling and central rejection boundaries, and exercise a non-first release SBOM. |
 | SPDX-CANONICAL | Landed in PR #58 at `83f21e9` | Require one supplied JSON document, absolute SPDX identifier/checksum anchors, and lossless semantic runner-path rejection at the central validator. |
-| [GO127-COMPAT / #46](https://github.com/CtrlSpice/bargeboard/issues/46) | Lands with PR #59 | Preserve explicit hub, snapshot, setup, and negotiation depth profiles independently of mixed standard-library decoder accounting; run full quality/race checks with authenticated Go 1.26.8 and Go 1.27.1 while releases remain pinned to Go 1.26.8. |
+| [GO127-COMPAT / #46](https://github.com/CtrlSpice/bargeboard/issues/46) | Landed in PR #59 at `ca7580d` | Preserve explicit hub, snapshot, setup, and negotiation depth profiles independently of mixed standard-library decoder accounting; run full quality/race checks with authenticated Go 1.26.8 and Go 1.27.1 while releases remain pinned to Go 1.26.8. |
 | SESSION-OWNER | Landed in PR #56 at `bf7772c` | Own aggregate SessionInfo state on the read goroutine across reconnects, contain reducer failures, and retain the no-export boundary. |
 | DRIVER-REGISTRY-PURE | Landed in PR #57 at `87d8cef` | Parse and reduce bounded DriverList identity state with synthetic fixtures while leaving aggregate/runtime integration, diagnostics, and projection disabled. |
 
@@ -555,8 +556,8 @@ adjudication and focused verification in their slices.
   profile's license and package-role policy remain separate.
 - Toolchain verification: GO127-COMPAT preserves the accepted JSON-depth contract
   and verifies it with authenticated Go 1.26.8 and Go 1.27.1. Release builds and
-  their complete provenance boundary remain pinned to Go 1.26.8; landing is
-  pending.
+  their complete provenance boundary remain pinned to Go 1.26.8. The slice landed
+  in PR #59 at `ca7580d`.
 - Fixture licensing: [#48](https://github.com/CtrlSpice/bargeboard/issues/48)
   tracks the owner/legal decision for pre-existing exact F1 archive bytes. This
   slice does not add the readable inflated CarData record; its expected length
