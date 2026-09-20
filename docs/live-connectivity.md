@@ -121,8 +121,8 @@ If reporting a defect publicly, share a sanitized stage/status summary and an
 independently authored synthetic reproducer. This procedure does not create a
 raw recording or upload evidence automatically.
 
-The client does not acquire/refresh tokens or register an F1 TV device. A
-successful check establishes only the technical outcomes above. It does not
-establish permission under the provider's
+The client does not acquire/refresh tokens or implement explicit F1 TV device
+registration. A successful check establishes only the technical outcomes above.
+It does not establish permission under the provider's
 [subscription terms](https://account.formula1.com/#/en/subscription-terms), or
 whether/how the provider counts the connection against device limits.
