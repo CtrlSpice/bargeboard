@@ -9,10 +9,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
-// Mutations are synthetic boundary probes of the attributed archive fixtures,
-// not claims that malformed Unicode was observed in the source.
+// Fixtures and mutations are independently authored synthetic boundary probes.
+// Their contract and research references are in testdata/session_info/SOURCES.md.
 func sessionInfoUnicodeFixture(t *testing.T, name string) json.RawMessage {
 	t.Helper()
 	raw, err := os.ReadFile("testdata/session_info/classification_cases.json")
@@ -25,8 +26,8 @@ func sessionInfoUnicodeFixture(t *testing.T, name string) json.RawMessage {
 	}
 	for _, fixture := range fixtures {
 		if fixture.Name == name {
-			if fixture.Source == "" {
-				t.Fatal("fixture lacks attribution")
+			if !fixture.Synthetic {
+				t.Fatal("fixture must be marked synthetic")
 			}
 			return fixture.Payload
 		}
@@ -54,7 +55,7 @@ func mutateSessionInfoUnicode(t *testing.T, raw json.RawMessage, fields ...strin
 }
 
 func TestSessionInfoUnicodeGrandPrixRegression(t *testing.T) {
-	raw := sessionInfoUnicodeFixture(t, "2021_abu_dhabi_practice_1_stream")
+	raw := sessionInfoUnicodeFixture(t, "2021_example_practice_1_initial")
 	raw = mutateSessionInfoUnicode(t, raw, "Meeting", "Name", `"\uD800 Grand Prix"`)
 	before := bytes.Clone(raw)
 	got, err := parseSessionInfo(raw)
@@ -97,7 +98,7 @@ func assertSessionInfoUnicodeParse(t *testing.T, got, want sessionInfoParseResul
 }
 
 func TestSessionInfoUnicodeStringsAndIndependentBundles(t *testing.T) {
-	fixture := sessionInfoUnicodeFixture(t, "2021_abu_dhabi_practice_1_stream")
+	fixture := sessionInfoUnicodeFixture(t, "2021_example_practice_1_initial")
 	tests := []struct {
 		name   string
 		fields []string
@@ -106,26 +107,26 @@ func TestSessionInfoUnicodeStringsAndIndependentBundles(t *testing.T) {
 		{"meeting", []string{"Meeting", "Name", `"\uD800 Grand Prix"`}, sessionInfoIssueUnicode | sessionInfoIssueIdentity},
 		{"type", []string{"Type", `"Prac\udfff tice"`}, sessionInfoIssueUnicode | sessionInfoIssueIdentity},
 		{"name", []string{"Name", `"Practice 1\ud800"`}, sessionInfoIssueUnicode | sessionInfoIssueIdentity},
-		{"start", []string{"StartDate", `"2021-12-10T13:30:0\ud800"`}, sessionInfoIssueUnicode | sessionInfoIssueIdentity | sessionInfoIssueSchedule},
-		{"end", []string{"EndDate", `"2021-12-10T14:30:0\udc00"`}, sessionInfoIssueUnicode | sessionInfoIssueSchedule},
-		{"offset", []string{"GmtOffset", `"04:00:0\ud800"`}, sessionInfoIssueUnicode | sessionInfoIssueSchedule},
+		{"start", []string{"StartDate", `"2021-05-04T10:15:0\ud800"`}, sessionInfoIssueUnicode | sessionInfoIssueIdentity | sessionInfoIssueSchedule},
+		{"end", []string{"EndDate", `"2021-05-04T11:45:0\udc00"`}, sessionInfoIssueUnicode | sessionInfoIssueSchedule},
+		{"offset", []string{"GmtOffset", `"02:00:0\ud800"`}, sessionInfoIssueUnicode | sessionInfoIssueSchedule},
 		{"route remains integer grammar", []string{"Key", `"\ud800"`}, sessionInfoIssueUnicode | sessionInfoIssueRoute},
 		{"meeting key remains integer grammar", []string{"Meeting", "Key", `"\ud800"`}, sessionInfoIssueUnicode | sessionInfoIssueIdentity},
 		{"keyframe", []string{"_kf", `"\ud800"`}, sessionInfoIssueUnicode | sessionInfoIssueKeyframe},
 		{"literal replacement", []string{"Meeting", "Name", `"� Grand Prix"`}, 0},
 		{"escaped replacement", []string{"Meeting", "Name", `"\uFFFD Grand Prix"`}, 0},
-		{"accented", []string{"Meeting", "Name", `"São Paulo Grand Prix"`}, 0},
+		{"accented", []string{"Meeting", "Name", `"Exémple Grand Prix"`}, 0},
 		{"paired", []string{"Meeting", "Name", `"\uD83D\uDE80 Grand Prix"`}, 0},
 		{"literal escape", []string{"Meeting", "Name", `"\\uD800 Grand Prix"`}, 0},
 		{"escaped type", []string{"Type", `"\u0050ractice"`}, 0},
 		{"escaped name", []string{"Name", `"Practice \u0031"`}, 0},
 		{"replacement type is scalar valid", []string{"Type", `"�Practice"`}, sessionInfoIssueClassification},
 		{"replacement name is scalar valid", []string{"Name", `"\ufffdPractice 1"`}, sessionInfoIssueClassification},
-		{"paired start is not ASCII date", []string{"StartDate", `"2021-12-10T13:30:\ud83d\ude80"`}, sessionInfoIssueIdentity | sessionInfoIssueSchedule},
-		{"replacement end is not ASCII date", []string{"EndDate", `"2021-12-10T14:30:�"`}, sessionInfoIssueSchedule},
-		{"replacement offset is not ASCII offset", []string{"GmtOffset", `"04:00:\ufffd"`}, sessionInfoIssueSchedule},
-		{"escaped route digits remain quoted", []string{"Key", `"\u0036\u0035\u0039\u0034"`}, sessionInfoIssueRoute},
-		{"route exponent", []string{"Key", `6594e0`}, sessionInfoIssueRoute},
+		{"paired start is not ASCII date", []string{"StartDate", `"2021-05-04T10:15:\ud83d\ude80"`}, sessionInfoIssueIdentity | sessionInfoIssueSchedule},
+		{"replacement end is not ASCII date", []string{"EndDate", `"2021-05-04T11:45:�"`}, sessionInfoIssueSchedule},
+		{"replacement offset is not ASCII offset", []string{"GmtOffset", `"02:00:\ufffd"`}, sessionInfoIssueSchedule},
+		{"escaped route digits remain quoted", []string{"Key", `"\u0031\u0030\u0031"`}, sessionInfoIssueRoute},
+		{"route exponent", []string{"Key", `101e0`}, sessionInfoIssueRoute},
 		{"unknown path value", []string{"Path", `"\ud800"`}, 0},
 		{"unknown nested value", []string{"Meeting", "Location", `{"\ud800":"\udfff"}`}, 0},
 		{"unsupported type object stays opaque", []string{"Type", `{"\ud800":"\udfff"}`}, sessionInfoIssueIdentity},
@@ -148,26 +149,40 @@ func TestSessionInfoUnicodeStringsAndIndependentBundles(t *testing.T) {
 	}
 }
 
-func TestSessionInfoUnicodeTestingAndImolaCannotBypassValidation(t *testing.T) {
-	for _, fixtureName := range []string{"2021_preseason_practice_1", "2025_preseason_day_1", "2020_imola_practice"} {
-		fixture := sessionInfoUnicodeFixture(t, fixtureName)
-		baseline, err := parseSessionInfo(fixture)
-		if err != nil || !baseline.identityAvailable || baseline.issues != 0 {
-			t.Fatalf("invalid attributed baseline: %#v, %v", baseline, err)
-		}
+func TestSessionInfoUnicodeTestingAndSpecialPracticeCannotBypassValidation(t *testing.T) {
+	for _, test := range []struct {
+		fixtureName string
+		routeKey    int64
+		startUTC    string
+		endUTC      string
+		utcOffset   time.Duration
+	}{
+		{"2021_preseason_practice_1", 201, "2021-01-11T08:15:00Z", "2021-01-11T11:45:00Z", time.Hour},
+		{"2025_preseason_day_1", 207, "2025-01-11T08:45:00Z", "2025-01-11T12:15:00Z", 30 * time.Minute},
+		{"2020_special_practice", 301, "2020-08-17T10:20:00Z", "2020-08-17T11:40:00Z", -time.Hour},
+	} {
+		fixture := sessionInfoUnicodeFixture(t, test.fixtureName)
 		for _, fields := range [][]string{
 			{"Meeting", "Name", `"\ud800 Grand Prix"`},
 			{"Type", `"Practice\ud800"`},
 			{"Name", `"Practice\ud800"`},
 		} {
-			t.Run(fixtureName+"/"+strings.Join(fields[:len(fields)-1], "."), func(t *testing.T) {
+			t.Run(test.fixtureName+"/"+strings.Join(fields[:len(fields)-1], "."), func(t *testing.T) {
 				got, err := parseSessionInfo(mutateSessionInfoUnicode(t, fixture, fields...))
 				if err != nil {
 					t.Fatal(err)
 				}
-				want := baseline
-				want.identity, want.identityAvailable = sessionInfoIdentity{}, false
-				want.issues = sessionInfoIssueUnicode | sessionInfoIssueIdentity
+				want := sessionInfoParseResult{
+					routeKey:       test.routeKey,
+					routeAvailable: true,
+					schedule: sessionInfoSchedule{
+						startUTC:  mustSessionInfoTime(t, test.startUTC),
+						endUTC:    mustSessionInfoTime(t, test.endUTC),
+						utcOffset: test.utcOffset,
+					},
+					scheduleAvailable: true,
+					issues:            sessionInfoIssueUnicode | sessionInfoIssueIdentity,
+				}
 				assertSessionInfoUnicodeParse(t, got, want)
 			})
 		}
@@ -175,8 +190,8 @@ func TestSessionInfoUnicodeTestingAndImolaCannotBypassValidation(t *testing.T) {
 }
 
 func TestSessionInfoUnicodeRawKeysAndOccurrenceUnion(t *testing.T) {
-	// This compact descriptor is the existing Abu Dhabi stream fixture's consumed
-	// fields. Raw edits preserve duplicate/key token spellings that maps would lose.
+	// Raw edits to the synthetic descriptor preserve duplicate/key token spellings
+	// that maps would lose.
 	base := sessionInfoBatchDescriptorA
 	add := func(fields string) string { return base[:len(base)-1] + "," + fields + "}" }
 	replace := func(old, next string) string {
@@ -192,24 +207,24 @@ func TestSessionInfoUnicodeRawKeysAndOccurrenceUnion(t *testing.T) {
 	}{
 		{"escaped root", replace(`"Type"`, `"\u0054ype"`), 0},
 		{"escaped meeting", replace(`"Meeting"`, `"\u004deeting"`), 0},
-		{"escaped nested", replace(`"Key":1107`, `"\u004bey":1107`), 0},
+		{"escaped nested", replace(`"Key":21`, `"\u004bey":21`), 0},
 		{"duplicate type", add(`"\u0054ype":"Practice"`), sessionInfoIssueIdentity},
-		{"duplicate route", add(`"\u004bey":6594`), sessionInfoIssueRoute},
-		{"duplicate end", add(`"\u0045ndDate":"2021-12-10T14:30:00"`), sessionInfoIssueSchedule},
-		{"duplicate meeting name", replace(`"Name":"Abu Dhabi Grand Prix"`, `"Name":"Abu Dhabi Grand Prix","\u004eame":"Abu Dhabi Grand Prix"`), sessionInfoIssueIdentity},
+		{"duplicate route", add(`"\u004bey":101`), sessionInfoIssueRoute},
+		{"duplicate end", add(`"\u0045ndDate":"2021-05-04T11:45:00"`), sessionInfoIssueSchedule},
+		{"duplicate meeting name", replace(`"Name":"Example Grand Prix"`, `"Name":"Example Grand Prix","\u004eame":"Example Grand Prix"`), sessionInfoIssueIdentity},
 		{"duplicate bad later scalar", add(`"\u0054ype":"\ud800"`), sessionInfoIssueIdentity | sessionInfoIssueUnicode},
 		{"duplicate bad earlier scalar", replace(`"Type":"Practice"`, `"Type":"\ud800","\u0054ype":"Practice"`), sessionInfoIssueIdentity | sessionInfoIssueUnicode},
 		{"duplicate meeting still reports", add(`"Meeting":{"Name":"\ud800"}`), sessionInfoIssueIdentity | sessionInfoIssueUnicode},
 		{"duplicate earlier meeting still reports", `{"Meeting":{"Name":"\ud800"},` + base[1:], sessionInfoIssueIdentity | sessionInfoIssueUnicode},
 		{"unknown scalar keys", add(`"\ud800":1,"\udfff":2,"�":3,"\ufffd":4`), sessionInfoIssueUnicode},
-		{"nested unknown scalar key", replace(`"Key":1107`, `"\ud800":{"Name":"\udfff"},"Key":1107`), sessionInfoIssueUnicode},
+		{"nested unknown scalar key", replace(`"Key":21`, `"\ud800":{"Name":"\udfff"},"Key":21`), sessionInfoIssueUnicode},
 		{"required root key absent", replace(`"Type"`, `"\ud800Type"`), sessionInfoIssueUnicode | sessionInfoIssueIdentity},
-		{"required nested key absent", replace(`"Name":"Abu Dhabi Grand Prix"`, `"\ud800Name":"Abu Dhabi Grand Prix"`), sessionInfoIssueUnicode | sessionInfoIssueIdentity},
-		{"bad unknown key plus bad recognized value", strings.Replace(add(`"\ud800":1`), `"GmtOffset":"04:00:00"`, `"GmtOffset":"\udfff"`, 1), sessionInfoIssueUnicode | sessionInfoIssueSchedule},
+		{"required nested key absent", replace(`"Name":"Example Grand Prix"`, `"\ud800Name":"Example Grand Prix"`), sessionInfoIssueUnicode | sessionInfoIssueIdentity},
+		{"bad unknown key plus bad recognized value", strings.Replace(add(`"\ud800":1`), `"GmtOffset":"02:00:00"`, `"GmtOffset":"\udfff"`, 1), sessionInfoIssueUnicode | sessionInfoIssueSchedule},
 		{"unknown duplicate values opaque", add(`"Future":"\ud800","Future":{"\udfff":"\ud800"}`), 0},
 		{"delete metadata remains ignored", add(`"_deleted":["\ud800"],"_kf":true`), 0},
 		{"keyframe escaped duplicate", add(`"_kf":true,"\u005fkf":true`), sessionInfoIssueKeyframe},
-		{"all applicable object issues", `{"\ud800":0,"Key":0,"Meeting":{"Key":1107,"Name":"\ud800 Grand Prix"},"_kf":false}`, sessionInfoIssueUnicode | sessionInfoIssueIdentity | sessionInfoIssueRoute | sessionInfoIssueSchedule | sessionInfoIssueKeyframe},
+		{"all applicable object issues", `{"\ud800":0,"Key":0,"Meeting":{"Key":21,"Name":"\ud800 Grand Prix"},"_kf":false}`, sessionInfoIssueUnicode | sessionInfoIssueIdentity | sessionInfoIssueRoute | sessionInfoIssueSchedule | sessionInfoIssueKeyframe},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -229,7 +244,7 @@ func TestSessionInfoUnicodeLosslessStringAndWholePayloadDepth(t *testing.T) {
 	}{
 		{`"\ud800"`, "", false}, {`"\udfff"`, "", false},
 		{`"�"`, "�", true}, {`"\ufffd"`, "�", true},
-		{`"\uD83D\uDE80"`, "🚀", true}, {`"São Paulo"`, "São Paulo", true},
+		{`"\uD83D\uDE80"`, "🚀", true}, {`"Exémple"`, "Exémple", true},
 		{`"\\uD800"`, `\uD800`, true}, {`null`, "", false},
 	} {
 		got, valid, issues := parseJSONString(json.RawMessage(test.raw))
@@ -252,7 +267,7 @@ func TestSessionInfoUnicodeLosslessStringAndWholePayloadDepth(t *testing.T) {
 				base := sessionInfoBatchDescriptorA
 				raw := base[:len(base)-1] + `,"Future":` + value + `}`
 				if nested {
-					raw = strings.Replace(base, `"Key":1107`, `"Future":`+value+`,"Key":1107`, 1)
+					raw = strings.Replace(base, `"Key":21`, `"Future":`+value+`,"Key":21`, 1)
 				}
 				before := []byte(raw)
 				got, err := parseSessionInfo(before)

@@ -3,11 +3,9 @@ package f1livetimingreceiver
 import (
 	"bytes"
 	"compress/flate"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"reflect"
 	"slices"
@@ -17,20 +15,14 @@ import (
 	"time"
 )
 
-// First CarData.z record from the official 2025 British Grand Prix race archive.
-const britishGP2025CarData = "7ZQ7DsIwEETvsnWC1rv+4TbiBtCAKCIUCSSUIqSzcvckpqeYhsbN2Fr5Sd7fZDqN8/QaPpRumS7zgxIJi2s5tOzPRhMfk/LBsmjwV2qo66ftcSazS/fsx3F4lwBT4oakqBa1Rd33vh/LUoIQ50DOg5xhFBQUREtj4BwjCAqaoygKBhBUtI8KTziao4V3A14O9KsRLU7E+rihv+wpbvZkvKv+VP2p+lP1p3/4031ZAQ=="
-
 type carDataNormalizationFixture struct {
-	Name                    string `json:"name"`
-	Source                  string `json:"source"`
-	ArchivePrefix           string `json:"archive_prefix"`
-	CompressedPayloadSHA256 string `json:"compressed_payload_sha256"`
-	SyntheticFeedTimestamp  string `json:"synthetic_feed_timestamp"`
-	InflatedPayloadSize     int    `json:"inflated_payload_size"`
-	InflatedPayloadSHA256   string `json:"inflated_payload_sha256"`
+	Name                   string `json:"name"`
+	CompressedPayload      string `json:"compressed_payload"`
+	SyntheticFeedTimestamp string `json:"synthetic_feed_timestamp"`
+	ExpectedPayload        string `json:"expected_payload"`
 }
 
-func TestNormalizeLiveTimingUpdateDecodesArchivedCarData(t *testing.T) {
+func TestNormalizeLiveTimingUpdateDecodesSyntheticPayload(t *testing.T) {
 	contents, err := os.ReadFile("testdata/car_data/normalization_cases.json")
 	if err != nil {
 		t.Fatalf("read fixtures: %v", err)
@@ -43,45 +35,27 @@ func TestNormalizeLiveTimingUpdateDecodesArchivedCarData(t *testing.T) {
 		t.Fatalf("fixture count = %d, want 1", len(fixtures))
 	}
 	fixture := fixtures[0]
-	if fixture.Name != "2025_british_grand_prix_race_first_record" {
+	if fixture.Name != "synthetic_nested_json" {
 		t.Fatalf("fixture name = %q", fixture.Name)
 	}
-	if fixture.Source != "https://livetiming.formula1.com/static/2025/2025-07-06_British_Grand_Prix/2025-07-06_Race/CarData.z.jsonStream" {
-		t.Fatalf("fixture source = %q", fixture.Source)
-	}
-	if fixture.ArchivePrefix != "00:01:50.190" {
-		t.Fatalf("archive prefix = %q", fixture.ArchivePrefix)
-	}
-	if fixture.SyntheticFeedTimestamp != "2025-07-06T13:09:31.123456Z" {
-		t.Fatalf("synthetic feed timestamp = %q", fixture.SyntheticFeedTimestamp)
-	}
-	if fixture.CompressedPayloadSHA256 != "b21a290f4ffc24800f470fda9a0e7fefcd0a3a33e4bd08974f690aac26340c73" {
-		t.Fatalf("fixture compressed payload SHA-256 = %q", fixture.CompressedPayloadSHA256)
-	}
-	if fixture.InflatedPayloadSize != 2380 {
-		t.Fatalf("fixture inflated payload size = %d", fixture.InflatedPayloadSize)
-	}
-	if fixture.InflatedPayloadSHA256 != "3e2dcbdac301ca7047c6064f4bc8ac0a307e36e0859f3c0c373ae755dbc5c5eb" {
-		t.Fatalf("fixture inflated payload SHA-256 = %q", fixture.InflatedPayloadSHA256)
-	}
-	if got := fmt.Sprintf("%x", sha256.Sum256([]byte(britishGP2025CarData))); got != fixture.CompressedPayloadSHA256 {
-		t.Fatalf("compressed payload SHA-256 = %s", got)
-	}
 
-	encodedPayload, err := json.Marshal(britishGP2025CarData)
+	// Fixed Python/zlib output, independently generated as documented in SOURCES.md.
+	encodedPayload, err := json.Marshal(fixture.CompressedPayload)
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
 	}
-	payload := make(json.RawMessage, len(encodedPayload), len(encodedPayload)+fixture.InflatedPayloadSize)
-	copy(payload, encodedPayload)
+	// Leave enough spare capacity to detect reuse beyond the compressed input.
+	payloadStorage := bytes.Repeat([]byte{0xa5}, len(encodedPayload)+len(fixture.ExpectedPayload))
+	copy(payloadStorage, encodedPayload)
 	input := liveTimingUpdate{
 		topic:     "CarData.z",
-		payload:   payload,
+		payload:   json.RawMessage(payloadStorage[:len(encodedPayload):len(payloadStorage)]),
 		timestamp: fixture.SyntheticFeedTimestamp,
 		source:    liveTimingUpdateSourceFeed,
 	}
 	before := input
 	before.payload = bytes.Clone(input.payload)
+	beforeStorage := bytes.Clone(payloadStorage)
 
 	got, err := normalizeLiveTimingUpdate(input)
 	if err != nil {
@@ -90,25 +64,21 @@ func TestNormalizeLiveTimingUpdateDecodesArchivedCarData(t *testing.T) {
 	if !reflect.DeepEqual(input, before) {
 		t.Fatalf("normalizeLiveTimingUpdate() changed input: got %#v, want %#v", input, before)
 	}
-	payload = got.payload
-	got.payload = nil
+	if !bytes.Equal(payloadStorage, beforeStorage) {
+		t.Fatal("normalizeLiveTimingUpdate() changed input backing storage")
+	}
 	want := normalizedLiveTimingUpdate{
 		topic:     "CarData",
-		timestamp: time.Date(2025, 7, 6, 13, 9, 31, 123456000, time.UTC),
+		payload:   json.RawMessage(fixture.ExpectedPayload),
+		timestamp: time.Date(2032, 4, 5, 6, 7, 9, 123456789, time.UTC),
 		source:    liveTimingUpdateSourceFeed,
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("normalizeLiveTimingUpdate() metadata = %#v, want %#v", got, want)
-	}
-	if len(payload) != fixture.InflatedPayloadSize {
-		t.Fatalf("normalized payload size = %d, want %d", len(payload), fixture.InflatedPayloadSize)
-	}
-	if got := fmt.Sprintf("%x", sha256.Sum256(payload)); got != fixture.InflatedPayloadSHA256 {
-		t.Fatalf("normalized payload SHA-256 = %s", got)
+		t.Fatalf("normalizeLiveTimingUpdate() = %#v, want %#v", got, want)
 	}
 
 	clear(input.payload[:cap(input.payload)])
-	if got := fmt.Sprintf("%x", sha256.Sum256(payload)); got != fixture.InflatedPayloadSHA256 {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatal("normalized result aliases compressed input backing storage")
 	}
 }
@@ -230,7 +200,7 @@ func TestNormalizeLiveTimingBatchPreservesSnapshotManifest(t *testing.T) {
 		presentTopics:   presentTopics,
 		updates: []liveTimingUpdate{{
 			topic:   "SessionInfo",
-			payload: json.RawMessage(`{"Key":6594}`),
+			payload: json.RawMessage(`{"Key":42017}`),
 			source:  liveTimingUpdateSourceSnapshot,
 		}},
 	}

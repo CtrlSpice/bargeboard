@@ -11,5 +11,12 @@ Synthetic identifiers use numeric keys and invented acronyms such as `AAA`,
 deterministically. Escaped surrogate cases are deliberate JSON scalar-validity
 mutations, not captured source values.
 
-Exact source-derived DriverList fixtures remain outside this test set pending
-the repository-owner decision tracked by issue #48.
+Published DriverList payloads follow the accepted
+[Source Evidence and Synthetic Fixtures policy](../../../../docs/architecture.md#source-evidence-and-synthetic-fixtures).
+These tests do not establish new source mappings or live availability.
+
+The pure core exercises the already approved grammar and state-machine policy.
+This provenance file contains no attributable source observations for numeric
+entry keys, `RacingNumber`, or `Tla`. Completing that source evidence remains a
+prerequisite for aggregate/runtime integration; synthetic coverage does not
+satisfy it. The pending evidence does not change the accepted pure-core behavior.

@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	sessionInfoBatchDescriptorA = `{"Meeting":{"Key":1107,"Name":"Abu Dhabi Grand Prix"},"Key":6594,"Type":"Practice","Name":"Practice 1","StartDate":"2021-12-10T13:30:00","EndDate":"2021-12-10T14:30:00","GmtOffset":"04:00:00"}`
+	sessionInfoBatchDescriptorA = `{"Meeting":{"Key":21,"Name":"Example Grand Prix"},"Key":101,"Type":"Practice","Name":"Practice 1","StartDate":"2021-05-04T10:15:00","EndDate":"2021-05-04T11:45:00","GmtOffset":"02:00:00"}`
 	sessionInfoBatchDescriptorB = `{"Meeting":{"Key":1200,"Name":"Example Grand Prix"},"Key":7000,"Type":"Race","Name":"Race","StartDate":"2022-01-01T12:00:00","EndDate":"2022-01-01T14:00:00","GmtOffset":"00:00:00"}`
 )
 
@@ -18,7 +18,7 @@ func TestReduceSessionInfoBatchAppliesFeedDescriptor(t *testing.T) {
 		updates: []liveTimingUpdate{{
 			topic:     "SessionInfo",
 			payload:   json.RawMessage(sessionInfoBatchDescriptorA),
-			timestamp: "2021-12-10T09:30:00Z",
+			timestamp: "2021-05-04T08:15:00Z",
 			source:    liveTimingUpdateSourceFeed,
 		}},
 	})
@@ -39,7 +39,7 @@ func TestReduceSessionInfoBatchAppliesCompressedSemanticTopic(t *testing.T) {
 		updates: []liveTimingUpdate{{
 			topic:     "SessionInfo.z",
 			payload:   compressedJSONPayload(t, []byte(sessionInfoBatchDescriptorA)),
-			timestamp: "2021-12-10T09:30:00Z",
+			timestamp: "2021-05-04T08:15:00Z",
 			source:    liveTimingUpdateSourceFeed,
 		}},
 	})
@@ -196,7 +196,7 @@ func TestReduceSessionInfoBatchTreatsPresentSemanticFailuresAsAuthoritative(t *t
 
 func TestReduceSessionInfoBatchDoesNotInheritOptionalBundles(t *testing.T) {
 	state := sessionInfoBatchTestState()
-	payload := json.RawMessage(`{"Meeting":{"Key":1107,"Name":"Abu Dhabi Grand Prix"},"Type":"Practice","Name":"Practice 1","StartDate":"2021-12-10T13:30:00"}`)
+	payload := json.RawMessage(`{"Meeting":{"Key":21,"Name":"Example Grand Prix"},"Type":"Practice","Name":"Practice 1","StartDate":"2021-05-04T10:15:00"}`)
 	batch := normalizeSessionInfoTestBatch(t, liveTimingBatch{
 		source:          liveTimingUpdateSourceSnapshot,
 		requestedTopics: []string{"SessionInfo"},
@@ -308,7 +308,7 @@ func TestReduceSessionInfoBatchKeepsFeedWireOrder(t *testing.T) {
 	wantAB.state.generation = 2
 	wantAB.state.retired.tuples[0] = sessionInfoLogicalTuple{
 		season:      2021,
-		meetingKey:  1107,
+		meetingKey:  21,
 		sessionName: canonicalSessionNamePractice1,
 	}
 	wantAB.state.retired.count = 1
@@ -441,10 +441,10 @@ func reduceAuthoritativeSessionInfoTestBatch(
 }
 
 func sessionInfoBatchTestState() sessionInfoState {
-	identity := reducerTestIdentity(2021, 1107, canonicalSessionTypePractice, canonicalSessionNamePractice1)
+	identity := reducerTestIdentity(2021, 21, canonicalSessionTypePractice, canonicalSessionNamePractice1)
 	return reduceSessionInfo(
 		sessionInfoState{},
-		reducerTestDescriptor(identity, 6594, reducerTestSchedule(1)),
+		reducerTestDescriptor(identity, 101, reducerTestSchedule(1)),
 	).state
 }
 
@@ -454,18 +454,18 @@ func expectedSessionInfoBatchReductionA(t *testing.T) sessionInfoReduction {
 		state: sessionInfoState{
 			identity: sessionInfoIdentity{
 				season:      2021,
-				meetingKey:  1107,
+				meetingKey:  21,
 				sessionType: canonicalSessionTypePractice,
 				sessionName: canonicalSessionNamePractice1,
 			},
 			identityAvailable: true,
 			synchronized:      true,
-			routeKey:          6594,
+			routeKey:          101,
 			routeAvailable:    true,
 			schedule: sessionInfoSchedule{
-				startUTC:  mustSessionInfoTime(t, "2021-12-10T09:30:00Z"),
-				endUTC:    mustSessionInfoTime(t, "2021-12-10T10:30:00Z"),
-				utcOffset: 4 * time.Hour,
+				startUTC:  mustSessionInfoTime(t, "2021-05-04T08:15:00Z"),
+				endUTC:    mustSessionInfoTime(t, "2021-05-04T09:45:00Z"),
+				utcOffset: 2 * time.Hour,
 			},
 			scheduleAvailable: true,
 			generation:        1,
