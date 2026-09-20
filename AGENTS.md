@@ -158,6 +158,13 @@ These instructions supplement `/Users/moya/Workspace/AGENTS.md` for work in this
 
 ## Verification
 
+- The push whitespace gate checks the old-to-new commit range whenever the old
+  commit is available. Only an explicitly forced push with an unavailable old
+  commit may fall back to checking the complete new tree. Invalid inputs and
+  Git errors must fail closed; the gate must not fetch or mutate repository state.
+- Changes to that gate must run `bash scripts/check-push-diff_test.sh` and workflow
+  validation. This fallback grants no authorization to rewrite refs or bypass
+  branch protection.
 - Run `make check` for Go changes.
 - Run `go test -race -count=1 ./receiver/f1livetimingreceiver` for F1 Live Timing receiver changes.
 - Run `git diff --check` before committing or opening a pull request.

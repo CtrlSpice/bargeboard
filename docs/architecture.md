@@ -5771,6 +5771,33 @@ normative until their behavior slice begins.
 
 ## Verification
 
+### Push Whitespace Checks
+
+The push workflow passes `github.event.before`, `github.sha`, and
+`github.event.forced` through environment variables to
+`scripts/check-push-diff.sh`. The helper requires full lowercase GitHub SHA-1
+commit IDs and a literal `true` or `false` forced flag. The head must exist as a
+commit. Whenever the old commit exists, the helper MUST retain the ordinary
+old-to-new range check, including on forced pushes.
+
+Only an explicitly forced push whose old commit is unavailable may check the
+complete head tree against Git's empty tree. This permits verification after an
+approved history rewrite without retrieving obsolete commits. An ordinary push
+with an unavailable old commit, a present noncommit object, malformed input, or a
+Git error MUST fail closed. Lazy fetching is disabled, and the check MUST NOT
+change refs, the index, objects, or worktree contents. The fallback does not
+authorize history replacement or override branch protection.
+
+The quality job MUST run `bash scripts/check-push-diff_test.sh` on pull requests
+and pushes. Disposable local repositories test accepted range and full-tree
+checks; new and inherited whitespace; missing, malformed, corrupt, and noncommit
+objects; exact forced-flag handling; preservation of repository state; and absence
+of fetch attempts. The existing pull-request diff gate remains a base-to-head
+three-dot comparison. All local, exact-candidate CI, and independent-review
+requirements still apply under the merge-base instructions.
+
+### Local Checks
+
 Every Go change MUST run:
 
 ```bash

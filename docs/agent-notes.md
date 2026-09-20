@@ -83,7 +83,8 @@ Issue [#48](https://github.com/CtrlSpice/bargeboard/issues/48) remains the recor
 for forward fixture replacement and the separate disposition of published Git
 history. The old main-history payloads and readable CarData representation in
 PR #47 ancestor `bda7133c2ae996eff6a61eb143eb924aed617d19` are not erased by this
-change. History rewriting and branch deletion are not approved.
+change. History rewriting and branch deletion were not approved at that slice's
+landing; HISTORY-SYNTHETICS below records the subsequent rewrite authorization.
 
 Local verification passed on Go 1.26.8 with `GOTOOLCHAIN=local`: focused
 normalization, SessionInfo/parser/reducer/gate, runtime ownership, and no-emission
@@ -93,6 +94,52 @@ retains its independent complete result, provenance distinguishes observations
 from invented inputs, and the manual procedure matches current configuration and
 lifecycle. No private connectivity check was run. Exact-candidate independent
 reviews and CI remain governed by the merge-base `AGENTS.md`.
+
+### HISTORY-SYNTHETICS — Backfill Historical F1 Fixtures
+
+**History rewrite approved; preparation and publication pending.** After PR #61
+landed at `e463432cc501718c44c790c3a38b8f92d0c28bdb`, the owner authorized replacing
+the older captured fixtures with synthetics throughout Git history. This is
+authorization for history replacement, not for deleting branches, changing tags,
+bypassing repository rules, or claiming GitHub-retained objects have been purged.
+
+Read-only inventory found four historical CarData test shapes, one captured
+20-case SessionInfo dataset, and versioned compact test derivatives. Backfill
+must adapt each historical test API and its expectations rather than overwrite
+old files with today's implementations. Required grammar constants remain.
+The local inventory covers 193 commits and 48 distinct affected receiver/module
+contexts; remote-only refs must also enter the isolated preparation inventory.
+
+Remote inspection found 51 ordinary branch tips, nine open dependency PRs, and
+no remote tags. Preserve unique branch work and names, including
+`feature/driver-registry-pure`. Local tracking refs include stale branches and a
+local-only `last-python` tag, so the working checkout is not a mirror-push source.
+GitHub's `refs/pull/*` are read-only and remain a separate retention question.
+
+Publication is blocked by protected `main`'s non-fast-forward and PR-only rules.
+The owner explicitly approved landing the CI prerequisite first, then preparing
+the rewrite. CI-PUSH-REWRITE below records that approved check. Publishing the
+eventual reviewed ref/OID manifest requires an owner-controlled protection
+procedure; no bypass is authorized.
+
+No historical commit or remote ref has been rewritten. The detailed local checkpoint is
+`$TMPDIR/opencode/bargeboard-history-rewrite/inventory.md`.
+
+### CI-PUSH-REWRITE — Check a Rewritten Push Without Its Old Commit
+
+**Approved; implemented in this prerequisite slice.** The owner approved the
+forced-push fallback and directed that it land before the history rewrite. The
+canonical contract is [Push Whitespace Checks](architecture.md#push-whitespace-checks).
+The new shell helper retains range checking whenever the before commit exists;
+only an explicitly forced push with an unavailable before commit checks the
+complete head tree. It rejects invalid inputs, noncommit objects and Git errors,
+disables lazy fetching, and changes no repository state.
+
+Focused tests use disposable Git repositories and invented identities. The
+quality job exercises those tests on both pull requests and pushes. Publication
+authorization, protected-main rules, release triggers, and all other landing
+gates remain in force. This prerequisite lands under its merge-base instructions;
+it cannot authorize or weaken the gates for its own landing.
 
 ### FEED-ORDER-ORACLE — Complete SessionInfo feed-order results
 
