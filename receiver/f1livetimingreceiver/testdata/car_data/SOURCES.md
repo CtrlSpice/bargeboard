@@ -37,3 +37,18 @@ byte preservation. The `CarData.z` topic tests compression suffix removal only;
 this fixture establishes no CarData container shapes, channel mappings, active
 driver rules, sentinel handling, or scaling. The CarData source adapter remains
 **YELLOW** in the canonical architecture.
+
+## Prior Source Observation
+
+The first record of the official
+[2025 British Grand Prix race CarData archive](https://livetiming.formula1.com/static/2025/2025-07-06_British_Grand_Prix/2025-07-06_Race/CarData.z.jsonStream)
+was retrieved on 2026-09-16. Its JSON string content used standard base64 encoding
+of a raw-DEFLATE stream that inflated to JSON. These are the prior source
+observations supporting the normalization representation; the synthetic vector
+above exercises that contract independently.
+
+The archive's UTF-8 BOM, CRLF records, and relative-time prefix were stream framing,
+not part of the compressed token. That archive record was not a complete SignalR
+feed invocation and did not establish live wrapper timestamps. No source record
+is retained here, and these observations establish no CarData channel semantics
+or current live availability. Tests never fetch the reference URL.

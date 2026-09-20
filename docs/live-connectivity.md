@@ -89,9 +89,13 @@ arrived on that new connection. Use the first-data/recovery notice for that clai
 
 An accepted empty subscription can remain waiting while hub pings continue.
 No updates within your window is not by itself a parsing failure. Complete
-transport silence can still trigger the existing receive timeout. A 401/403
-setup rejection means check your token and access; it does not identify the
-precise upstream account, entitlement, or device-policy cause.
+transport silence can still trigger the existing receive timeout. For a 401/403,
+read the reported setup stage. Authenticated negotiation or WebSocket upgrade
+rejections warrant checking your token and access, but do not identify the precise
+upstream account, entitlement, or device-policy cause. An unauthenticated preflight
+401/403 without an accepted affinity cookie is a preflight/access failure; it
+does not test the token. A nonempty required affinity cookie can satisfy preflight
+even on an error HTTP status, under the existing cookie-first policy.
 
 ## Stop and Interpret
 
