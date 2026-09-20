@@ -10,8 +10,10 @@ trap 'rm -rf "$work"' EXIT
 
 # Keep all Git state, identities, hooks, configuration and transport local to
 # disposable fixtures. No user configuration or credentials are needed.
+export LC_ALL=C
 unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE
 unset GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CONFIG_PARAMETERS
+unset GIT_NO_LAZY_FETCH
 export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=0
 export GIT_AUTHOR_NAME='Synthetic CI Test' GIT_AUTHOR_EMAIL='ci@example.invalid'
 export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME" GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
@@ -61,7 +63,9 @@ printf 'staged\n' >base.txt
 git add base.txt
 printf 'unstaged\n' >>base.txt
 printf 'untracked\n' >untracked.txt
-cp -R "$work/repo" "$work/unchanged"
+state_dir="$work/repo"
+snapshot_dir="$work/unchanged"
+cp -R "$state_dir" "$snapshot_dir"
 
 tests=0
 expect() {
@@ -71,6 +75,10 @@ expect() {
   : >"$work/trace"
   env -u BEFORE_SHA -u HEAD_SHA -u PUSH_FORCED \
     GIT_TRACE="$work/trace" "$@" bash "$helper" >"$work/output" 2>&1 || status=$?
+  if grep -Eq '(^|[[:space:]])(fetch|fetch-pack|remote-[^[:space:]]+)([[:space:]]|$)' "$work/trace"; then
+    printf '%s: attempted a fetch or remote transport\n' "$description" >&2
+    exit 1
+  fi
   if [[ "$status" != "$expected" ]]; then
     printf '%s: expected exit %s, got %s\n' "$description" "$expected" "$status" >&2
     cat "$work/output" >&2
@@ -86,11 +94,7 @@ expect() {
     cat "$work/output" >&2
     exit 1
   fi
-  if grep -Eq '(^|[[:space:]])(fetch|fetch-pack|remote-[^[:space:]]+)([[:space:]]|$)' "$work/trace"; then
-    printf '%s: attempted a fetch or remote transport\n' "$description" >&2
-    exit 1
-  fi
-  if ! diff -r "$work/unchanged" "$work/repo"; then
+  if ! diff -r "$snapshot_dir" "$state_dir"; then
     printf '%s: changed repository state\n' "$description" >&2
     exit 1
   fi
@@ -147,5 +151,38 @@ done
 expect 1 'corrupt before object' 'BEFORE_SHA must identify a commit object' \
   BEFORE_SHA="$broken" HEAD_SHA="$clean" PUSH_FORCED=true
 expect 128 'corrupt head object' '' BEFORE_SHA="$missing" HEAD_SHA="$broken" PUSH_FORCED=true
+
+# A real partial clone can lazily fetch a missing commit from its promisor.
+# Only local file transport is allowed, so this remains entirely offline.
+mkdir "$work/promisor"
+git init -q --object-format=sha1 --template="$work/template" "$work/promisor/remote"
+git -C "$work/promisor/remote" config uploadpack.allowFilter true
+printf 'local promisor base\n' >"$work/promisor/remote/base.txt"
+git -C "$work/promisor/remote" add base.txt
+git -C "$work/promisor/remote" commit --no-gpg-sign -qm 'Create local promisor base'
+GIT_ALLOW_PROTOCOL=file git clone -q --no-local --filter=blob:none \
+  --template="$work/template" "$work/promisor/remote" "$work/promisor/repo"
+test "$(git -C "$work/promisor/repo" config --get remote.origin.promisor)" = true
+promisor_head="$(git -C "$work/promisor/repo" rev-parse HEAD)"
+
+# Create the before commit after cloning: it exists only in the local remote.
+printf 'remote-only addition\n' >"$work/promisor/remote/remote-only.txt"
+git -C "$work/promisor/remote" add remote-only.txt
+git -C "$work/promisor/remote" commit --no-gpg-sign -qm 'Create remote-only before commit'
+promisor_before="$(git -C "$work/promisor/remote" rev-parse HEAD)"
+if GIT_NO_LAZY_FETCH=1 git -C "$work/promisor/repo" cat-file -e "$promisor_before" 2>/dev/null; then
+  printf 'remote-only before commit unexpectedly exists in partial clone\n' >&2
+  exit 1
+fi
+
+# Compare both repositories, including their objects, index, refs and worktree.
+state_dir="$work/promisor"
+snapshot_dir="$work/promisor-unchanged"
+cp -R "$state_dir" "$snapshot_dir"
+cd "$work/promisor/repo"
+expect 0 'promisor missing before, forced push' '' \
+  GIT_ALLOW_PROTOCOL=file BEFORE_SHA="$promisor_before" HEAD_SHA="$promisor_head" PUSH_FORCED=true
+expect 1 'promisor missing before, ordinary push' 'BEFORE_SHA is unavailable for a nonforced push' \
+  GIT_ALLOW_PROTOCOL=file BEFORE_SHA="$promisor_before" HEAD_SHA="$promisor_head" PUSH_FORCED=false
 
 printf 'check-push-diff: %s cases passed\n' "$tests"
