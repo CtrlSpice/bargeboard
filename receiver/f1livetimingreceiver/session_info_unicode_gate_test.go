@@ -24,7 +24,7 @@ func sessionInfoUnicodeRecoveryState() liveTimingState {
 	state.sessionInfo.retired.start = 255
 	state.sessionInfo.retired.count = 2
 	state.sessionInfo.retired.tuples[255] = sessionInfoLogicalTuple{2020, 1057, canonicalSessionNamePractice1}
-	state.sessionInfo.retired.tuples[0] = sessionInfoLogicalTuple{2021, 1107, canonicalSessionNamePractice2}
+	state.sessionInfo.retired.tuples[0] = sessionInfoLogicalTuple{2021, 21, canonicalSessionNamePractice2}
 	return state
 }
 
@@ -34,17 +34,17 @@ func TestSessionInfoUnicodeGateIndependentBundlesAndRecovery(t *testing.T) {
 		name, old, replacement string
 		issues                 sessionInfoIssueSet
 	}{
-		{"identity", `Abu Dhabi Grand Prix`, `\ud800 Grand Prix`, sessionInfoIssueUnicode | sessionInfoIssueIdentity},
-		{"start", `2021-12-10T13:30:00`, `\ud800`, sessionInfoIssueUnicode | sessionInfoIssueIdentity | sessionInfoIssueSchedule},
-		{"end", `2021-12-10T14:30:00`, `\ud800`, sessionInfoIssueUnicode | sessionInfoIssueSchedule},
-		{"offset", `04:00:00`, `\ud800`, sessionInfoIssueUnicode | sessionInfoIssueSchedule},
-		{"route", `"Key":6594`, `"Key":"\ud800"`, sessionInfoIssueUnicode | sessionInfoIssueRoute},
+		{"identity", `Example Grand Prix`, `\ud800 Grand Prix`, sessionInfoIssueUnicode | sessionInfoIssueIdentity},
+		{"start", `2021-05-04T10:15:00`, `\ud800`, sessionInfoIssueUnicode | sessionInfoIssueIdentity | sessionInfoIssueSchedule},
+		{"end", `2021-05-04T11:45:00`, `\ud800`, sessionInfoIssueUnicode | sessionInfoIssueSchedule},
+		{"offset", `02:00:00`, `\ud800`, sessionInfoIssueUnicode | sessionInfoIssueSchedule},
+		{"route", `"Key":101`, `"Key":"\ud800"`, sessionInfoIssueUnicode | sessionInfoIssueRoute},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			raw := strings.Replace(sessionInfoBatchDescriptorA, test.old, test.replacement, 1)
 			if test.issues&sessionInfoIssueIdentity != 0 {
-				raw = strings.Replace(raw, `"Key":6594`, `"Key":7165`, 1)
-				raw = strings.Replace(raw, "2021-12-10T14:30:00", "2021-12-10T15:30:00", 1)
+				raw = strings.Replace(raw, `"Key":101`, `"Key":102`, 1)
+				raw = strings.Replace(raw, "2021-05-04T11:45:00", "2021-05-04T12:45:00", 1)
 			}
 			wantState := state
 			want := liveTimingReduction{
@@ -118,7 +118,7 @@ func TestSessionInfoUnicodeGateIndependentBundlesAndRecovery(t *testing.T) {
 
 func TestSessionInfoUnicodeSnapshotAtomicGateAndOwnership(t *testing.T) {
 	state := sessionInfoUnicodeRecoveryState()
-	bad := strings.Replace(sessionInfoBatchDescriptorA, "Abu Dhabi", `\ud800`, 1)
+	bad := strings.Replace(sessionInfoBatchDescriptorA, "Example", `\ud800`, 1)
 	for _, order := range [][]string{{"SessionInfo", "TimingData"}, {"TimingData", "SessionInfo"}} {
 		makeBatch := func(payload string) normalizedLiveTimingBatch {
 			batch := normalizedLiveTimingBatch{
@@ -182,7 +182,7 @@ func TestSessionInfoUnicodeFeedOrderIssueUnionIsNotLastState(t *testing.T) {
 	state := sessionInfoUnicodeRecoveryState()
 	allIssues := sessionInfoIssueShape | sessionInfoIssueIdentity | sessionInfoIssueClassification |
 		sessionInfoIssueRoute | sessionInfoIssueSchedule | sessionInfoIssueKeyframe | sessionInfoIssueUnicode
-	bad := `{"Key":0,"Meeting":{"Key":1107,"Name":"\ud800 Grand Prix"},"_kf":false}`
+	bad := `{"Key":0,"Meeting":{"Key":21,"Name":"\ud800 Grand Prix"},"_kf":false}`
 	unknownClass := strings.Replace(sessionInfoBatchDescriptorA, `"Practice 1"`, `"Practice 4"`, 1)
 	for _, reverse := range []bool{false, true} {
 		payloads := []string{bad, "null", unknownClass}
@@ -235,7 +235,7 @@ func TestSessionInfoUnicodeFeedOrderIssueUnionIsNotLastState(t *testing.T) {
 func TestSessionInfoUnicodeRetiredAndExhaustedOutcomesKeepIssues(t *testing.T) {
 	state := sessionInfoUnicodeRecoveryState()
 	stale := strings.Replace(sessionInfoBatchDescriptorA, `"Practice 1"`, `"Practice 2"`, 1)
-	stale = strings.Replace(stale, "04:00:00", `\ud800`, 1)
+	stale = strings.Replace(stale, "02:00:00", `\ud800`, 1)
 	for _, test := range []struct {
 		name        string
 		state       liveTimingState
@@ -244,7 +244,7 @@ func TestSessionInfoUnicodeRetiredAndExhaustedOutcomesKeepIssues(t *testing.T) {
 	}{
 		{"retired", state, stale, sessionInfoDispositionStale},
 		{"generation exhausted", func() liveTimingState { s := state; s.sessionInfo.generation = ^sessionInfoGeneration(0); return s }(), strings.Replace(sessionInfoBatchDescriptorB, "00:00:00", `\ud800`, 1), sessionInfoDispositionTokenExhausted},
-		{"route exhausted", func() liveTimingState { s := state; s.sessionInfo.routeEpoch = ^sessionInfoRouteEpoch(0); return s }(), strings.Replace(identityGateDescriptorACorrected, "04:00:00", `\ud800`, 1), sessionInfoDispositionTokenExhausted},
+		{"route exhausted", func() liveTimingState { s := state; s.sessionInfo.routeEpoch = ^sessionInfoRouteEpoch(0); return s }(), strings.Replace(identityGateDescriptorACorrected, "02:00:00", `\ud800`, 1), sessionInfoDispositionTokenExhausted},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := reduceLiveTimingBatch(test.state, sessionInfoUnicodeFeed("SessionInfo", test.raw))

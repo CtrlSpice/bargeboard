@@ -1,6 +1,7 @@
 package f1livetimingreceiver
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -11,9 +12,9 @@ import (
 )
 
 type sessionInfoFixture struct {
-	Name    string          `json:"name"`
-	Source  string          `json:"source"`
-	Payload json.RawMessage `json:"payload"`
+	Name      string          `json:"name"`
+	Synthetic bool            `json:"synthetic"`
+	Payload   json.RawMessage `json:"payload"`
 }
 
 type sessionInfoFixtureExpectation struct {
@@ -27,87 +28,88 @@ type sessionInfoFixtureExpectation struct {
 	utcOffset   time.Duration
 }
 
-func TestParseSessionInfoClassifiesPublicFixtures(t *testing.T) {
+func TestParseSessionInfoClassifiesSyntheticFixtures(t *testing.T) {
 	expectations := map[string]sessionInfoFixtureExpectation{
 		"2021_preseason_practice_1": {
-			2021, 1087, 6394, canonicalSessionTypeTesting, canonicalSessionNameTestingDay1,
-			"2021-03-12T07:00:00Z", "2021-03-12T16:00:00Z", 3 * time.Hour,
+			2021, 11, 201, canonicalSessionTypeTesting, canonicalSessionNameTestingDay1,
+			"2021-01-11T08:15:00Z", "2021-01-11T11:45:00Z", time.Hour,
 		},
 		"2022_preseason_practice_2": {
-			2022, 1132, 7175, canonicalSessionTypeTesting, canonicalSessionNameTestingDay2,
-			"2022-03-11T07:00:00Z", "2022-03-11T16:00:00Z", 3 * time.Hour,
+			2022, 12, 202, canonicalSessionTypeTesting, canonicalSessionNameTestingDay2,
+			"2022-01-12T08:15:00Z", "2022-01-12T11:45:00Z", time.Hour,
 		},
 		"2022_preseason_practice_3": {
-			2022, 1132, 7176, canonicalSessionTypeTesting, canonicalSessionNameTestingDay3,
-			"2022-03-12T07:00:00Z", "2022-03-12T16:00:00Z", 3 * time.Hour,
+			2022, 12, 203, canonicalSessionTypeTesting, canonicalSessionNameTestingDay3,
+			"2022-01-13T08:15:00Z", "2022-01-13T11:45:00Z", time.Hour,
 		},
 		"2023_preseason_practice_1": {
-			2023, 1140, 9222, canonicalSessionTypeTesting, canonicalSessionNameTestingDay1,
-			"2023-02-23T07:00:00Z", "2023-02-23T16:30:00Z", 3 * time.Hour,
+			2023, 13, 204, canonicalSessionTypeTesting, canonicalSessionNameTestingDay1,
+			"2023-01-11T11:15:00Z", "2023-01-11T14:45:00Z", -2 * time.Hour,
 		},
 		"2024_preseason_practice_2": {
-			2024, 1228, 9463, canonicalSessionTypeTesting, canonicalSessionNameTestingDay2,
-			"2024-02-22T07:00:00Z", "2024-02-22T16:00:00Z", 3 * time.Hour,
+			2024, 14, 205, canonicalSessionTypeTesting, canonicalSessionNameTestingDay2,
+			"2024-01-12T11:15:00Z", "2024-01-12T14:45:00Z", -2 * time.Hour,
 		},
 		"2024_preseason_practice_3": {
-			2024, 1228, 9464, canonicalSessionTypeTesting, canonicalSessionNameTestingDay3,
-			"2024-02-23T07:00:00Z", "2024-02-23T16:00:00Z", 3 * time.Hour,
+			2024, 14, 206, canonicalSessionTypeTesting, canonicalSessionNameTestingDay3,
+			"2024-01-13T11:15:00Z", "2024-01-13T14:45:00Z", -2 * time.Hour,
 		},
 		"2025_preseason_day_1": {
-			2025, 1253, 9683, canonicalSessionTypeTesting, canonicalSessionNameTestingDay1,
-			"2025-02-26T07:00:00Z", "2025-02-26T16:00:00Z", 3 * time.Hour,
+			2025, 15, 207, canonicalSessionTypeTesting, canonicalSessionNameTestingDay1,
+			"2025-01-11T08:45:00Z", "2025-01-11T12:15:00Z", 30 * time.Minute,
 		},
 		"2026_preseason_day_2": {
-			2026, 1304, 11466, canonicalSessionTypeTesting, canonicalSessionNameTestingDay2,
-			"2026-02-12T07:00:00Z", "2026-02-12T16:00:00Z", 3 * time.Hour,
+			2026, 16, 208, canonicalSessionTypeTesting, canonicalSessionNameTestingDay2,
+			"2026-01-12T08:45:00Z", "2026-01-12T12:15:00Z", 30 * time.Minute,
 		},
 		"2026_preseason_day_3": {
-			2026, 1304, 11467, canonicalSessionTypeTesting, canonicalSessionNameTestingDay3,
-			"2026-02-13T07:00:00Z", "2026-02-13T16:00:00Z", 3 * time.Hour,
+			2026, 16, 209, canonicalSessionTypeTesting, canonicalSessionNameTestingDay3,
+			"2026-01-13T08:45:00Z", "2026-01-13T12:15:00Z", 30 * time.Minute,
 		},
-		"2021_abu_dhabi_practice_1_stream": {
-			2021, 1107, 6594, canonicalSessionTypePractice, canonicalSessionNamePractice1,
-			"2021-12-10T09:30:00Z", "2021-12-10T10:30:00Z", 4 * time.Hour,
+		"2021_example_practice_1_initial": {
+			2021, 21, 101, canonicalSessionTypePractice, canonicalSessionNamePractice1,
+			"2021-05-04T08:15:00Z", "2021-05-04T09:45:00Z", 2 * time.Hour,
 		},
-		"2021_abu_dhabi_practice_1_snapshot": {
-			2021, 1107, 7165, canonicalSessionTypePractice, canonicalSessionNamePractice1,
-			"2021-12-10T09:30:00Z", "2021-12-10T10:30:00Z", 4 * time.Hour,
+		"2021_example_practice_1_corrected": {
+			2021, 21, 102, canonicalSessionTypePractice, canonicalSessionNamePractice1,
+			"2021-05-04T08:15:00Z", "2021-05-04T09:45:00Z", 2 * time.Hour,
 		},
-		"2021_abu_dhabi_practice_2": {
-			2021, 1107, 6595, canonicalSessionTypePractice, canonicalSessionNamePractice2,
-			"2021-12-10T13:00:00Z", "2021-12-10T14:00:00Z", 4 * time.Hour,
+		"2021_example_practice_2": {
+			2021, 21, 103, canonicalSessionTypePractice, canonicalSessionNamePractice2,
+			"2021-05-04T12:10:00Z", "2021-05-04T13:20:00Z", 2 * time.Hour,
 		},
-		"2021_abu_dhabi_practice_3": {
-			2021, 1107, 6596, canonicalSessionTypePractice, canonicalSessionNamePractice3,
-			"2021-12-11T10:00:00Z", "2021-12-11T11:00:00Z", 4 * time.Hour,
+		"2021_example_practice_3": {
+			2021, 21, 104, canonicalSessionTypePractice, canonicalSessionNamePractice3,
+			"2021-05-05T09:20:00Z", "2021-05-05T10:35:00Z", 2 * time.Hour,
 		},
-		"2020_imola_practice": {
-			2020, 1057, 5905, canonicalSessionTypePractice, canonicalSessionNamePractice1,
-			"2020-10-31T09:00:00Z", "2020-10-31T10:30:00Z", time.Hour,
+		"2020_special_practice": {
+			// 1057 is the accepted 2020 classification constant, not incidental fixture data.
+			2020, 1057, 301, canonicalSessionTypePractice, canonicalSessionNamePractice1,
+			"2020-08-17T10:20:00Z", "2020-08-17T11:40:00Z", -time.Hour,
 		},
-		"2021_abu_dhabi_qualifying": {
-			2021, 1107, 6597, canonicalSessionTypeQualifying, canonicalSessionNameQualifying,
-			"2021-12-11T13:00:00Z", "2021-12-11T14:00:00Z", 4 * time.Hour,
+		"2021_example_qualifying": {
+			2021, 21, 105, canonicalSessionTypeQualifying, canonicalSessionNameQualifying,
+			"2021-05-05T12:05:00Z", "2021-05-05T13:10:00Z", 2 * time.Hour,
 		},
-		"2023_azerbaijan_sprint_shootout": {
-			2023, 1207, 9278, canonicalSessionTypeSprintQualifying, canonicalSessionNameSprintQualifying,
-			"2023-04-29T08:30:00Z", "2023-04-29T09:14:00Z", 4 * time.Hour,
+		"2023_example_sprint_shootout": {
+			2023, 23, 401, canonicalSessionTypeSprintQualifying, canonicalSessionNameSprintQualifying,
+			"2023-05-07T02:40:00Z", "2023-05-07T03:25:00Z", 5*time.Hour + 30*time.Minute,
 		},
-		"2024_austria_sprint_qualifying": {
-			2024, 1239, 9545, canonicalSessionTypeSprintQualifying, canonicalSessionNameSprintQualifying,
-			"2024-06-28T14:30:00Z", "2024-06-28T15:14:00Z", 2 * time.Hour,
+		"2024_example_sprint_qualifying": {
+			2024, 24, 501, canonicalSessionTypeSprintQualifying, canonicalSessionNameSprintQualifying,
+			"2024-05-07T11:10:00Z", "2024-05-07T11:55:00Z", -3 * time.Hour,
 		},
-		"2021_britain_sprint_qualifying": {
-			2021, 1072, 6425, canonicalSessionTypeSprint, canonicalSessionNameSprint,
-			"2021-07-17T15:30:00Z", "2021-07-17T16:00:00Z", time.Hour,
+		"2021_example_sprint_qualifying": {
+			2021, 25, 601, canonicalSessionTypeSprint, canonicalSessionNameSprint,
+			"2021-05-07T12:10:00Z", "2021-05-07T12:50:00Z", time.Hour,
 		},
-		"2023_azerbaijan_sprint": {
-			2023, 1207, 9069, canonicalSessionTypeSprint, canonicalSessionNameSprint,
-			"2023-04-29T13:30:00Z", "2023-04-29T14:00:00Z", 4 * time.Hour,
+		"2023_example_sprint": {
+			2023, 23, 402, canonicalSessionTypeSprint, canonicalSessionNameSprint,
+			"2023-05-07T07:40:00Z", "2023-05-07T08:20:00Z", 5*time.Hour + 30*time.Minute,
 		},
-		"2021_abu_dhabi_race": {
-			2021, 1107, 6601, canonicalSessionTypeRace, canonicalSessionNameRace,
-			"2021-12-12T13:00:00Z", "2021-12-12T15:00:00Z", 4 * time.Hour,
+		"2021_example_race": {
+			2021, 21, 106, canonicalSessionTypeRace, canonicalSessionNameRace,
+			"2021-05-06T12:05:00Z", "2021-05-06T14:35:00Z", 2 * time.Hour,
 		},
 	}
 
@@ -125,7 +127,6 @@ func TestParseSessionInfoClassifiesPublicFixtures(t *testing.T) {
 
 	parsed := make(map[string]sessionInfoParseResult, len(fixtures))
 	seenNames := make(map[string]bool, len(fixtures))
-	seenSources := make(map[string]bool, len(fixtures))
 	for _, fixture := range fixtures {
 		fixture := fixture
 		t.Run(fixture.Name, func(t *testing.T) {
@@ -137,24 +138,11 @@ func TestParseSessionInfoClassifiesPublicFixtures(t *testing.T) {
 			if !ok {
 				t.Fatalf("fixture has no independent expectation")
 			}
-			if !strings.HasPrefix(fixture.Source, "https://livetiming.formula1.com/static/") {
-				t.Fatalf("fixture source = %q, want public static archive", fixture.Source)
-			}
-			if seenSources[fixture.Source] {
-				t.Fatalf("duplicate fixture source %q", fixture.Source)
-			}
-			seenSources[fixture.Source] = true
-			var sourceFields struct {
-				Path string `json:"Path"`
-			}
-			if err := json.Unmarshal(fixture.Payload, &sourceFields); err != nil {
-				t.Fatalf("decode fixture source fields: %v", err)
-			}
-			baseSource := "https://livetiming.formula1.com/static/" + sourceFields.Path + "SessionInfo."
-			if fixture.Source != baseSource+"json" && fixture.Source != baseSource+"jsonStream" {
-				t.Fatalf("fixture source %q does not match payload path %q", fixture.Source, sourceFields.Path)
+			if !fixture.Synthetic {
+				t.Fatal("fixture must be marked synthetic")
 			}
 
+			before := bytes.Clone(fixture.Payload)
 			got, err := parseSessionInfo(fixture.Payload)
 			if err != nil {
 				t.Fatalf("parseSessionInfo() error = %v", err)
@@ -179,6 +167,9 @@ func TestParseSessionInfoClassifiesPublicFixtures(t *testing.T) {
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("parseSessionInfo() = %#v, want %#v", got, want)
 			}
+			if !bytes.Equal(fixture.Payload, before) {
+				t.Error("parser mutated fixture payload")
+			}
 			parsed[fixture.Name] = got
 		})
 	}
@@ -188,13 +179,13 @@ func TestParseSessionInfoClassifiesPublicFixtures(t *testing.T) {
 		}
 	}
 
-	stream := parsed["2021_abu_dhabi_practice_1_stream"]
-	snapshot := parsed["2021_abu_dhabi_practice_1_snapshot"]
-	if stream.identity != snapshot.identity || stream.schedule != snapshot.schedule {
-		t.Fatal("Abu Dhabi correction fixture changed logical identity or schedule")
+	initial := parsed["2021_example_practice_1_initial"]
+	corrected := parsed["2021_example_practice_1_corrected"]
+	if initial.identity != corrected.identity || initial.schedule != corrected.schedule {
+		t.Fatal("correction fixture changed logical identity or schedule")
 	}
-	if stream.routeKey != 6594 || snapshot.routeKey != 7165 || stream.routeKey == snapshot.routeKey {
-		t.Fatalf("Abu Dhabi route correction = %d to %d, want 6594 to 7165", stream.routeKey, snapshot.routeKey)
+	if initial.routeKey != 101 || corrected.routeKey != 102 || initial.routeKey == corrected.routeKey {
+		t.Fatalf("route correction = %d to %d, want 101 to 102", initial.routeKey, corrected.routeKey)
 	}
 }
 
@@ -225,8 +216,8 @@ func TestClassifySessionInfoRejectsNearMisses(t *testing.T) {
 		{name: "source type wrong case", season: 2025, meetingName: "Example Grand Prix", sourceType: "race", sourceName: "Race"},
 		{name: "source name wrong case", season: 2025, meetingName: "Example Grand Prix", sourceType: "Race", sourceName: "race"},
 		{name: "source name trailing space", season: 2025, meetingName: "Example Grand Prix", sourceType: "Race", sourceName: "Race "},
-		{name: "imola wrong year", season: 2021, meetingKey: 1057, meetingName: "Example", sourceType: "Practice", sourceName: "Practice"},
-		{name: "imola wrong meeting key", season: 2020, meetingKey: 1058, meetingName: "Example", sourceType: "Practice", sourceName: "Practice"},
+		{name: "special practice wrong year", season: 2021, meetingKey: 1057, meetingName: "Example", sourceType: "Practice", sourceName: "Practice"},
+		{name: "special practice wrong meeting key", season: 2020, meetingKey: 1058, meetingName: "Example", sourceType: "Practice", sourceName: "Practice"},
 		{name: "race-like sprint qualifying before 2021", season: 2020, meetingName: "Example Grand Prix", sourceType: "Race", sourceName: "Sprint Qualifying"},
 		{name: "race-like sprint qualifying after 2021", season: 2022, meetingName: "Example Grand Prix", sourceType: "Race", sourceName: "Sprint Qualifying"},
 		{name: "unknown broad type", season: 2025, meetingName: "Example Grand Prix", sourceType: "Sprint", sourceName: "Sprint"},
@@ -365,7 +356,7 @@ func TestParseSessionInfoGMTOffset(t *testing.T) {
 }
 
 func TestParseSessionInfoValidatesBundlesIndependently(t *testing.T) {
-	baseline := `{"Meeting":{"Key":1107,"Name":"Abu Dhabi Grand Prix"},"Key":6594,"Type":"Practice","Name":"Practice 1","StartDate":"2021-12-10T13:30:00","EndDate":"2021-12-10T14:30:00","GmtOffset":"04:00:00"}`
+	baseline := `{"Meeting":{"Key":21,"Name":"Example Grand Prix"},"Key":101,"Type":"Practice","Name":"Practice 1","StartDate":"2021-05-04T10:15:00","EndDate":"2021-05-04T11:45:00","GmtOffset":"02:00:00"}`
 	replace := func(old, replacement string) json.RawMessage {
 		t.Helper()
 		result := strings.Replace(baseline, old, replacement, 1)
@@ -382,12 +373,22 @@ func TestParseSessionInfoValidatesBundlesIndependently(t *testing.T) {
 		return withFields(json.RawMessage(baseline), fields)
 	}
 
-	baselineResult, err := parseSessionInfo(json.RawMessage(baseline))
-	if err != nil {
-		t.Fatalf("parse baseline: %v", err)
-	}
-	if !baselineResult.identityAvailable || !baselineResult.routeAvailable || !baselineResult.scheduleAvailable || baselineResult.issues != 0 {
-		t.Fatalf("invalid test baseline: %#v", baselineResult)
+	baselineResult := sessionInfoParseResult{
+		identity: sessionInfoIdentity{
+			season:      2021,
+			meetingKey:  21,
+			sessionType: canonicalSessionTypePractice,
+			sessionName: canonicalSessionNamePractice1,
+		},
+		identityAvailable: true,
+		routeKey:          101,
+		routeAvailable:    true,
+		schedule: sessionInfoSchedule{
+			startUTC:  mustSessionInfoTime(t, "2021-05-04T08:15:00Z"),
+			endUTC:    mustSessionInfoTime(t, "2021-05-04T09:45:00Z"),
+			utcOffset: 2 * time.Hour,
+		},
+		scheduleAvailable: true,
 	}
 
 	tests := []struct {
@@ -407,24 +408,24 @@ func TestParseSessionInfoValidatesBundlesIndependently(t *testing.T) {
 		{name: "valid keyframe metadata", payload: add(`"_kf":true`), identity: true, route: true, schedule: true},
 		{name: "invalid keyframe metadata", payload: add(`"_kf":false`), identity: true, route: true, schedule: true, issues: sessionInfoIssueKeyframe},
 		{name: "duplicate keyframe metadata", payload: add(`"_kf":true,"_kf":true`), identity: true, route: true, schedule: true, issues: sessionInfoIssueKeyframe},
-		{name: "missing route", payload: remove(`,"Key":6594`), identity: true, schedule: true, issues: sessionInfoIssueRoute},
-		{name: "invalid route", payload: replace(`"Key":6594`, `"Key":0`), identity: true, schedule: true, issues: sessionInfoIssueRoute},
-		{name: "duplicate route", payload: add(`"Key":7165`), identity: true, schedule: true, issues: sessionInfoIssueRoute},
+		{name: "missing route", payload: remove(`,"Key":101`), identity: true, schedule: true, issues: sessionInfoIssueRoute},
+		{name: "invalid route", payload: replace(`"Key":101`, `"Key":0`), identity: true, schedule: true, issues: sessionInfoIssueRoute},
+		{name: "duplicate route", payload: add(`"Key":102`), identity: true, schedule: true, issues: sessionInfoIssueRoute},
 		{name: "missing logical type", payload: remove(`,"Type":"Practice"`), route: true, schedule: true, issues: sessionInfoIssueIdentity},
 		{name: "duplicate logical type", payload: add(`"Type":"Practice"`), route: true, schedule: true, issues: sessionInfoIssueIdentity},
-		{name: "invalid meeting key", payload: replace(`"Key":1107`, `"Key":0`), route: true, schedule: true, issues: sessionInfoIssueIdentity},
-		{name: "duplicate meeting key", payload: replace(`"Key":1107,"Name"`, `"Key":1107,"Key":1107,"Name"`), route: true, schedule: true, issues: sessionInfoIssueIdentity},
+		{name: "invalid meeting key", payload: replace(`"Key":21`, `"Key":0`), route: true, schedule: true, issues: sessionInfoIssueIdentity},
+		{name: "duplicate meeting key", payload: replace(`"Key":21,"Name"`, `"Key":21,"Key":21,"Name"`), route: true, schedule: true, issues: sessionInfoIssueIdentity},
 		{name: "unknown classification", payload: replace(`"Name":"Practice 1"`, `"Name":"Practice 4"`), route: true, schedule: true, issues: sessionInfoIssueClassification},
-		{name: "missing end", payload: remove(`,"EndDate":"2021-12-10T14:30:00"`), identity: true, route: true, issues: sessionInfoIssueSchedule},
-		{name: "missing offset", payload: remove(`,"GmtOffset":"04:00:00"`), identity: true, route: true, issues: sessionInfoIssueSchedule},
-		{name: "invalid offset", payload: replace(`"GmtOffset":"04:00:00"`, `"GmtOffset":"+04:00:00"`), identity: true, route: true, issues: sessionInfoIssueSchedule},
-		{name: "duplicate end", payload: add(`"EndDate":"2021-12-10T14:30:00"`), identity: true, route: true, issues: sessionInfoIssueSchedule},
-		{name: "equal schedule", payload: replace(`"EndDate":"2021-12-10T14:30:00"`, `"EndDate":"2021-12-10T13:30:00"`), identity: true, route: true, issues: sessionInfoIssueSchedule},
-		{name: "reversed schedule", payload: replace(`"EndDate":"2021-12-10T14:30:00"`, `"EndDate":"2021-12-10T12:30:00"`), identity: true, route: true, issues: sessionInfoIssueSchedule},
-		{name: "invalid start affects identity and schedule", payload: replace(`"StartDate":"2021-12-10T13:30:00"`, `"StartDate":"2021-02-29T13:30:00"`), route: true, issues: sessionInfoIssueIdentity | sessionInfoIssueSchedule},
-		{name: "path cannot repair invalid start", payload: withFields(replace(`"StartDate":"2021-12-10T13:30:00"`, `"StartDate":"2021-02-29T13:30:00"`), `"Path":"2021/2021-12-12_Abu_Dhabi_Grand_Prix/2021-12-10_Practice_1/"`), route: true, issues: sessionInfoIssueIdentity | sessionInfoIssueSchedule},
+		{name: "missing end", payload: remove(`,"EndDate":"2021-05-04T11:45:00"`), identity: true, route: true, issues: sessionInfoIssueSchedule},
+		{name: "missing offset", payload: remove(`,"GmtOffset":"02:00:00"`), identity: true, route: true, issues: sessionInfoIssueSchedule},
+		{name: "invalid offset", payload: replace(`"GmtOffset":"02:00:00"`, `"GmtOffset":"+02:00:00"`), identity: true, route: true, issues: sessionInfoIssueSchedule},
+		{name: "duplicate end", payload: add(`"EndDate":"2021-05-04T11:45:00"`), identity: true, route: true, issues: sessionInfoIssueSchedule},
+		{name: "equal schedule", payload: replace(`"EndDate":"2021-05-04T11:45:00"`, `"EndDate":"2021-05-04T10:15:00"`), identity: true, route: true, issues: sessionInfoIssueSchedule},
+		{name: "reversed schedule", payload: replace(`"EndDate":"2021-05-04T11:45:00"`, `"EndDate":"2021-05-04T09:15:00"`), identity: true, route: true, issues: sessionInfoIssueSchedule},
+		{name: "invalid start affects identity and schedule", payload: replace(`"StartDate":"2021-05-04T10:15:00"`, `"StartDate":"2021-02-29T10:15:00"`), route: true, issues: sessionInfoIssueIdentity | sessionInfoIssueSchedule},
+		{name: "path cannot repair invalid start", payload: withFields(replace(`"StartDate":"2021-05-04T10:15:00"`, `"StartDate":"2021-02-29T10:15:00"`), `"Path":"2021/2021-05-06_Example_Grand_Prix/2021-05-04_Practice_1/"`), route: true, issues: sessionInfoIssueIdentity | sessionInfoIssueSchedule},
 		{name: "number cannot repair unknown classification", payload: withFields(replace(`"Name":"Practice 1"`, `"Name":"Practice 4"`), `"Number":1`), route: true, schedule: true, issues: sessionInfoIssueClassification},
-		{name: "meeting number cannot repair invalid meeting key", payload: replace(`"Key":1107,"Name"`, `"Key":0,"Number":1107,"Name"`), route: true, schedule: true, issues: sessionInfoIssueIdentity},
+		{name: "meeting number cannot repair invalid meeting key", payload: replace(`"Key":21,"Name"`, `"Key":0,"Number":21,"Name"`), route: true, schedule: true, issues: sessionInfoIssueIdentity},
 		{name: "duplicate unknown metadata", payload: add(`"Future":1,"Future":2`), identity: true, route: true, schedule: true},
 		{name: "embedded metadata cannot repair identity", payload: json.RawMessage(`{"SessionStatus":"Started","ArchiveStatus":{"Status":"Complete"},"Number":1,"Path":"2021/example/"}`), issues: sessionInfoIssueIdentity | sessionInfoIssueRoute | sessionInfoIssueSchedule},
 		{name: "empty object", payload: json.RawMessage(`{}`), issues: sessionInfoIssueIdentity | sessionInfoIssueRoute | sessionInfoIssueSchedule},
@@ -496,8 +497,8 @@ func TestParseSessionInfoValidatesBundlesIndependently(t *testing.T) {
 }
 
 func TestParseSessionInfoIsMemberOrderIndependent(t *testing.T) {
-	first := json.RawMessage(`{"Meeting":{"Key":1107,"Name":"Abu Dhabi Grand Prix"},"Key":6594,"Type":"Practice","Name":"Practice 1","StartDate":"2021-12-10T13:30:00","EndDate":"2021-12-10T14:30:00","GmtOffset":"04:00:00"}`)
-	second := json.RawMessage(`{"GmtOffset":"04:00:00","StartDate":"2021-12-10T13:30:00","Name":"Practice 1","Meeting":{"Name":"Abu Dhabi Grand Prix","Key":1107},"EndDate":"2021-12-10T14:30:00","Type":"Practice","Key":6594}`)
+	first := json.RawMessage(`{"Meeting":{"Key":21,"Name":"Example Grand Prix"},"Key":101,"Type":"Practice","Name":"Practice 1","StartDate":"2021-05-04T10:15:00","EndDate":"2021-05-04T11:45:00","GmtOffset":"02:00:00"}`)
+	second := json.RawMessage(`{"GmtOffset":"02:00:00","StartDate":"2021-05-04T10:15:00","Name":"Practice 1","Meeting":{"Name":"Example Grand Prix","Key":21},"EndDate":"2021-05-04T11:45:00","Type":"Practice","Key":101}`)
 	firstResult, firstErr := parseSessionInfo(first)
 	secondResult, secondErr := parseSessionInfo(second)
 	if firstErr != nil || secondErr != nil {

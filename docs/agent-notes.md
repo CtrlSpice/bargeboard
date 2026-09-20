@@ -42,13 +42,57 @@ exact-candidate CI, including JavaScript CodeQL for the retained CJS, passed.
 ### CAR-ORACLE — Complete attributable normalization evidence
 
 **Landed in PR #47 at `462cdba8740241a25569ada34a5b5854ba5b3a06`.**
-The pre-existing inline first 2025 British Grand Prix race `CarData.z` token is now
-paired with pinned offline metadata: its direct source URL, archive prefix,
+That slice paired the pre-existing first 2025 British Grand Prix race `CarData.z` token
+with pinned offline metadata: its direct source URL, archive prefix,
 compressed-token SHA-256, expected 2,380-byte inflation length and SHA-256, and an
 explicit synthetic feed-wrapper boundary. The pure normalization test compares the
 complete topic, payload byte identity, timestamp, and source, preserves the complete
-input, and proves output storage does not alias the compressed input. It does not
-bind channel semantics or change production.
+input, and proves output storage does not alias the compressed input. It did not
+bind channel semantics or change production. SYNTHETIC-FIXTURES below replaces
+that source record with an independently generated fixed synthetic vector while
+retaining the complete-result and ownership contract.
+
+### SYNTHETIC-FIXTURES — Separate Public Tests from Private Live Input
+
+**Approved policy; implemented in this slice.** The user approved synthetic
+public test inputs, attributable source evidence, and a documented user-run
+private connectivity check. The canonical contract is
+[Local Runtime and Verification Boundaries](architecture.md#local-runtime-and-verification-boundaries).
+
+Bargeboard owns each user's local F1 TV token and real feed connection.
+`otel-desktop-viewer` remains a generic OTLP destination with no F1 credential
+handling. Racing projection and an outgoing OTLP exporter remain future work;
+this slice changes tests and documentation, not runtime authentication or output.
+
+The fixed CarData normalization vector and all 20 SessionInfo descriptors are
+independently authored synthetic data. Compact SessionInfo derivatives and
+independent expected results use invented incidental IDs and schedules. Required
+grammar, including the 2020 `Meeting.Key=1057` exception, is preserved. Complete
+classification, route-correction, Unicode, state-recovery, compression, input
+preservation, and detached-storage oracles remain. Provenance distinguishes the
+prior source observations from the new executable cases.
+
+Public CI uses invented credentials and local synthetic source servers. The
+[private connectivity procedure](live-connectivity.md) uses the production
+Collector and its existing operational reporting, followed by manual shutdown.
+No probe command, automatic capture, live CI job, viewer integration, or device
+registration is added. Successful input does not prove racing OTLP delivery or
+provider permission for a third-party client.
+
+Issue [#48](https://github.com/CtrlSpice/bargeboard/issues/48) remains the record
+for forward fixture replacement and the separate disposition of published Git
+history. The old main-history payloads and readable CarData representation in
+PR #47 ancestor `bda7133c2ae996eff6a61eb143eb924aed617d19` are not erased by this
+change. History rewriting and branch deletion are not approved.
+
+Local verification passed on Go 1.26.8 with `GOTOOLCHAIN=local`: focused
+normalization, SessionInfo/parser/reducer/gate, runtime ownership, and no-emission
+tests; `make check`; `go test -race -count=1 ./receiver/f1livetimingreceiver`;
+and `git diff --check`. Review also checks that every prior classification case
+retains its independent complete result, provenance distinguishes observations
+from invented inputs, and the manual procedure matches current configuration and
+lifecycle. No private connectivity check was run. Exact-candidate independent
+reviews and CI remain governed by the merge-base `AGENTS.md`.
 
 ### FEED-ORDER-ORACLE — Complete SessionInfo feed-order results
 
@@ -147,8 +191,8 @@ authoritative snapshot.
 
 Unicode, shape, identity, limit, and frozen-conflict occurrences remain a fixed
 internal bitset with no retained latch, runtime log, metric, or dynamic value.
-Fixtures are entirely synthetic and documented as such; issue #48 still governs
-any future exact source-derived bytes. The core is deliberately absent from
+Fixtures are entirely synthetic and documented as such; SYNTHETIC-FIXTURES now
+governs published payloads. The core is deliberately absent from
 `liveTimingState` and `reduceLiveTimingBatch`, so runtime continues to reduce only
 SessionInfo and emits no racing OTLP data or DriverList lifecycle effect.
 
@@ -205,6 +249,7 @@ It groups the implementation work; issue text links back to the canonical policy
 | H-HOST | Landed in PR #44 at `3ba7b9713ec06dba261a8792af9715785becb50d` | Configured endpoints require a nonempty parsed hostname, with the existing bounded field error. Pure helper/configuration and all-signal factory regressions preserve full-authority/security/loopback rules and accepted nonempty-host syntax. |
 | DEL-TS | Landed in PR #45 at `2290ca4c45123d492a367d83d9de1df6b1c6855f` | Deleted the obsolete replay implementation and package surface; retained only the Node-built-in release CJS boundary and future Go replay/OpenF1 architecture. No compatibility or cache migration. |
 | CAR-ORACLE | Landed in PR #47 at `462cdba8740241a25569ada34a5b5854ba5b3a06` | Attribute the pre-existing first 2025 British GP race `CarData.z` token and assert the complete pure normalization result, input preservation, and detached output storage without binding YELLOW channel semantics. |
+| [SYNTHETIC-FIXTURES / #48](https://github.com/CtrlSpice/bargeboard/issues/48) | Approved; implemented in this slice | Replace tracked F1 payload copies and compact test derivatives with independent synthetic fixtures; retain source evidence separately; document private production-runtime connectivity checks and a credential-blind viewer. Published-history disposition remains separate. |
 | FEED-ORDER-ORACLE | Landed in PR #49 at `97424b134b81886bd116ec365ec46e28bf244ff7` | Assert complete SessionInfo descriptor reductions in both feed delivery orders while reversed timestamps prove strict callback order. |
 | TOKEN-BOUNDARY-ORACLE | Landed in PR #50 at `f7acdb62f8be32349896920f3315c364c88044d4` | Assert complete generation and routing-epoch results at the final legal increment, exhaustion, recovery, and generation replacement boundaries. |
 | RETIREMENT-HORIZON-ORACLE | Landed in PR #52 at `8567109947b798c3b8ae3f574efa1553d5d4b89e` | Independently bind the exact 256-tuple replay-defense horizon and assert complete reductions, membership, eviction, cursor-wrap, and process-reset behavior. |
@@ -454,6 +499,7 @@ post-reduction consumer remains a no-op.
   Structural field-name assertions force review of new state/result fields.
 - The initial attributed Abu Dhabi fixture mutation `"\uD800 Grand Prix"` failed
   before implementation because it classified as `practice_1` with no issues.
+  SYNTHETIC-FIXTURES now reproduces that failure boundary with an invented descriptor.
   The regression and all focused SessionInfo/parser/reducer/gate checks now pass.
   Local verification passed using repository-pinned Go 1.26.8 with
   `GOTOOLCHAIN=local`: `make check`,
@@ -558,10 +604,14 @@ adjudication and focused verification in their slices.
   and verifies it with authenticated Go 1.26.8 and Go 1.27.1. Release builds and
   their complete provenance boundary remain pinned to Go 1.26.8. The slice landed
   in PR #59 at `ca7580d`.
-- Fixture licensing: [#48](https://github.com/CtrlSpice/bargeboard/issues/48)
-  tracks the owner/legal decision for pre-existing exact F1 archive bytes. This
-  slice does not add the readable inflated CarData record; its expected length
-  and SHA-256 retain the complete byte oracle without expanding that question.
+- Public fixtures: SYNTHETIC-FIXTURES replaces the tracked CarData and SessionInfo
+  payload copies, including compact test derivatives, with independent synthetic
+  inputs. [#48](https://github.com/CtrlSpice/bargeboard/issues/48) retains the
+  published-history question; forward replacement is not history removal.
+- Local runtime: the approved viewer arrangement keeps credentials in Bargeboard
+  and sends future racing OTLP over loopback. Projection/export implementation,
+  account login/token refresh, and provider device treatment are not completed
+  by the synthetic-test or private-check work.
 - Decisions still pending: broader protocol resubscription after corruption,
   durable raw capture, topic-specific Unicode integration for unimplemented
   reducers, and qualifying-phase fallback ownership. The layered Unicode approval

@@ -73,7 +73,14 @@ These instructions supplement `/Users/moya/Workspace/AGENTS.md` for work in this
 - Cover accepted behavior, relevant boundaries, failure policy, state
   preservation, and prohibited behavior. Every bug fix requires a regression
   test that would fail without the fix.
-- Source-dependent behavior requires compact attributable fixtures.
+- Source-dependent behavior requires attributable evidence and compact
+  deterministic fixtures. Published F1 payload fixtures must be independently
+  authored synthetic data. Provenance must distinguish observed source behavior
+  from synthetic test cases; synthetic fixtures alone do not establish a new
+  source mapping.
+- Public CI must use invented credentials and local synthetic source servers;
+  it must not contact F1 services or receive F1 credentials. Private connectivity
+  checks are explicit user-run checks of the production runtime, outside CI.
 - Assertions must cover the complete meaningful result so future state or output
   fields cannot silently escape the test oracle.
 - If behavior is difficult to test deterministically, improve the seam before

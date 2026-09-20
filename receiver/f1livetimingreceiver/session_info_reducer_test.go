@@ -7,9 +7,9 @@ import (
 )
 
 func TestReduceSessionInfoInstallsInitialDescriptor(t *testing.T) {
-	identity := reducerTestIdentity(2025, 1253, canonicalSessionTypeRace, canonicalSessionNameRace)
+	identity := reducerTestIdentity(2025, 31, canonicalSessionTypeRace, canonicalSessionNameRace)
 	schedule := reducerTestSchedule(1)
-	descriptor := reducerTestDescriptor(identity, 9688, schedule)
+	descriptor := reducerTestDescriptor(identity, 401, schedule)
 
 	got := reduceSessionInfo(sessionInfoState{}, descriptor)
 	want := sessionInfoReduction{
@@ -17,7 +17,7 @@ func TestReduceSessionInfoInstallsInitialDescriptor(t *testing.T) {
 			identity:          identity,
 			identityAvailable: true,
 			synchronized:      true,
-			routeKey:          9688,
+			routeKey:          401,
 			routeAvailable:    true,
 			schedule:          schedule,
 			scheduleAvailable: true,
@@ -29,8 +29,8 @@ func TestReduceSessionInfoInstallsInitialDescriptor(t *testing.T) {
 }
 
 func TestReduceSessionInfoInstallsWithoutOptionalBundles(t *testing.T) {
-	identity := reducerTestIdentity(2025, 1253, canonicalSessionTypeRace, canonicalSessionNameRace)
-	descriptor := reducerTestDescriptor(identity, 9688, reducerTestSchedule(1))
+	identity := reducerTestIdentity(2025, 31, canonicalSessionTypeRace, canonicalSessionNameRace)
+	descriptor := reducerTestDescriptor(identity, 401, reducerTestSchedule(1))
 	descriptor.routeKey = 99
 	descriptor.routeAvailable = false
 	descriptor.schedule = reducerTestSchedule(2)
@@ -102,11 +102,11 @@ func TestReduceSessionInfoUnresolvedIdentityRetainsRecoveryState(t *testing.T) {
 }
 
 func TestReduceSessionInfoReplacesCompleteOptionalBundles(t *testing.T) {
-	identity := reducerTestIdentity(2021, 1107, canonicalSessionTypePractice, canonicalSessionNamePractice1)
-	descriptor := reducerTestDescriptor(identity, 6594, reducerTestSchedule(1))
+	identity := reducerTestIdentity(2021, 21, canonicalSessionTypePractice, canonicalSessionNamePractice1)
+	descriptor := reducerTestDescriptor(identity, 101, reducerTestSchedule(1))
 	state := reduceSessionInfo(sessionInfoState{}, descriptor).state
 
-	refresh := reducerTestDescriptor(identity, 6594, reducerTestSchedule(2))
+	refresh := reducerTestDescriptor(identity, 101, reducerTestSchedule(2))
 	got := reduceSessionInfo(state, refresh)
 	wantState := state
 	wantState.schedule = refresh.schedule
@@ -134,7 +134,7 @@ func TestReduceSessionInfoReplacesCompleteOptionalBundles(t *testing.T) {
 	state = got.state
 
 	repeatedClear := clear
-	repeatedClear.routeKey = 7165
+	repeatedClear.routeKey = 102
 	repeatedClear.schedule = reducerTestSchedule(4)
 	got = reduceSessionInfo(state, repeatedClear)
 	assertSessionInfoReduction(t, got, sessionInfoReduction{
@@ -143,10 +143,10 @@ func TestReduceSessionInfoReplacesCompleteOptionalBundles(t *testing.T) {
 	})
 	state = got.state
 
-	restore := reducerTestDescriptor(identity, 7165, reducerTestSchedule(1))
+	restore := reducerTestDescriptor(identity, 102, reducerTestSchedule(1))
 	got = reduceSessionInfo(state, restore)
 	wantState = state
-	wantState.routeKey = 7165
+	wantState.routeKey = 102
 	wantState.routeAvailable = true
 	wantState.schedule = restore.schedule
 	wantState.scheduleAvailable = true
@@ -171,10 +171,10 @@ func TestReduceSessionInfoReplacesCompleteOptionalBundles(t *testing.T) {
 	})
 	state = got.state
 
-	revert := reducerTestDescriptor(identity, 6594, reducerTestSchedule(3))
+	revert := reducerTestDescriptor(identity, 101, reducerTestSchedule(3))
 	got = reduceSessionInfo(state, revert)
 	wantState = state
-	wantState.routeKey = 6594
+	wantState.routeKey = 101
 	wantState.schedule = revert.schedule
 	wantState.routeEpoch = 3
 	assertSessionInfoReduction(t, got, sessionInfoReduction{
@@ -213,8 +213,8 @@ func TestReduceSessionInfoScheduleChangesDoNotAdvanceRouteEpoch(t *testing.T) {
 }
 
 func TestReduceSessionInfoRestoresSynchronization(t *testing.T) {
-	identity := reducerTestIdentity(2021, 1107, canonicalSessionTypePractice, canonicalSessionNamePractice1)
-	descriptor := reducerTestDescriptor(identity, 6594, reducerTestSchedule(1))
+	identity := reducerTestIdentity(2021, 21, canonicalSessionTypePractice, canonicalSessionNamePractice1)
+	descriptor := reducerTestDescriptor(identity, 101, reducerTestSchedule(1))
 	state := reduceSessionInfo(sessionInfoState{}, descriptor).state
 
 	state = reduceSessionInfo(state, sessionInfoParseResult{issues: sessionInfoIssueIdentity}).state
@@ -232,11 +232,11 @@ func TestReduceSessionInfoRestoresSynchronization(t *testing.T) {
 	state = got.state
 
 	state = reduceSessionInfo(state, sessionInfoParseResult{issues: sessionInfoIssueIdentity}).state
-	corrected := reducerTestDescriptor(identity, 7165, reducerTestSchedule(2))
+	corrected := reducerTestDescriptor(identity, 102, reducerTestSchedule(2))
 	got = reduceSessionInfo(state, corrected)
 	wantState = state
 	wantState.synchronized = true
-	wantState.routeKey = 7165
+	wantState.routeKey = 102
 	wantState.schedule = corrected.schedule
 	wantState.routeEpoch = 1
 	assertSessionInfoReduction(t, got, sessionInfoReduction{

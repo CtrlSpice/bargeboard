@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	identityGateDescriptorA          = `{"Meeting":{"Key":1107,"Name":"Abu Dhabi Grand Prix"},"Key":6594,"Type":"Practice","Name":"Practice 1","StartDate":"2021-12-10T13:30:00","EndDate":"2021-12-10T14:30:00","GmtOffset":"04:00:00"}`
-	identityGateDescriptorACorrected = `{"Meeting":{"Key":1107,"Name":"Abu Dhabi Grand Prix"},"Key":7165,"Type":"Practice","Name":"Practice 1","StartDate":"2021-12-10T13:30:00","EndDate":"2021-12-10T14:30:00","GmtOffset":"04:00:00"}`
+	identityGateDescriptorA          = `{"Meeting":{"Key":21,"Name":"Example Grand Prix"},"Key":101,"Type":"Practice","Name":"Practice 1","StartDate":"2021-05-04T10:15:00","EndDate":"2021-05-04T11:45:00","GmtOffset":"02:00:00"}`
+	identityGateDescriptorACorrected = `{"Meeting":{"Key":21,"Name":"Example Grand Prix"},"Key":102,"Type":"Practice","Name":"Practice 1","StartDate":"2021-05-04T10:15:00","EndDate":"2021-05-04T11:45:00","GmtOffset":"02:00:00"}`
 	identityGateDescriptorB          = `{"Meeting":{"Key":1200,"Name":"Example Grand Prix"},"Key":7000,"Type":"Race","Name":"Race","StartDate":"2022-01-01T12:00:00","EndDate":"2022-01-01T14:00:00","GmtOffset":"00:00:00"}`
 )
 
@@ -67,7 +67,7 @@ func TestReduceLiveTimingBatchAllowsNonAuthoritativeBatchWithSynchronizedIdentit
 }
 
 func TestReduceLiveTimingBatchOpensGateAfterSessionInfo(t *testing.T) {
-	feed := normalizeIdentityGateSessionInfoFeed(t, identityGateDescriptorA, "2021-12-10T09:30:00Z")
+	feed := normalizeIdentityGateSessionInfoFeed(t, identityGateDescriptorA, "2021-05-04T08:15:00Z")
 	snapshot := normalizeIdentityGateBatch(t, liveTimingBatch{
 		source:          liveTimingUpdateSourceSnapshot,
 		requestedTopics: []string{"TimingData", "SessionInfo"},
@@ -110,16 +110,16 @@ func TestReduceLiveTimingBatchUsesOnlyLogicalIdentityForGate(t *testing.T) {
 	}{
 		{
 			name:    "route and schedule unavailable",
-			payload: `{"Meeting":{"Key":1107,"Name":"Abu Dhabi Grand Prix"},"Type":"Practice","Name":"Practice 1","StartDate":"2021-12-10T13:30:00"}`,
+			payload: `{"Meeting":{"Key":21,"Name":"Example Grand Prix"},"Type":"Practice","Name":"Practice 1","StartDate":"2021-05-04T10:15:00"}`,
 		},
 		{
 			name:         "route unavailable",
-			payload:      `{"Meeting":{"Key":1107,"Name":"Abu Dhabi Grand Prix"},"Type":"Practice","Name":"Practice 1","StartDate":"2021-12-10T13:30:00","EndDate":"2021-12-10T14:30:00","GmtOffset":"04:00:00"}`,
+			payload:      `{"Meeting":{"Key":21,"Name":"Example Grand Prix"},"Type":"Practice","Name":"Practice 1","StartDate":"2021-05-04T10:15:00","EndDate":"2021-05-04T11:45:00","GmtOffset":"02:00:00"}`,
 			wantSchedule: true,
 		},
 		{
 			name:      "schedule unavailable",
-			payload:   `{"Meeting":{"Key":1107,"Name":"Abu Dhabi Grand Prix"},"Key":6594,"Type":"Practice","Name":"Practice 1","StartDate":"2021-12-10T13:30:00"}`,
+			payload:   `{"Meeting":{"Key":21,"Name":"Example Grand Prix"},"Key":101,"Type":"Practice","Name":"Practice 1","StartDate":"2021-05-04T10:15:00"}`,
 			wantRoute: true,
 		},
 	}
@@ -128,7 +128,7 @@ func TestReduceLiveTimingBatchUsesOnlyLogicalIdentityForGate(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := reduceLiveTimingBatch(
 				liveTimingState{},
-				normalizeIdentityGateSessionInfoFeed(t, test.payload, "2021-12-10T09:30:00Z"),
+				normalizeIdentityGateSessionInfoFeed(t, test.payload, "2021-05-04T08:15:00Z"),
 			)
 			if err != nil {
 				t.Fatalf("reduceLiveTimingBatch() error = %v", err)
@@ -205,7 +205,7 @@ func TestReduceLiveTimingBatchClosesGateOnAuthoritativeFailure(t *testing.T) {
 func TestReduceLiveTimingBatchRecoversWithoutReplayingBlockedUpdates(t *testing.T) {
 	installed, err := reduceLiveTimingBatch(
 		liveTimingState{},
-		normalizeIdentityGateSessionInfoFeed(t, identityGateDescriptorA, "2021-12-10T09:30:00Z"),
+		normalizeIdentityGateSessionInfoFeed(t, identityGateDescriptorA, "2021-05-04T08:15:00Z"),
 	)
 	if err != nil {
 		t.Fatalf("install SessionInfo: %v", err)
@@ -248,7 +248,7 @@ func TestReduceLiveTimingBatchRecoversWithoutReplayingBlockedUpdates(t *testing.
 
 	recovered, err := reduceLiveTimingBatch(
 		blocked.state,
-		normalizeIdentityGateSessionInfoFeed(t, identityGateDescriptorA, "2021-12-10T09:31:00Z"),
+		normalizeIdentityGateSessionInfoFeed(t, identityGateDescriptorA, "2021-05-04T08:16:00Z"),
 	)
 	if err != nil {
 		t.Fatalf("recover SessionInfo: %v", err)
@@ -276,7 +276,7 @@ func TestReduceLiveTimingBatchRecoversWithoutReplayingBlockedUpdates(t *testing.
 func TestReduceLiveTimingBatchPreservesSessionInfoTransitions(t *testing.T) {
 	installed, err := reduceLiveTimingBatch(
 		liveTimingState{},
-		normalizeIdentityGateSessionInfoFeed(t, identityGateDescriptorA, "2021-12-10T09:30:00Z"),
+		normalizeIdentityGateSessionInfoFeed(t, identityGateDescriptorA, "2021-05-04T08:15:00Z"),
 	)
 	if err != nil {
 		t.Fatalf("install SessionInfo: %v", err)
@@ -285,13 +285,13 @@ func TestReduceLiveTimingBatchPreservesSessionInfoTransitions(t *testing.T) {
 
 	corrected, err := reduceLiveTimingBatch(
 		initialState,
-		normalizeIdentityGateSessionInfoFeed(t, identityGateDescriptorACorrected, "2021-12-10T09:31:00Z"),
+		normalizeIdentityGateSessionInfoFeed(t, identityGateDescriptorACorrected, "2021-05-04T08:16:00Z"),
 	)
 	if err != nil {
 		t.Fatalf("correct route: %v", err)
 	}
 	wantCorrectedState := identityGateTestState()
-	wantCorrectedState.sessionInfo.routeKey = 7165
+	wantCorrectedState.sessionInfo.routeKey = 102
 	wantCorrectedState.sessionInfo.routeEpoch = 1
 	assertLiveTimingReduction(t, corrected, liveTimingReduction{
 		state:                       wantCorrectedState,
@@ -333,7 +333,7 @@ func TestReduceLiveTimingBatchPreservesSessionInfoTransitions(t *testing.T) {
 	}
 	wantReplacedState.sessionInfo.retired.tuples[0] = sessionInfoLogicalTuple{
 		season:      2021,
-		meetingKey:  1107,
+		meetingKey:  21,
 		sessionName: canonicalSessionNamePractice1,
 	}
 	wantReplacedState.sessionInfo.retired.count = 1
@@ -361,10 +361,10 @@ func TestReduceLiveTimingBatchPreservesSessionInfoTransitions(t *testing.T) {
 }
 
 func TestReduceLiveTimingBatchPreservesRouteLossAndRestoration(t *testing.T) {
-	withoutRoute := `{"Meeting":{"Key":1107,"Name":"Abu Dhabi Grand Prix"},"Type":"Practice","Name":"Practice 1","StartDate":"2021-12-10T13:30:00","EndDate":"2021-12-10T14:30:00","GmtOffset":"04:00:00"}`
+	withoutRoute := `{"Meeting":{"Key":21,"Name":"Example Grand Prix"},"Type":"Practice","Name":"Practice 1","StartDate":"2021-05-04T10:15:00","EndDate":"2021-05-04T11:45:00","GmtOffset":"02:00:00"}`
 	lost, err := reduceLiveTimingBatch(
 		identityGateTestState(),
-		normalizeIdentityGateSessionInfoFeed(t, withoutRoute, "2021-12-10T09:31:00Z"),
+		normalizeIdentityGateSessionInfoFeed(t, withoutRoute, "2021-05-04T08:16:00Z"),
 	)
 	if err != nil {
 		t.Fatalf("lose route: %v", err)
@@ -384,13 +384,13 @@ func TestReduceLiveTimingBatchPreservesRouteLossAndRestoration(t *testing.T) {
 
 	restored, err := reduceLiveTimingBatch(
 		lost.state,
-		normalizeIdentityGateSessionInfoFeed(t, identityGateDescriptorACorrected, "2021-12-10T09:32:00Z"),
+		normalizeIdentityGateSessionInfoFeed(t, identityGateDescriptorACorrected, "2021-05-04T08:17:00Z"),
 	)
 	if err != nil {
 		t.Fatalf("restore route: %v", err)
 	}
 	wantRestoredState := identityGateTestState()
-	wantRestoredState.sessionInfo.routeKey = 7165
+	wantRestoredState.sessionInfo.routeKey = 102
 	wantRestoredState.sessionInfo.routeEpoch = 2
 	assertLiveTimingReduction(t, restored, liveTimingReduction{
 		state:                       wantRestoredState,
@@ -510,18 +510,18 @@ func identityGateTestState() liveTimingState {
 		sessionInfo: sessionInfoState{
 			identity: sessionInfoIdentity{
 				season:      2021,
-				meetingKey:  1107,
+				meetingKey:  21,
 				sessionType: canonicalSessionTypePractice,
 				sessionName: canonicalSessionNamePractice1,
 			},
 			identityAvailable: true,
 			synchronized:      true,
-			routeKey:          6594,
+			routeKey:          101,
 			routeAvailable:    true,
 			schedule: sessionInfoSchedule{
-				startUTC:  time.Date(2021, time.December, 10, 9, 30, 0, 0, time.UTC),
-				endUTC:    time.Date(2021, time.December, 10, 10, 30, 0, 0, time.UTC),
-				utcOffset: 4 * time.Hour,
+				startUTC:  time.Date(2021, time.May, 4, 8, 15, 0, 0, time.UTC),
+				endUTC:    time.Date(2021, time.May, 4, 9, 45, 0, 0, time.UTC),
+				utcOffset: 2 * time.Hour,
 			},
 			scheduleAvailable: true,
 			generation:        1,

@@ -24,6 +24,10 @@ The shipped `config.yaml` enables F1 Live Timing and listens for OTLP/gRPC on
 `localhost:4317` and OTLP/HTTP on `localhost:4318`. Run `make components` to
 inspect the components compiled into the distribution.
 
+`make check` uses synthetic F1 inputs and local test servers. `make run` starts
+the real client using the user's token file. For an optional private check of
+that connection, follow [Live Timing connectivity](https://github.com/CtrlSpice/bargeboard/blob/main/docs/live-connectivity.md).
+
 ## Releases
 
 GitHub releases provide native `bargeboard` archives for Linux and macOS on
@@ -123,6 +127,12 @@ requested release tag is validated as data inside that trusted workflow.
 
 ## F1 Live Timing
 
+Bargeboard owns the F1 credentials and connection. The intended local pipeline is
+F1 → Bargeboard → OTLP over loopback → `otel-desktop-viewer`; the viewer receives
+telemetry only and has no F1 credential handling. Racing OTLP projection and an
+outgoing OTLP exporter remain unimplemented. The current incoming OTLP ports are
+not export destinations.
+
 The Collector reads each user's own F1 TV `subscriptionToken` from
 `$HOME/.config/bargeboard/f1tv-token`. The repository configuration contains
 only that file reference, never a token. Create the file with owner-only
@@ -217,6 +227,19 @@ $env:HOME = $HOME
 
 The current receiver connects, subscribes, validates, and normalizes the feed;
 F1 state reduction and OTLP emission remain under development.
+
+The client consumes an existing token; it does not implement account login,
+token refresh, or explicit device registration. A successful connection does not
+establish provider permission for third-party clients or device-limit treatment.
+
+## Test data
+
+Public F1 payload fixtures are independently authored synthetic inputs. Source
+references and observations establish the evidence for source-dependent rules;
+synthetic cases exercise those rules without publishing captured race records.
+The provenance files under `receiver/f1livetimingreceiver/testdata/` distinguish
+those roles. Public CI uses invented credentials and local HTTP/WebSocket servers
+and must not contact F1 services or receive F1 account credentials.
 
 ## Security
 

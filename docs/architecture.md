@@ -442,8 +442,8 @@ earlier input. The receiver now commits its value state on the read goroutine, b
 the transition and issue results emit no counters, logs, semantic quarantine
 effects, or racing projection.
 
-Focused tests mutate attributed SessionInfo fixtures synthetically, including
-`"\uD800 Grand Prix"`, and compare complete parse/reduction/gate results. They cover
+Focused tests mutate independently authored synthetic SessionInfo fixtures,
+including `"\uD800 Grand Prix"`, and compare complete parse/reduction/gate results. They cover
 independent bundles, escaped and malformed keys, duplicate occurrence unions,
 opaque unknown values, whole-payload depth boundaries, source-byte ownership,
 snapshot order/atomicity, feed-order recovery, idempotence, retired tuples, and
@@ -527,7 +527,7 @@ invalid raw UTF-8 versus invalid escape grammar, and unchanged input bytes. Raw-
 tests MUST cover valid escaped-equivalent names, duplicate policies, malformed-key
 repair collisions, and schema-specific unknown-key handling with bounded storage.
 
-Mutate attributable SessionInfo fixtures synthetically to verify the Grand Prix
+Mutate synthetic SessionInfo fixtures to verify the Grand Prix
 suffix regression, testing classifications and the 2020 exception, required versus
 ignored strings, independent route/schedule outcomes, full issue sets, and recovery
 state preservation. Invalid identity MUST block dependent admission without new
@@ -545,6 +545,110 @@ Basic/None behavior, fixed cardinality under many unique malformed values, no so
 text leakage, and no false outage, consumer failure, recovery, or export claim.
 All implementation slices retain the repository's required Go, receiver race,
 diff, CI, and independent-review gates.
+
+## Local Runtime and Verification Boundaries
+
+**Status: GREEN policy; viewer delivery remains unimplemented**
+
+Bargeboard is the credential-owning local F1 client. Each user supplies their own
+F1 TV `subscriptionToken` through the existing local token-file reference.
+Bargeboard processes that user's real input; synthetic data belongs to tests.
+The intended viewer arrangement is:
+
+```text
+F1 service <-> Bargeboard -> OTLP over loopback -> otel-desktop-viewer
+                 ^
+          local token file
+```
+
+The viewer MUST remain a generic OTLP receiver and dashboard. It MUST NOT accept,
+read, store, log, or forward F1 credentials. Bargeboard MUST NOT place credentials,
+cookies, or connection tokens in outgoing telemetry. The project provides no
+hosted feed relay or shared account. The supported local viewer arrangement keeps
+the user's feed and derived telemetry on their machine.
+
+This topology requires the approved racing reducers/projector and a standard
+Collector OTLP exporter. Neither racing projection nor that exporter is wired
+today. A future F1-only configuration SHOULD omit Bargeboard's incoming OTLP
+receiver so the separate viewer can own the normal ingest ports. It MUST NOT
+mistake Bargeboard's current OTLP listening endpoints for export destinations.
+Exporter integration and its end-to-end verification remain separate work.
+
+The current client consumes a token; it does not perform account login, token
+acquisition/refresh, or explicit device registration. Successful requests do not
+establish provider permission for a third-party client or how the provider counts
+devices. Those questions remain distinct from the software and test boundaries.
+
+### Source Evidence and Synthetic Fixtures
+
+Source-dependent behavior requires both attributable evidence for its source
+meaning and compact deterministic tests. References to **fixture-backed** behavior
+throughout this document require both parts. A synthetic fixture alone MUST NOT
+promote a YELLOW source mapping or prove an upstream invariant.
+
+Published F1 payload fixtures MUST be independently authored synthetic data.
+Captured records, anonymized copies, compressed/base64 copies, and other
+reconstructive encodings MUST NOT be added as public test material. Fixtures MUST
+preserve the relevant protocol shape, accepted field vocabulary, boundary cases,
+failure policy, and state transitions, with independent complete-result oracles.
+Production grammar constants, including the 2020 `Meeting.Key=1057` exception,
+remain valid test inputs; replacing an incidental sample value MUST NOT change
+the accepted parser contract.
+
+Provenance MUST identify which inputs are synthetic and which conclusions came
+from source observations. Source references, observation dates, non-reconstructive
+summaries, and limitations SHOULD accompany source-dependent rules. They are
+evidence, not a grant of redistribution rights. A newly observed defect SHOULD
+be reproduced as a minimal invented input that retains the triggering structure;
+the public regression MUST NOT copy the observed record.
+
+The SessionInfo suite retains every classification row using 20 synthetic
+descriptors and a synthetic same-identity route correction. Its parser, Unicode,
+reducer, batch, and identity-gate tests use invented incidental values. The `.z`
+normalization oracle uses a fixed independently generated synthetic raw-DEFLATE
+vector, with exact plaintext, wrapper timestamp, source, input preservation, and
+detached-output checks. It establishes no CarData field or channel semantics.
+Fixture provenance lives beside each dataset in `testdata/*/SOURCES.md`.
+
+This forward replacement covers the tracked CarData token, SessionInfo records,
+and their compact test derivatives. It does not erase earlier Git objects or
+establish that historical copies have been removed. Issue
+[#48](https://github.com/CtrlSpice/bargeboard/issues/48) retains the separate
+published-history disposition, including the prior PR #47 branch ancestor.
+
+### Public CI and Private Connectivity Checks
+
+Public CI MUST exercise pure transformations and the real HTTP/WebSocket stack
+against local synthetic servers with invented credentials. F1 account secrets,
+authenticated or public F1 service requests, and downloaded F1 payload artifacts
+MUST NOT be inputs to these jobs. Toolchain and dependency downloads are separate
+build operations; this is not an air-gapped-build claim.
+
+The existing setup, cookie, subscription, framing, normalization, HTTP failure,
+retry, liveness, redaction, and Collector-process tests remain required. When
+racing export is implemented, synthetic end-to-end tests MUST verify the complete
+OTLP signals received by a local test destination, including absence of credentials.
+Public CI cannot prove current token entitlement, current F1 wire compatibility,
+or live-session availability.
+
+Private connectivity checks MUST be explicitly invoked by the user on their own
+machine through the production Collector runtime. The
+[manual procedure](live-connectivity.md) uses the existing token-file reference,
+operational reporting, and normal shutdown. It introduces no second F1 client,
+automated probe command, capture format, or CI secret. Such a check MUST distinguish
+setup acceptance, accepted subscription, normalized input, and actual racing OTLP
+delivery. An empty accepted subscription is not a parsing failure. A later terminal
+failure MUST NOT be hidden by an earlier successful connection. Only sanitized
+operational outcomes may be shared; tokens and received payloads remain private.
+
+Verification for this policy includes a tracked-fixture inventory, inspection of
+synthetic provenance and complete test oracles, the full Go and receiver race
+checks, and review of the documented manual steps against the actual configuration
+and lifecycle. There is no executable test that establishes permission or proves
+that arbitrary prose or test data was independently authored; those checks require
+source/provenance review. This policy does not weaken exact-candidate CI or
+independent landing review. No credentialed live run is required to merge a
+synthetic regression or this documentation.
 
 ## Current Grid
 
@@ -1256,8 +1360,8 @@ F1 Live Timing owns provisional, low-latency live data:
 - Session, track, weather, race-control, and radio updates.
 - Live driver-session traces and their stint, lap, and sector structure.
 
-Its protocol is unsupported and season-dependent. Schema changes MUST be
-captured with fixtures before semantic promotion.
+Its protocol is unsupported and season-dependent. Schema changes MUST have
+attributable source evidence and synthetic fixtures before semantic promotion.
 
 ### OpenF1
 
@@ -1347,8 +1451,10 @@ a broader mapping. One material correction was observed: 2021 Abu Dhabi
 Practice 1 used source session key `6594` in its stream and `7165` in its later
 snapshot while every logical-session field remained the same. A source session
 key therefore MUST NOT independently select a generation or OTLP identity. The
-exact 2020 Imola practice row is an additional direct official fixture outside
-that corpus.
+exact 2020 Imola practice row is an additional direct official observation outside
+that corpus. These observations remain the evidence for the accepted rules;
+the repository's executable descriptors are now synthetic, with references in
+`testdata/session_info/SOURCES.md`.
 
 ### Descriptor Grammar
 
@@ -1639,9 +1745,9 @@ coordination, runtime diagnostics, and projection therefore remain unimplemented
 
 End-to-end reducer and projection verification still requires testing with no
 phase layer, `Started` root opening, `Finalised` closure, singular best-lap state,
-and no race-like lap or gap signal; the Abu Dhabi 2021 Practice 1 `6594` to
-`7165` correction before and after signal creation; complete snapshot,
-ordinary-feed, and defensive `_kf`-feed replacements; missing fields, null,
+and no race-like lap or gap signal; a synthetic same-session route correction
+modeling the observed Abu Dhabi case before and after signal creation; complete
+snapshot, ordinary-feed, and defensive `_kf`-feed replacements; missing fields, null,
 empty, embedded-status-only changes, and schedule clearing; initial, same-tuple,
 corrected-key, key-reversion, new-tuple with distinct and reused keys, and
 retired-tuple cases; 256 and 257 retired generations; reconnect omission,
@@ -2278,7 +2384,7 @@ integer and acronym boundaries, sparse invalid-present preservation, valid sibli
 reduction, deterministic ordering, the 32/33-entry bound, cold freeze, incoherent
 snapshot preservation, known-driver updates after bounded overflow, frozen
 agreement and conflicts, duplicate overflow keys, issue/result bounds, and input
-preservation. Exact source-derived bytes remain deferred under issue #48;
+preservation. Published F1 payloads follow Source Evidence and Synthetic Fixtures;
 the canonical-session-type and SessionInfo replacement matrices belong to the
 future aggregate integration because the pure topic reducer has no session-type
 input.
@@ -2325,9 +2431,9 @@ explicit semantic-convention migration defines them.
 `CarData.z` is the intended Live Timing source for field speed, engine speed,
 gear, and throttle. Their exact `Entries` / `Cars` / `Channels` container shape,
 channel identifiers, JSON token grammar, missing and sentinel handling, active
-driver rule, and throttle scaling require compact archive fixtures before source
-binding is accepted. The instrument contracts below do not authorize guessing
-those wire semantics, and these four metrics MUST NOT be implemented until this
+driver rule, and throttle scaling require attributable evidence and synthetic
+fixtures before source binding is accepted. The instrument contracts below do not
+authorize guessing those wire semantics, and these four metrics MUST NOT be implemented until this
 adapter becomes GREEN.
 
 ### Field Speed
@@ -2415,9 +2521,9 @@ Raw brake values are effectively binary. Raw brake Gauges, Sums, and histograms
 of zero/one samples are **RED**.
 
 The source adapter MUST explicitly distinguish inactive, active, invalid, and
-stale values. The exact accepted raw-value mapping is **YELLOW** until compact
-archive fixtures cover it; this blocks implementation but not the agreed
-time-weighted metric semantics.
+stale values. The exact accepted raw-value mapping is **YELLOW** until attributable
+evidence and synthetic fixtures cover it; this blocks implementation but not the
+agreed time-weighted metric semantics.
 
 ```text
 Name:        f1.field.lap.brake_duty_cycle
@@ -2473,10 +2579,11 @@ The current mapping was checked against these public sources:
 - [OpenF1 car-data documentation](https://openf1.org/docs/#car-data)
 - [FastF1 DRS investigation](https://github.com/theOehrly/Fast-F1/issues/44)
 
-Before semantic DRS projection is implemented, compact sanitized records from
-the cited archives MUST be added under receiver test data. Documentation
-research is evidence for the decision; fixture tests are the implementation
-gate.
+Before semantic DRS projection is implemented, compact synthetic fixtures MUST
+exercise the mappings grounded in the cited source evidence, including unknown
+and absent values. Source research establishes the decision's evidence;
+independent fixture tests remain the implementation gate. Archive records MUST
+NOT be copied into receiver test data.
 
 ```text
 Name:        f1.field.drs.active_time_ratio
@@ -2697,9 +2804,9 @@ snapshot hydration MUST NOT create the event.
 project a lap-count metric. The dedicated `LapCount` topic owns session lap
 state.
 
-Implementation is blocked until compact public fixtures cover snapshots and
-feed patches; every grammar variant; clear, missing, and overflow cases; leader
-confirmation agreement and mismatch; leader suppression; independent field
+Implementation is blocked until source evidence and compact synthetic fixtures
+cover snapshots and feed patches; every grammar variant; clear, missing, and
+overflow cases; leader confirmation agreement and mismatch; leader suppression; independent field
 freshness; leader and ahead-car identity invalidation; interval
 non-resurrection; same and changed lap-boundary referents; and numeric/lap
 display-domain alternation. The fixture suite MUST include a stable lapped
@@ -2947,9 +3054,9 @@ emitted. Reinstatement carries the matched deletion record index under the
 Race-Control Driver Events contract. If the qualifying phase cannot be resolved
 uniquely, only the race-control log is emitted.
 
-Implementation requires compact public fixtures for pseudo out-laps, normal
-count increments, backward and jumped counts, phase resets, five-second late
-facts, exact repeated sectors and laps, explicit clears, timing conflicts,
+Implementation requires source evidence and compact synthetic fixtures for pseudo
+out-laps, normal count increments, backward and jumped counts, phase resets,
+five-second late facts, exact repeated sectors and laps, explicit clears, timing conflicts,
 estimated boundaries, deletion and reinstatement ownership, and reconnect
 deduplication. Fixtures MUST distinguish cold and reconnect snapshots followed
 by unchanged, incremented, jumped, and phase-reset counts; missing, empty, and
@@ -3141,8 +3248,8 @@ was observed. The revision event belongs to the active lap at its publication
 timestamp, then the open root. If no legal owner remains open, the event is
 suppressed with a bounded diagnostic rather than reopening a trace.
 
-Implementation requires compact public snapshot and patch fixtures for the
-singular and plural best-lap forms; qualifying phase reset and retained phase
+Implementation requires source evidence and compact synthetic snapshot and patch
+fixtures for the singular and plural best-lap forms; qualifying phase reset and retained phase
 entries; best rollback and deletion; all three best-sector indexes; all four
 speed locations; value-only versus position-only updates; repeated equal trap
 values; same-patch and five-second lap association including the `ST` exception;
@@ -3266,10 +3373,12 @@ A candidate source-announcement event requires all of:
 5. Settlement by a later coherent source-run key or synchronized session
    `Ends`.
 
-The settlement rule is non-binding until compact public fixtures demonstrate
-that no assignment field changes after the next coherent key. `Finalised`, a
-fixed timeout, and a completed lap are not substitutes. `New` may corroborate
-but cannot decide because a used set can be fitted. Same-compound replacements
+The settlement rule is non-binding until attributable source evidence supports
+the next-coherent-key invariant and synthetic tests exercise its boundaries.
+Synthetic data cannot establish that assignment fields stop changing in the
+source after that key. `Finalised`, a fixed timeout, and a completed lap are not
+substitutes. `New` may corroborate but cannot decide because a used set can be
+fitted. Same-compound replacements
 remain possible.
 
 If promoted later, the candidate would use the correlated pit-exit publication
@@ -3281,10 +3390,10 @@ correction before settlement would replace pending state; a contradiction after
 emission could only create a bounded diagnostic, never a retraction. Exact
 physical tyre-fitting time is unsupported.
 
-Implementation of the GREEN source-run and tyre-age contracts requires compact
-public fixtures for complete list/map snapshots; sparse numeric-key feed
-patches; fresh, used, same-compound, unknown, and unchanged runs; non-monotonic
-`TotalLaps`; active-run deletion; malformed entries beside valid siblings;
+Implementation of the GREEN source-run and tyre-age contracts requires source
+evidence and compact synthetic fixtures for complete list/map snapshots; sparse
+numeric-key feed patches; fresh, used, same-compound, unknown, and unchanged runs;
+non-monotonic `TotalLaps`; active-run deletion; malformed entries beside valid siblings;
 pit-entry/exit ordering; drive-throughs; cold starts; reconnect overlap and
 missed edges; snapshot hydration; and absence of every forbidden metric
 attribute. Event-candidate fixtures must additionally include short and
@@ -3427,9 +3536,9 @@ emit nothing.
 The metric has only common racing and driver identity. Phase, lap, trace stint,
 source run, and visit number MUST NOT become attributes.
 
-Implementation requires compact public fixtures for initial false and true
-baselines; normal visits; drive-throughs; repeated edges; count zero, normal
-increments, jumps, regressions, deletion, and recovery; missing count on an
+Implementation requires source evidence and compact synthetic fixtures for initial
+false and true baselines; normal visits; drive-throughs; repeated edges; count zero,
+normal increments, jumps, regressions, deletion, and recovery; missing count on an
 edge; snapshot hydration; disconnect during each half of a visit; driver
 removal; invalid topic state; lifecycle and shutdown closure; `Stopped=true`
 outside the pit; deterministic ordinal assignment; event ownership and dedupe;
@@ -3630,9 +3739,9 @@ stationary start/end boundaries, MUST NOT be subtracted from a timestamp, and
 MUST NOT create or resize a span. `Stopped`, `PitOut`, coordinates, telemetry
 speed, and tyre state cannot fill a missing direct report.
 
-Implementation requires compact public fixtures for normal and drive-through
-visits; transient lane add/delete/key reuse; strict direct stop patches; nested
-driver/index series arrays and maps; empty and missing lap; exact duration
+Implementation requires source evidence and compact synthetic fixtures for normal
+and drive-through visits; transient lane add/delete/key reuse; strict direct stop
+patches; nested driver/index series arrays and maps; empty and missing lap; exact duration
 grammars and 100-millisecond compatibility; malformed optional and required
 fields; reports before and after correlation; numbered and unnumbered visit
 queues; same-visit corrections before and after window close; exact and
@@ -3640,7 +3749,9 @@ semantic series duplicates; cold and reconnect identity seeding; unavailable
 subscription topics; late finalized-window reports; event ownership; histogram
 bounds, window timestamps, exemplars, and cardinality; and independent
 trace/metric failure. Authenticated live availability of `PitStop` and
-`PitStopSeries` MUST be fixture-verified before enabling their projector path.
+`PitStopSeries` MUST have attributable private-check evidence before enabling
+their projector path; synthetic fixtures MUST cover their received shapes and
+failure boundaries but cannot establish live availability.
 
 `PitStopSeries` fallback emission, `PitStop.PitLaneTime` fallback into the lane
 population, historical OpenF1 reconciliation, physical stationary placement,
@@ -3792,8 +3903,8 @@ absence or authorized deletion clears current state without a tombstone. This
 topic MUST NOT be derived from driver `TimingData.NumberOfLaps` or
 `SessionData.Series`.
 
-Implementation requires compact public fixtures for complete and sparse clock
-anchors; pause, resume, zero, future/backward/equal `Utc`, scheduler delay,
+Implementation requires source evidence and compact synthetic fixtures for complete
+and sparse clock anchors; pause, resume, zero, future/backward/equal `Utc`, scheduler delay,
 disconnect, snapshot extrapolation, and malformed or overflowing remaining
 time; plus race and sprint lap state, the stale qualifying endpoint, normal
 increments, `0/0` reset/restore, current and total regressions, incoherent
@@ -3938,8 +4049,8 @@ MUST NOT create cross-car links. Race-control flag records may emit their own
 curated logs but cannot duplicate this transition event. There is no
 track-status Gauge.
 
-Implementation requires compact public fixtures for snapshot array/map and feed
-array/map forms; partial records; same-index completion/correction; same-time
+Implementation requires source evidence and compact synthetic fixtures for snapshot
+array/map and feed array/map forms; partial records; same-index completion/correction; same-time
 ordered indexes; all six session states; qualifying and abort/resume cycles;
 same-time `Finalised`/`Ends`; direct supplemental `Started`; all six accepted
 track pairs; unknown, mismatched, and code-3 values; snapshot current/history
@@ -4033,8 +4144,8 @@ emits retirement events, or assigns DNF, DNS, DSQ, classified finish, or points.
 OpenF1 result observation remains independent and does not rewrite prior live
 Gauge observations.
 
-Implementation requires compact public fixtures for complete and partial
-`DriverList` snapshots; non-driver entries; all-driver `TimingData` snapshots;
+Implementation requires source evidence and compact synthetic fixtures for complete
+and partial `DriverList` snapshots; non-driver entries; all-driver `TimingData` snapshots;
 empty initial `Lines`; one and simultaneous `Stopped` changes; true-to-false
 recovery; provisional `Retired`; pit entry/exit; pre-start, active, aborted,
 inactive, finished, and cold terminal lifecycle states; DNS-like participants;
@@ -4157,8 +4268,8 @@ log name, publication Unix nanoseconds, previous Boolean, and current Boolean;
 it is consumed when the reducer creates the effect and survives reconnect.
 Metric and log projection/delivery remain independent.
 
-Implementation requires compact public fixtures for all seven complete string
-fields and sparse single-field feed patches; signed temperature; fractional and
+Implementation requires source evidence and compact synthetic fixtures for all seven
+complete string fields and sparse single-field feed patches; signed temperature; fractional and
 zero humidity; high-altitude pressure; zero wind; directions 0, 359, negative,
 and 360; both rainfall transitions; repeated values and equal-time bursts; every
 lexical rejection; valid feed siblings beside an invalid field; invalid and
@@ -4297,9 +4408,9 @@ cleared. Other session statuses neither clear nor validate coordinates. Session
 replacement clears old Position state before any new-session event. No
 Collector timer, heartbeat, or wall-clock freshness calculation is used.
 
-Implementation requires compact sanitized compressed fixtures for live feed and
-snapshot shapes; multi-observation arrays; exact decimetre conversion; positive,
-negative, individual-zero, and all-zero coordinates; coherent roster frames,
+Implementation requires source evidence and compact synthetic compressed fixtures
+for live feed and snapshot shapes; multi-observation arrays; exact decimetre
+conversion; positive, negative, individual-zero, and all-zero coordinates; coherent roster frames,
 auxiliary keys, collisions, missing drivers, and startup anomalies; malformed
 axes beside otherwise valid entries; status variants with no semantic effects;
 stable ordering, equal timestamps, out-of-order insertion, and 16-state
@@ -4686,8 +4797,8 @@ history applies only to an earlier active deletion. Already consumed indexes,
 same-index corrections, shortened snapshots, and removed payload do not refold
 or clear correlation. Snapshot payload cannot manufacture missing lap history.
 
-Implementation requires compact public fixtures for array/map snapshots;
-keyframe and non-initial feed arrays; numeric-key patches; partial records;
+Implementation requires source evidence and compact synthetic fixtures for
+array/map snapshots; keyframe and non-initial feed arrays; numeric-key patches; partial records;
 same-key replay/correction; new-key exact content duplicates; deletion and
 shortening; invalid, maximum, and overflowing indexes; bounded partial records;
 the 4,096-index and 256-lap safety bounds; whole-second and three-digit
@@ -5284,8 +5395,8 @@ consumed identities; reconnect snapshots replace payload and seed their
 indexes. Canonical session replacement resets all TeamRadio state.
 
 Diagnostics MUST NOT contain a path, racing number, filename token, raw field
-value, or payload fragment. Implementation requires compact sanitized fixtures
-derived from public records for snapshots with and without `_kf`; empty and
+value, or payload fragment. Implementation requires source evidence and compact
+synthetic fixtures for snapshots with and without `_kf`; empty and
 omitted snapshots; single- and multi-key feed maps; partial completion and
 same-index correction; new-index equal content; invalid, maximum, and
 overflowing indexes; zero- and seven-digit UTC fractions plus every timestamp
@@ -5673,10 +5784,13 @@ go mod verify
 Reducer tests SHOULD call pure functions directly. Projection tests SHOULD
 inspect exact `pdata` resources, scopes, metric types, timestamps, values,
 temporality, spans, events, links, logs, and exemplars. Transport integration
-tests SHOULD use local HTTP and WebSocket servers rather than live credentials.
+tests MUST use local HTTP and WebSocket servers with invented credentials;
+private connectivity checks follow their separate user-run procedure.
 
-Archived fixtures SHOULD identify their public session source and MUST NOT
-contain credentials or downloaded media.
+F1 payload fixtures MUST follow Source Evidence and Synthetic Fixtures. Attribution
+for other externally sourced protocol examples MUST remain beside those examples;
+the ASP.NET Core negotiation examples are not F1 captures. No fixture may contain
+real credentials or downloaded media.
 
 ## Pit Wall Checklist
 
