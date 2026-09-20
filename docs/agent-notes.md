@@ -612,6 +612,12 @@ adjudication and focused verification in their slices.
   and sends future racing OTLP over loopback. Projection/export implementation,
   account login/token refresh, and provider device treatment are not completed
   by the synthetic-test or private-check work.
+- Pending source evidence: DriverList's unwired pure core lacks attributable
+  observations for numeric entry keys, `RacingNumber`, and `Tla`. The future
+  TeamRadio implementation also needs attribution for the reported live update
+  after `Finalised`. These pre-existing provenance gaps must be resolved before
+  their runtime integrations. Synthetic fixtures do not resolve them, and their
+  accepted pure/semantic policies remain unchanged.
 - Decisions still pending: broader protocol resubscription after corruption,
   durable raw capture, topic-specific Unicode integration for unimplemented
   reducers, and qualifying-phase fallback ownership. The layered Unicode approval

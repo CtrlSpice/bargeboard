@@ -2389,6 +2389,13 @@ the canonical-session-type and SessionInfo replacement matrices belong to the
 future aggregate integration because the pure topic reducer has no session-type
 input.
 
+The pure core's tests establish conformance to the approved grammar and reduction
+policy. Attributable source observations for DriverList numeric entry keys,
+`RacingNumber`, and `Tla` are not yet recorded in its provenance file. Completing
+that evidence remains a prerequisite for aggregate/runtime integration; the
+synthetic cases do not establish those source mappings or live availability.
+The accepted pure-core behavior and its unwired status are unchanged.
+
 Metric series MUST NOT use:
 
 - Lap or stint number.
@@ -5191,9 +5198,10 @@ accepted state and then clears global adapter state.
 HTTP completions and timer actions enter the same single-owner reducer queue as
 Live Timing updates; an HTTP goroutine MUST NOT mutate session state directly.
 
-Implementation requires compact sanitized fixtures for exact Race and Sprint
-session identity; every empty, duplicate, cancelled, malformed, and conflicting
-session/driver response; 1-, 32-, and 33-driver rosters; all six outcomes;
+Implementation requires attributable source evidence and compact synthetic
+fixtures for exact Race and Sprint session identity; every empty, duplicate,
+cancelled, malformed, and conflicting session/driver response; 1-, 32-, and
+33-driver rosters; all six outcomes;
 classified and zero-lap DNF; null-lap DSQ; unresolved rows; multiple flags; DNS
 shape, static post-start coordinates, and real participation conflict; unique
 and duplicate positions; whole-snapshot reorder, repeat, correction, and
@@ -5376,9 +5384,11 @@ Session status does not gate this publication log. The corpus included 485 feed
 captures before the first `Started`, 1,443 after the last `Finished`, 554
 strictly after `Finalised`, and 584 at the same static archive prefix as `Ends`;
 no capture had a later static prefix than `Ends`. Equal prefixes in separate
-static topic streams do not establish cross-topic wire order. A live fixture did
-establish a TeamRadio update after `Finalised`. The reducer therefore accepts a
-coherent current-session feed record independently of `Inactive`, `Started`,
+static topic streams do not establish cross-topic wire order. A prior live-source
+observation recorded a TeamRadio update after `Finalised`, but its attributable
+provenance is not recorded here and remains required before runtime implementation.
+That historical report is not a published executable fixture. The accepted policy
+admits a coherent current-session feed record independently of `Inactive`, `Started`,
 `Aborted`, `Finished`, `Finalised`, or `Ends` and derives no phase from those
 states.
 
