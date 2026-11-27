@@ -62,6 +62,8 @@ viewer, implemented from accepted signal mappings in tested, pushed, independent
 reviewed slices. Pending source mappings still require evidence and a decision.
 Current Go production reduces SessionInfo and invokes a no-op post-reduction
 consumer; it does not yet emit racing traces, metrics, or logs.
+The user explicitly prohibited changes to `otel-desktop-viewer`; integration
+and packaging changes belong in Bargeboard.
 
 The candidate registers both viewer components and configures the approved
 persistent database. `make check` and focused race checks pass locally.
@@ -80,8 +82,9 @@ at `cf430e030ddbb5b0abf93d22962f4752f3646cd9` and
 `actions/download-artifact v8.0.2` at
 `9000827ccba6bdab643e8b6fd33ac0654aef8333`, restricted to the current workflow run.
 The local explicit flags produce a 13.0 deployment target; runtime compatibility
-on macOS 13 has not been tested. Linux and Windows runtime-library requirements
-need evidence from native jobs.
+on macOS 13 has not been tested. Native CI records Linux dependencies on glibc,
+libstdc++, libgcc and the system loader, including GLIBC_2.38 and GLIBCXX_3.4.32
+symbols. The Windows imports are Windows system and Universal CRT DLLs.
 
 The pushed runtime candidate is `ad5e7ce8e2f423eacaa5c75f3af9d77b60a4230c`.
 Its Go quality and CodeQL checks passed. Its release jobs used CGO-disabled
@@ -90,15 +93,25 @@ builds and failed; they did not verify native packaging. An independent
 found no additional runtime defect; it did not execute tests or satisfy the final
 merge review gate.
 
-The native packaging work adds four native candidate/reference builds, transfers
-raw binaries between jobs in the same workflow run, and packages them centrally.
-Focused tests cover independent
+The native packaging candidate is
+`3c2df84c20873800e4241b4bafcf03385f1f98c8`. It adds four native
+candidate/reference builds, transfers raw binaries between jobs in the same
+workflow run, and packages them centrally. Focused tests cover independent
 CGO rebuilds, snapshot version resolution, input cardinality and metadata, and
-CGO source discovery. Local macOS build checks confirm the 13.0 deployment target,
-version command, configuration validation, and system-library dependencies.
-Four-runner execution, complete archive/SBOM comparisons, and final reviews
-remain pending. Attribution generation still fails closed until the viewer,
-frontend, and native-library materials have been reviewed.
+CGO source discovery. Its independent `openai/gpt-6.1-sol` static adversarial
+review found no additional defect and did not execute tests.
+
+[CI run 46038169187](https://github.com/CtrlSpice/bargeboard/actions/runs/46038169187)
+passed Go quality checks and built both binaries on all four native runners.
+Each runner passed the version, configuration and persistent-viewer tests, then
+failed the complete binary comparison. Packaging did not run. A local synthetic
+regression reproduces a path-dependent Go build ID when CGO uses `${SRCDIR}` in
+include and library flags. An isolated probe passes with `-buildid=`, which removes
+that ID while preserving `go version -m` metadata. The user directed agents to
+resolve routine Bargeboard build fixes. The release script now applies this flag;
+the updated candidate still needs verification on all four runners.
+No dependency source was edited.
+Complete archive/SBOM comparisons and final reviews remain pending.
 
 The attribution audit found MPL-covered Madoromi palette source already present in
 the viewer module, which needs a pinned corresponding-source archive in Bargeboard
@@ -106,6 +119,13 @@ releases. Embedded npm code and native DuckDB archives also need notices beyond
 the Go package inventory. The classifier in `scripts/thirdparty/main.go` does not
 cover the observed OFL-1.1 font, Boost, zlib, Unicode data, and TPC benchmark terms.
 Their inclusion and attribution need review before proposing policy changes.
+The Go inventory selects 218 components. It also finds unclassified legal text
+in Arrow, go-humanize, go-json, clusterurl and Ristretto; the legal-file selector
+mistakes Madoromi source payloads for licence documents. The selected
+`golang.org/x/text/collate/tables.go` is 4,950,165 bytes, exceeding the collector's
+4 MiB file bound. These findings are unresolved; the existing
+[notices digest, licence approvals and bounds](../scripts/thirdparty/main.go)
+remain in force.
 
 The Go bindings' [upstream packager](https://github.com/duckdb/duckdb-go-bindings/blob/dfee88b7d2972ff9250da14f6d79ea92ca89a112/internal/cmd/brood/stage.go#L18-L41)
 links and registers TPC-H and TPC-DS from separate official static-library

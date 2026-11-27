@@ -622,6 +622,11 @@ execute the binary's version and configuration checks on its matching runner.
 The deployment target alone does not prove runtime compatibility on macOS 13.
 
 `scripts/build-native-release.sh` owns native build flags and executable checks.
+It clears Go's build ID with `-buildid=` because CGO include and library paths
+can make that ID depend on the source and module-cache directories despite
+`-trimpath`. Go version, dependency and VCS metadata remain embedded and MUST
+pass validation. Complete binary comparisons remain required; verification MUST
+NOT ignore or rewrite differing bytes.
 The version-resolution job uses the pinned GoReleaser to determine snapshot
 versions, including non-SemVer local tags. Release versions come from the
 separately validated signed tag. Artifact transfer carries raw binaries; central

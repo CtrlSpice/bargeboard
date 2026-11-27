@@ -65,6 +65,8 @@ cat >"$work/source/main.go" <<'EOF'
 package main
 
 /*
+#cgo CPPFLAGS: -I${SRCDIR}
+#cgo LDFLAGS: -L${SRCDIR}
 static int native_value(void) { return 42; }
 */
 import "C"

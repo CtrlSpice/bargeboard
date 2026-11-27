@@ -55,8 +55,10 @@ if [[ -L "$output" || -d "$output" ]]; then
   exit 1
 fi
 mkdir -p "$(dirname "$output")"
+# CGO's absolute library paths affect Go's build ID despite -trimpath.
+# VCS and module metadata remain available through go version -m.
 go build -buildvcs=true -mod=readonly -trimpath \
-  -ldflags "-s -w -X main.version=$version" -o "$output" .
+  -ldflags "-s -w -buildid= -X main.version=$version" -o "$output" .
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 commit="$(git rev-parse --verify 'HEAD^{commit}')"
