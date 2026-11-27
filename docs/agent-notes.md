@@ -9,20 +9,21 @@ landing. Notes, issue assignments, and milestones cannot override either source.
 
 ### DEPENDENCY-REFRESH — Update dependencies and the release toolchain
 
-**Approved; implementation in progress on `chore/refresh-dependencies`.** The user
+**Landed in PR #70 at `c207e18081fdb017b522aa419a44b0ec2cd22bfe`.** The user
 requested current dependencies, including viewer v0.8.1, with small verified
-commits on feature branches and pushes as work progresses. They requested
-`openai/gpt-6.1-sol` for adversarial review after each pushed candidate.
+commits on feature branches and pushes as work progresses. Their continuing
+review instruction is to use `openai/gpt-6.1-sol` for adversarial review after each
+pushed candidate.
 
 `k8s.io/kube-openapi v0.0.0-20261124193638-7c5f465a2be7` requires Go 1.27. The user approved
 Go 1.27.0 as the module minimum and authenticated Go 1.27.4 for CI and releases.
-This supersedes [GO127-COMPAT](#go127-compat--verify-the-explicit-receiver-contract-on-go-127)'s release-toolchain pin. The refresh must update
-standard-library attribution, dependency notices, corresponding source pins,
-SBOM expectations, and toolchain checks together. Required verification includes
-`make check`, the receiver race suite, release-tool tests, workflow validation,
-and complete release artifact verification.
+This supersedes [GO127-COMPAT](#go127-compat--verify-the-explicit-receiver-contract-on-go-127)'s release-toolchain pin. The refresh updated
+standard-library attribution, dependency notices, SBOM expectations, and toolchain
+checks together, and verified the retained corresponding-source pins.
+Verification included `make check`, the receiver race suite, release-tool tests,
+workflow validation, and complete release artifact verification.
 
-The candidate uses Collector's v0.166.0 experimental modules and v1.72.0 stable
+The distribution uses Collector's v0.166.0 experimental modules and v1.72.0 stable
 modules, OTel v1.47.0, Syft v1.57.2,
 GoReleaser Pro v2.20.3, and setup-node v7.1.0. `gobwas/glob` remains at v0.2.3:
 both v1.0.0 and v1.1.0 remove the `Glob` API required by Collector confmap.
@@ -37,22 +38,59 @@ mutation suite also requires `EXPECTED_GO_VERSION=go1.27.4`; set
 `EXPECTED_VCS_MODIFIED=true` only when testing a snapshot built from an edited
 working tree.
 
+Local checks, all three independent reviews, and exact-candidate CI passed.
+The reviews covered correctness and architecture, adversarial failure cases,
+and release security and attribution. PR #70 records the candidate OIDs,
+verification commands and review outcomes.
+
 ### EMBEDDED-VIEWER — Configure the persistent local viewer
 
-**Approved; implementation pending after the dependency refresh.** The user
-requested the viewer as Bargeboard's configured exporter and approved using the
-viewer distribution as the integration reference. The accepted setup is viewer
+**Approved; implementation in progress on `feature/persistent-viewer`.** The user
+requested the viewer as Bargeboard's configured exporter and approved using
+[its v0.8.1 distribution](https://github.com/CtrlSpice/otel-desktop-viewer/tree/v0.8.1)
+as the integration reference. The accepted setup is viewer
 v0.8.1, its `desktop` exporter and `duckdb` extension, UI at `127.0.0.1:8000`,
 existing OTLP listener ports, `db: ./bargeboard.duckdb`, and `db_max_size: "0"`.
 Recorded data persists across shutdown; automatic pruning is disabled.
 
-The user approved native CGO builds for the existing five release targets while
-preserving artifact verification. The canonical topology update belongs in the
+The user approved native CGO builds for Linux and macOS on amd64 and arm64,
+and Windows on amd64, while preserving artifact verification. The canonical topology update belongs in the
 viewer integration commit. The follow-on goal is accurate F1 telemetry in the
 viewer, implemented from accepted signal mappings in tested, pushed, independently
 reviewed slices. Pending source mappings still require evidence and a decision.
 Current Go production reduces SessionInfo and invokes a no-op post-reduction
 consumer; it does not yet emit racing traces, metrics, or logs.
+
+The candidate registers both viewer components and configures the approved
+persistent database. `make check` and focused race checks pass locally.
+The restart test compares complete trace, metric and log exports after graceful
+shutdown and database reopening. It covers nanosecond timestamps and an Int64
+value beyond binary64 precision. Startup-failure tests reject a directory or
+invalid database file and preserve the existing file.
+
+Native packaging and release verification remain pending. Preliminary review
+recommends comparing each native binary with an independent rebuild from the same
+commit using separate source and cache directories. Central GoReleaser prebuilt
+packaging would then compare archives from both sets. Artifact-transfer action
+dependencies and a macOS deployment target remain proposals. A local default
+build inherited macOS 26.0 from the compiler;
+explicit C/C++/linker flags produce a 13.0 target, but runtime compatibility on
+macOS 13 has not been tested.
+
+The attribution audit found MPL-covered Madoromi palette source already present in
+the viewer module, which needs a pinned corresponding-source archive in Bargeboard
+releases. Embedded npm code and native DuckDB archives also need notices beyond
+the Go package inventory. The classifier in `scripts/thirdparty/main.go` does not
+cover the observed OFL-1.1 font, Boost, zlib, Unicode data, and TPC benchmark terms.
+Their inclusion and attribution need review before proposing policy changes.
+
+The Go bindings' standard prebuilt loader registers TPC-H and TPC-DS. DuckDB
+maintainers [removed bundled TPC-H from their releases in 2025](https://github.com/duckdb/duckdb/pull/15905).
+That history and the pinned Go libraries need to be reconciled. The audit has not
+established that TPC-DS cannot be redistributed. The user approved investigating
+TPC-free static linkage, then questioned its need; verify the upstream context
+before proposing a build change. No custom linkage has been implemented, and no
+dependency replacement or license-policy change has been approved.
 
 ### DEL-TS — Remove the obsolete replay implementation
 
@@ -694,18 +732,17 @@ adjudication and focused verification in their slices.
   cardinality, terminal-newline-safe SPDX ID and checksum anchoring, and semantic
   fail-closed runner-path detection. Supplied generator/module evidence and the
   profile's license and package-role policy remain separate.
-- Toolchain verification: GO127-COMPAT preserves the accepted JSON-depth contract
-  and verifies it with authenticated Go 1.26.8 and Go 1.27.1. Release builds and
-  their complete provenance boundary remain pinned to Go 1.26.8. The slice landed
-  in PR #59 at `ca7580d`.
+- Toolchain verification: GO127-COMPAT landed in PR #59 at `ca7580d`.
+  DEPENDENCY-REFRESH subsequently moved CI and release verification to Go 1.27.4
+  in PR #70 while preserving the accepted JSON-depth contract.
 - Public fixtures: SYNTHETIC-FIXTURES replaces the tracked CarData and SessionInfo
   payload copies, including compact test derivatives, with independent synthetic
   inputs. [#48](https://github.com/CtrlSpice/bargeboard/issues/48) retains the
   published-history question; forward replacement is not history removal.
-- Local runtime: the approved viewer arrangement keeps credentials in Bargeboard
-  and sends future racing OTLP over loopback. Projection/export implementation,
-  account login/token refresh, and provider device treatment are not completed
-  by the synthetic-test or private-check work.
+- Local runtime: EMBEDDED-VIEWER configures persistent storage in the Bargeboard
+  process and keeps F1 credentials in the receiver. Racing projection remains
+  pending; generic OTLP persistence passes local integration tests. Account
+  login/token refresh and provider device treatment remain separate.
 - Pending source evidence: DriverList's unwired pure core lacks attributable
   observations for numeric entry keys, `RacingNumber`, and `Tla`. The future
   TeamRadio implementation also needs attribution for the reported live update

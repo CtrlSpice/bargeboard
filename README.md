@@ -6,14 +6,20 @@ A custom OpenTelemetry Collector distribution for Formula 1 telemetry. Designed 
 
 ## Implementation
 
-The Go Collector distribution is the sole implementation. Its baseline accepts OTLP traces, metrics, and logs, batches them, and writes them to the Collector's `debug` exporter. The compiled F1 Live Timing receiver authenticates, subscribes, reconnects, decodes, validates, and normalizes the live feed. It reports input activity and interruptions in the terminal and through Collector internal metrics. **F1 race export is not implemented:** normalized batches update receiver-owned SessionInfo state, but the post-reduction consumer remains a no-op. Multi-topic reduction and OTLP projection are the next behavior slices. An OpenF1 receiver does not exist yet.
+The Go Collector distribution accepts OTLP traces, metrics, and logs, batches them, and stores them through the embedded viewer's `desktop` exporter. The F1 Live Timing receiver connects to the live feed, validates updates, and reports input activity and interruptions. **F1 race export is not implemented:** the receiver currently maintains session identity and scheduling information, but produces no racing telemetry. Processing other feed topics and converting them to OTLP remain pending. An OpenF1 receiver does not exist yet.
 
 The canonical design is the evolving [Bargeboard architecture](docs/architecture.md). It records accepted decisions, source limitations, pending candidates, implementation seams, and the required checks for future human and agent contributors.
 
 ## Quick start
 
-Development requires Go 1.27.0 or newer. CI authenticates and verifies Go 1.27.4;
-release archives use the same pinned version.
+Development requires Go 1.27.0 or newer and a native C/C++ toolchain with CGO
+enabled for DuckDB. CI authenticates and verifies Go 1.27.4; release archives use
+the same pinned version.
+Before `make run`, prepare your [F1 token file](#f1-live-timing).
+
+Use Xcode Command Line Tools on macOS, GCC/G++ on Linux, or MinGW-w64 GCC/G++
+on Windows. `go env CGO_ENABLED CC CXX` reports whether CGO is enabled and which
+compilers Go uses; `CGO_ENABLED` must be `1`.
 
 ```bash
 make check
@@ -23,6 +29,12 @@ make run
 The shipped `config.yaml` enables F1 Live Timing and listens for OTLP/gRPC on
 `localhost:4317` and OTLP/HTTP on `localhost:4318`. Run `make components` to
 inspect the components compiled into the distribution.
+
+Open [the embedded viewer](http://127.0.0.1:8000) after startup. The `duckdb`
+extension stores telemetry in `./bargeboard.duckdb`, relative to the process
+working directory. Data survives shutdown and restart. `db_max_size: "0"`
+disables automatic pruning.
+The incoming OTLP ports and the viewer belong to the same Bargeboard process.
 
 `make check` uses synthetic F1 inputs and local test servers. `make run` starts
 the real client using the user's token file. For an optional private check of
@@ -127,16 +139,18 @@ requested release tag is validated as data inside that trusted workflow.
 
 ## F1 Live Timing
 
-Bargeboard owns the F1 credentials and connection. The intended local pipeline is
-F1 → Bargeboard → OTLP over loopback → `otel-desktop-viewer`; the viewer receives
-telemetry only and has no F1 credential handling. Racing OTLP projection and an
-outgoing OTLP exporter remain unimplemented. The current incoming OTLP ports are
-not export destinations.
+Bargeboard owns the F1 credentials and connection. Its local Collector pipelines
+deliver telemetry to the embedded `otel-desktop-viewer v0.8.1` exporter and
+DuckDB store. Viewer components receive telemetry only and have no F1 credential
+handling. Racing OTLP projection remains unimplemented; the incoming OTLP ports
+already accept telemetry from other local clients.
 
 The Collector reads each user's own F1 TV `subscriptionToken` from
 `$HOME/.config/bargeboard/f1tv-token`. The repository configuration contains
 only that file reference, never a token. Create the file with owner-only
-permissions before running the Collector. After storing the token:
+permissions before running the Collector. Store the token itself as plain text,
+not a JSON response or an `Authorization` header. Bargeboard does not acquire or
+refresh tokens. After storing the token:
 
 ```bash
 chmod 600 "$HOME/.config/bargeboard/f1tv-token"

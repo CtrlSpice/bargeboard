@@ -2,6 +2,8 @@ package main
 
 import (
 	f1livetimingreceiver "github.com/CtrlSpice/bargeboard/receiver/f1livetimingreceiver"
+	"github.com/CtrlSpice/otel-desktop-viewer/desktopexporter"
+	"github.com/CtrlSpice/otel-desktop-viewer/desktopexporter/duckdbextension"
 	"go.opentelemetry.io/collector/connector"
 	debugexporter "go.opentelemetry.io/collector/exporter/debugexporter"
 	"go.opentelemetry.io/collector/otelcol"
@@ -33,6 +35,14 @@ func components() (otelcol.Factories, error) {
 
 	factories.Exporters, err = otelcol.MakeFactoryMap(
 		debugexporter.NewFactory(),
+		desktopexporter.NewFactory(),
+	)
+	if err != nil {
+		return otelcol.Factories{}, err
+	}
+
+	factories.Extensions, err = otelcol.MakeFactoryMap(
+		duckdbextension.NewFactory(),
 	)
 	if err != nil {
 		return otelcol.Factories{}, err

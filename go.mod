@@ -3,6 +3,7 @@ module github.com/CtrlSpice/bargeboard
 go 1.27.0
 
 require (
+	github.com/CtrlSpice/otel-desktop-viewer v0.8.1
 	github.com/coder/websocket v1.8.15
 	github.com/google/licensecheck v0.3.1
 	go.opentelemetry.io/collector/component v1.72.0
@@ -20,6 +21,7 @@ require (
 	go.opentelemetry.io/collector/extension/extensioncapabilities v0.166.0
 	go.opentelemetry.io/collector/featuregate v1.72.0
 	go.opentelemetry.io/collector/otelcol v0.166.0
+	go.opentelemetry.io/collector/pdata v1.72.0
 	go.opentelemetry.io/collector/pipeline v1.72.0
 	go.opentelemetry.io/collector/processor/batchprocessor v0.166.0
 	go.opentelemetry.io/collector/receiver v1.72.0
@@ -34,7 +36,11 @@ require (
 
 require (
 	cloud.google.com/go/compute/metadata v0.10.0 // indirect
+	github.com/DataDog/datadog-agent/pkg/obfuscate v0.77.0-devel.0.20260213154712-e02b9359151a // indirect
+	github.com/DataDog/datadog-go/v5 v5.8.3 // indirect
+	github.com/DataDog/go-sqllexer v0.1.12 // indirect
 	github.com/Microsoft/go-winio v0.6.4 // indirect
+	github.com/apache/arrow-go/v18 v18.9.0 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.48.1 // indirect
 	github.com/aws/aws-sdk-go-v2/config v1.33.22 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.21.4 // indirect
@@ -55,6 +61,9 @@ require (
 	github.com/cenkalti/backoff/v7 v7.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/duckdb/duckdb-go-bindings v0.20000.0 // indirect
+	github.com/duckdb/duckdb-go/v2 v2.20000.0 // indirect
+	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/ebitengine/purego v0.11.3 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/foxboron/go-tpm-keyfiles v0.0.0-20260902202739-8c9c2d1005f4 // indirect
@@ -64,15 +73,19 @@ require (
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
+	github.com/goccy/go-json v0.12.0 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
+	github.com/google/flatbuffers v25.12.19+incompatible // indirect
 	github.com/google/go-tpm v0.9.9-0.20260124013517-8f8f42cba0de // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/grafana/clusterurl v0.3.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.34.0 // indirect
 	github.com/hashicorp/go-version v1.9.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/compress v1.20.5 // indirect
+	github.com/klauspost/cpuid/v2 v2.4.2 // indirect
 	github.com/knadh/koanf/maps v0.1.3 // indirect
 	github.com/knadh/koanf/providers/confmap v1.0.1 // indirect
 	github.com/knadh/koanf/v2 v2.4.1 // indirect
@@ -82,8 +95,11 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/redactionprocessor v0.165.1 // indirect
+	github.com/outcaste-io/ristretto v0.2.3 // indirect
 	github.com/pandatix/go-abnf v0.5.5 // indirect
 	github.com/pierrec/lz4/v4 v4.1.34 // indirect
+	github.com/pkg/errors v0.9.1 // indirect
 	github.com/power-devops/perfstat v0.0.0-20260916203055-22a1a467d9f0 // indirect
 	github.com/prometheus/client_golang v1.25.0 // indirect
 	github.com/prometheus/client_model v0.6.3 // indirect
@@ -99,6 +115,12 @@ require (
 	github.com/tklauser/numcpus v0.12.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
+	github.com/zeebo/xxh3 v1.1.0 // indirect
+	go.duckdb.org/libduckdb/darwin-amd64 v0.20000.0 // indirect
+	go.duckdb.org/libduckdb/darwin-arm64 v0.20000.0 // indirect
+	go.duckdb.org/libduckdb/linux-amd64 v0.20000.0 // indirect
+	go.duckdb.org/libduckdb/linux-arm64 v0.20000.0 // indirect
+	go.duckdb.org/libduckdb/windows-amd64 v0.20000.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.2 // indirect
 	go.opentelemetry.io/collector/client v1.72.0 // indirect
 	go.opentelemetry.io/collector/config/configauth v1.72.0 // indirect
@@ -133,12 +155,12 @@ require (
 	go.opentelemetry.io/collector/internal/sharedcomponent v0.166.0 // indirect
 	go.opentelemetry.io/collector/internal/statusutil v0.166.0 // indirect
 	go.opentelemetry.io/collector/internal/telemetry v0.166.0 // indirect
-	go.opentelemetry.io/collector/pdata v1.72.0 // indirect
 	go.opentelemetry.io/collector/pdata/pprofile v0.166.0 // indirect
 	go.opentelemetry.io/collector/pdata/testdata v0.166.0 // indirect
 	go.opentelemetry.io/collector/pdata/xpdata v0.166.0 // indirect
 	go.opentelemetry.io/collector/pipeline/xpipeline v0.166.0 // indirect
 	go.opentelemetry.io/collector/processor v1.72.0 // indirect
+	go.opentelemetry.io/collector/processor/processorhelper v0.165.0 // indirect
 	go.opentelemetry.io/collector/processor/processortest v0.166.0 // indirect
 	go.opentelemetry.io/collector/processor/xprocessor v0.166.0 // indirect
 	go.opentelemetry.io/collector/receiver/receiverhelper v0.166.0 // indirect
@@ -175,17 +197,21 @@ require (
 	go.opentelemetry.io/otel/sdk/log v1.47.0 // indirect
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.1 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.5 // indirect
 	go.yaml.in/yaml/v3 v3.0.6 // indirect
 	golang.org/x/crypto v0.59.0 // indirect
 	golang.org/x/exp v0.0.0-20261124000051-d6646c509b6d // indirect
+	golang.org/x/exp/event v0.0.0-20260611194520-c48552f49976 // indirect
+	golang.org/x/exp/jsonrpc2 v0.0.0-20260718201538-764159d718ef // indirect
 	golang.org/x/net v0.63.0 // indirect
 	golang.org/x/oauth2 v0.38.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/term v0.48.0 // indirect
 	golang.org/x/text v0.44.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
+	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	gonum.org/v1/gonum v0.17.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20261123191846-1e707ab9fbc2 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261123191846-1e707ab9fbc2 // indirect

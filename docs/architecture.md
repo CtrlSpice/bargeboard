@@ -561,31 +561,62 @@ diff, CI, and independent-review gates.
 
 ## Local Runtime and Verification Boundaries
 
-**Status: GREEN policy; viewer delivery remains unimplemented**
+**Status: GREEN; embedded OTLP storage implemented, racing projection pending**
 
 Bargeboard is the credential-owning local F1 client. Each user supplies their own
 F1 TV `subscriptionToken` through the existing local token-file reference.
 Bargeboard processes that user's real input; synthetic data belongs to tests.
-The intended viewer arrangement is:
+The local viewer arrangement is:
 
 ```text
-F1 service <-> Bargeboard -> OTLP over loopback -> otel-desktop-viewer
-                 ^
-          local token file
+F1 service <-> f1livetiming receiver -> session state
+                       ^              (racing OTLP projection pending)
+                local token file
+
+OTLP receiver -> Collector pipelines -> desktop exporter -> duckdb extension
+                                                            persistent store + UI
 ```
 
-The viewer MUST remain a generic OTLP receiver and dashboard. It MUST NOT accept,
+The embedded viewer MUST remain a generic telemetry store and dashboard. It MUST NOT accept,
 read, store, log, or forward F1 credentials. Bargeboard MUST NOT place credentials,
 cookies, or connection tokens in outgoing telemetry. The project provides no
 hosted feed relay or shared account. The supported local viewer arrangement keeps
 the user's feed and derived telemetry on their machine.
 
-This topology requires the approved racing reducers/projector and a standard
-Collector OTLP exporter. Neither racing projection nor that exporter is wired
-today. A future F1-only configuration SHOULD omit Bargeboard's incoming OTLP
-receiver so the separate viewer can own the normal ingest ports. It MUST NOT
-mistake Bargeboard's current OTLP listening endpoints for export destinations.
-Exporter integration and its end-to-end verification remain separate work.
+The distribution embeds `otel-desktop-viewer v0.8.1` through its `desktop`
+exporter and `duckdb` extension. All three shipped signal pipelines MUST use
+`desktop`; the extension MUST be enabled at `127.0.0.1:8000`. The existing OTLP
+listeners remain at `localhost:4317` and `localhost:4318`, with those ports
+advertised to the viewer. They are ingress endpoints.
+
+The shipped database path is `./bargeboard.duckdb`, relative to the process
+working directory. `db_max_size: "0"` disables automatic pruning. The extension
+owns the database and HTTP server. Collector extension ordering keeps storage
+available until batching and exporter queues drain during shutdown. Database
+startup errors MUST fail Collector startup rather than substitute an in-memory
+store. Viewer components use the pinned upstream
+[exporter defaults](https://github.com/CtrlSpice/otel-desktop-viewer/blob/v0.8.1/desktopexporter/factory.go)
+and [queue defaults](https://github.com/CtrlSpice/otel-desktop-viewer/blob/v0.8.1/desktopexporter/config.go).
+The extension's [instrumentation is disabled by default](https://github.com/CtrlSpice/otel-desktop-viewer/blob/v0.8.1/desktopexporter/duckdbextension/factory.go).
+The debug exporter remains compiled for diagnostic configs.
+
+Building the distribution and release binaries requires a native C/C++ toolchain
+with CGO enabled. Release builds MUST run natively for Linux and macOS on amd64
+and arm64, and Windows on amd64, while retaining the authenticated
+Go toolchain, independent artifact verification, deterministic notices and
+required corresponding source. The approved racing reducers/projector remain
+separate work; normal OTLP ingress already reaches persistent viewer storage.
+
+Verification MUST check the complete shipped extension configuration and all
+three pipeline routes. A local integration test MUST send independently authored
+OTLP through the real receiver, batch processor and desktop exporter, stop the
+Collector, reopen the same database, and compare complete viewer exports with
+the original signals. It MUST verify stored row counts, nanosecond timestamps,
+integer precision, resource/scope association, typed bodies and attributes, and
+disabled pruning. Test-only readiness notifications and shutdown provide the
+synchronization; elapsed sleeps are not evidence of completed writes.
+Tests MUST also verify that unusable database paths fail startup and that an
+existing invalid database file remains unchanged.
 
 The current client consumes a token; it does not perform account login, token
 acquisition/refresh, or explicit device registration. Successful requests do not
@@ -671,6 +702,7 @@ The Go distribution currently compiles:
 - The standard OTLP receiver.
 - The batch processor.
 - The debug exporter.
+- The viewer's `desktop` exporter and `duckdb` extension.
 
 The shipped `config.yaml` runs both the F1 Live Timing and standard OTLP
 receivers. It contains no credentials: the F1 receiver resolves each user's
@@ -1295,8 +1327,8 @@ The shipped `service.telemetry.metrics` uses `level: basic` and an explicit
 `readers.pull.exporter.prometheus` reader on `127.0.0.1:8888`, with
 `without_scope_info`, `without_units`, and `without_type_suffix` true, matching
 the pinned defaults. `level: none` disables metrics, not terminal reporting.
-No extension is required. The internal metrics endpoint is separate from the
-configured racing pipelines and their debug exporter.
+Internal metrics need no extension. Their endpoint is separate from the
+configured racing pipelines and their desktop exporter.
 
 Verification MUST compare complete pure state and notices for initial waiting,
 first data, flapping, scheduled versus attempted retries, empty and nonempty
