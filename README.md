@@ -12,8 +12,8 @@ The canonical design is the evolving [Bargeboard architecture](docs/architecture
 
 ## Quick start
 
-The supported development range is Go 1.26 through Go 1.27. CI authenticates and
-verifies Go 1.26.8 and Go 1.27.1; release archives remain built with Go 1.26.8.
+Development requires Go 1.27.0 or newer. CI authenticates and verifies Go 1.27.4;
+release archives use the same pinned version.
 
 ```bash
 make check
@@ -64,7 +64,7 @@ and assets. At publication, the workflow also requires the tag as the title,
 empty notes, and the expected prerelease state. It sends `make_latest: "false"`
 to opt out of promoting the release to latest. GitHub still allows maintainers
 to edit those display fields later. CI authenticates the official Go
-1.26.8, Syft, GoReleaser Pro, and actionlint archives against SHA-256 digests
+1.27.4, Syft, GoReleaser Pro, and actionlint archives against SHA-256 digests
 pinned in the repository before extracting or executing them. Tags are limited
 to 131 ASCII characters so every wrapped archive path has one canonical USTAR
 representation.

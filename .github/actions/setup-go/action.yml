@@ -5,7 +5,7 @@ inputs:
   version:
     description: Exact approved Go version
     required: false
-    default: "1.26.8"
+    default: "1.27.4"
 
 runs:
   using: composite

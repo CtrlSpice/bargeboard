@@ -80,17 +80,17 @@ architecture decision. Future Go historical replay and OpenF1 work instead
 follow their accepted source, timing, identity, signal, and verification
 contracts in this document.
 
-The supported development toolchain range is Go 1.26 through Go 1.27. CI MUST
-authenticate and run the complete quality and receiver race suites with Go
-1.26.8 and Go 1.27.1. The module language version remains Go 1.26. Native
-release builds, package verification, standard-library attribution, and SBOM
-identity MUST remain pinned to Go 1.26.8 until a separate release-toolchain
-decision updates that complete provenance boundary.
+The module requires Go 1.27.0 or newer because its updated dependencies require
+Go 1.27. CI MUST authenticate Go 1.27.4 and run the complete quality and receiver
+race suites with that version. Native release builds, package verification,
+standard-library attribution, and SBOM identity MUST use the same pinned
+Go 1.27.4 toolchain. A toolchain update requires review of that complete
+provenance boundary.
 
 Compatibility evidence and release provenance are deliberately separate.
-Changing Bargeboard's accepted JSON depth boundaries to follow incidental mixed
-`Decoder.Token`/`Decoder.Decode` accounting, or rebuilding release subjects with
-the compatibility toolchain merely to test source support, is rejected.
+Changing the [U1 JSON depth boundaries](#u1-lossless-control-seams) to follow
+incidental mixed `Decoder.Token`/`Decoder.Decode` accounting is rejected. A newer compiler's
+successful test run does not authorize changing the release toolchain.
 
 ## Release SBOM Canonical Representation
 
@@ -103,11 +103,24 @@ available without parsing later input. Empty input, a malformed first or second
 value, and any parser failure are invalid. This bounds top-level-value retention;
 it does not establish a new byte-size limit for the single supplied document.
 
-The sole value MUST satisfy the existing closed SPDX document profile. Package
+The sole value MUST satisfy the closed SPDX document profile. Package
 and file SPDX identifiers and checksums MUST use absolute whole-string grammar;
-line-start or pre-final-newline matches are insufficient. This decision does not
-change accepted package roles, licenses, relationships, archive binding, or
-generator output.
+line-start or pre-final-newline matches are insufficient.
+
+The pinned Syft v1.57.2 output uses SPDX license-list version 3.29. Each Go
+package's `sourceInfo` MUST be
+`acquired package info from go module information: /<archive-root>/<binary>`,
+with that archive's exact root and binary names. The archive package alone has
+`filesAnalyzed=true` and a `packageVerificationCode` containing only
+`packageVerificationCodeValue`. The verifier MUST recompute that value as SHA-1
+of the binary's lowercase hexadecimal SHA-1 digest, without a newline, because
+the closed profile contains exactly one analyzed file. The archive MUST have
+exactly one `CONTAINS` relationship to that binary. The complete allowed
+relationship set is enumerated by the relationship check in
+[`verify-release-artifacts.sh`](../scripts/verify-release-artifacts.sh).
+Missing, extra, or altered verification fields and
+relationships fail validation. Focused profile mutations and complete archive
+mutations MUST cover these conditions and a well-formed but incorrect code.
 
 When `GITHUB_WORKSPACE` is nonempty, the validator MUST reject the supplied file
 if that path occurs as a substring of any original decoded JSON string token.
@@ -366,7 +379,7 @@ unchanged payload bytes and retained-copy ownership, error-description decisions
 visitor storage/nesting bounds, URL/upgrade prevention, and ordered/atomic batch
 results. Depth regressions derive each profile's exact accepted limit and
 limit-plus-one directly from Bargeboard's contract and cover A/deep-valid-B/C
-continuation under both supported toolchains. Mixed `Token`/`Decode` behavior
+continuation under the pinned CI toolchain. Mixed `Token`/`Decode` behavior
 MUST NOT serve as a deep-input oracle. Adversarial outer-grammar, truncation,
 byte-mutation, and shallow fuzz cases MAY compare both profiles with
 `encoding/json` and the pre-U1 decoding pattern where input size cannot reach a

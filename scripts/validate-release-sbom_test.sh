@@ -9,7 +9,7 @@ readonly archive_digest=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 readonly namespace="https://github.com/CtrlSpice/bargeboard/sbom/sha256-$archive_digest"
 readonly created=2026-09-09T00:00:00Z
 readonly archive_version="sha256:$archive_digest"
-readonly go_version=go1.26.8
+readonly go_version=go1.27.4
 readonly source=bargeboard_1.2.3_linux_amd64/bargeboard
 readonly project_package=github.com/CtrlSpice/bargeboard
 readonly other_relationship_comment="evident-by: indicates the package's existence is evident by the given file"
@@ -32,8 +32,8 @@ fixture() {
       SPDXID: "SPDXRef-DOCUMENT",
       creationInfo: {
         created: $created,
-        creators: ["Organization: Anchore, Inc", "Tool: syft-1.51.1"],
-        licenseListVersion: "3.28"
+        creators: ["Organization: Anchore, Inc", "Tool: syft-1.57.2"],
+        licenseListVersion: "3.29"
       },
       dataLicense: "CC0-1.0",
       documentNamespace: $namespace,
@@ -56,10 +56,13 @@ fixture() {
           checksums: [{algorithm: "SHA256", checksumValue: $archive_digest}],
           copyrightText: "NOASSERTION",
           downloadLocation: "NOASSERTION",
-          filesAnalyzed: false,
+          filesAnalyzed: true,
           licenseConcluded: "NOASSERTION",
           licenseDeclared: "NOASSERTION",
           name: $archive,
+          packageVerificationCode: {
+            packageVerificationCodeValue: "56e892b750b146f39a486af8c31d555e9c771b3e"
+          },
           primaryPackagePurpose: "ARCHIVE",
           supplier: "NOASSERTION",
           versionInfo: $archive_version
@@ -77,7 +80,7 @@ fixture() {
           licenseConcluded: "Apache-2.0",
           licenseDeclared: "Apache-2.0",
           name: $project,
-          sourceInfo: ("acquired package info from go module information: " + $source),
+          sourceInfo: ("acquired package info from go module information: /" + $source),
           supplier: "NOASSERTION",
           versionInfo: "v1.2.3"
         },
@@ -89,7 +92,7 @@ fixture() {
           licenseConcluded: "NOASSERTION",
           licenseDeclared: "BSD-3-Clause",
           name: "stdlib",
-          sourceInfo: ("acquired package info from go module information: " + $source),
+          sourceInfo: ("acquired package info from go module information: /" + $source),
           supplier: "NOASSERTION",
           versionInfo: $go_version
         },
@@ -110,7 +113,7 @@ fixture() {
           licenseConcluded: "NOASSERTION",
           licenseDeclared: "NOASSERTION",
           name: "example.com/dependency",
-          sourceInfo: ("acquired package info from go module information: " + $source),
+          sourceInfo: ("acquired package info from go module information: /" + $source),
           supplier: "NOASSERTION",
           versionInfo: "v1.0.0"
         }
@@ -270,6 +273,31 @@ reject 'document namespace' '.documentNamespace = "https://example.invalid/sbom"
 reject 'creation time' '.creationInfo.created = "2099-01-01T00:00:00Z"'
 reject 'creator identity' '.creationInfo.creators[1] = "Tool: unrelated"'
 reject 'license-list version' '.creationInfo.licenseListVersion = "0.0"'
+reject 'superseded license-list version' '.creationInfo.licenseListVersion = "3.28"'
+reject 'superseded scanner identity' '.creationInfo.creators[1] = "Tool: syft-1.51.1"'
+reject 'archive analysis absent' '
+  (.packages[] | select(.primaryPackagePurpose == "ARCHIVE") | .filesAnalyzed) = false
+'
+reject 'archive verification absent' '
+  del(.packages[] | select(.primaryPackagePurpose == "ARCHIVE") | .packageVerificationCode)
+'
+reject 'archive verification terminal newline' '
+  (.packages[] | select(.primaryPackagePurpose == "ARCHIVE") |
+    .packageVerificationCode.packageVerificationCodeValue) += "\n"
+'
+reject 'archive verification excludes files' '
+  (.packages[] | select(.primaryPackagePurpose == "ARCHIVE") |
+    .packageVerificationCode.packageVerificationCodeExcludedFiles) = ["bargeboard"]
+'
+reject 'dependency verification code' '
+  (.packages[] | select(.name == "example.com/dependency") | .packageVerificationCode) = {
+    packageVerificationCodeValue: "56e892b750b146f39a486af8c31d555e9c771b3e"
+  }
+'
+reject 'source path without archive-root marker' '
+  (.packages[] | select(.name == "stdlib") | .sourceInfo) |=
+    sub("information: /"; "information: ")
+'
 reject 'unknown creation-info field' '.creationInfo.unexpected = true'
 reject 'unknown package field' \
   '(.packages[] | select(.name == "example.com/dependency") | .unexpected) = true'
@@ -352,7 +380,7 @@ reject 'standard-library source' \
 reject 'standard-library package shape' '
   (.packages[] | select(.name == "stdlib") | .externalRefs) = [{
     referenceCategory: "PACKAGE-MANAGER",
-    referenceLocator: "pkg:golang/stdlib@go1.26.8",
+    referenceLocator: "pkg:golang/stdlib@go1.27.4",
     referenceType: "purl"
   }]
 '

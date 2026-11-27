@@ -30,25 +30,24 @@ assert_rejected() {
 
 assert_record \
   Linux X64 \
-  $'1.26.8\tgo1.26.8.linux-amd64.tar.gz\td0f743b33e8d8945e6b1f432edd15785c70507121d6e2a723b21285eddf8b57b'
+  $'1.27.4\tgo1.27.4.linux-amd64.tar.gz\t7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840'
 assert_record \
   macOS X64 \
-  $'1.26.8\tgo1.26.8.darwin-amd64.tar.gz\t186be014105aa6542b767d2c6ed5cca10a0214bdff809ef1724022a8c7894150'
+  $'1.27.4\tgo1.27.4.darwin-amd64.tar.gz\t2b799377704ef12db39bd254995d5c348c9cc8d86562ca817724390e56c38f43'
 assert_record \
   macOS ARM64 \
-  $'1.26.8\tgo1.26.8.darwin-arm64.tar.gz\ta012b25b571bd0138a03dcd25375ceba866fe5ca822f426d2c66a4de56fd3f4b'
+  $'1.27.4\tgo1.27.4.darwin-arm64.tar.gz\t91a44a2b8a716600ad94a4f143e156116620db8828086a6e3602291be9bd0bb4'
 assert_record \
   Windows X64 \
-  $'1.26.8\tgo1.26.8.windows-amd64.zip\tb92c3b2adae85a11ba71fe7216daf0d84e82af4c8ab6c5625807f28622043a59'
+  $'1.27.4\tgo1.27.4.windows-amd64.zip\t178ab98950ac69ab25069307dc6ade79f3816e414cce95b4da166a115cde1e7e'
 assert_record \
   Linux X64 \
-  $'1.26.8\tgo1.26.8.linux-amd64.tar.gz\td0f743b33e8d8945e6b1f432edd15785c70507121d6e2a723b21285eddf8b57b' \
-  1.26.8
-assert_record \
-  Linux X64 \
-  $'1.27.1\tgo1.27.1.linux-amd64.tar.gz\t63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445' \
-  1.27.1
+  $'1.27.4\tgo1.27.4.linux-amd64.tar.gz\t7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840' \
+  1.27.4
 
 assert_rejected Linux ARM64
 assert_rejected macOS ARM64 1.27.1
 assert_rejected Linux X64 1.27.0
+assert_rejected Linux X64 1.26.8
+assert_rejected Linux X64 latest
+assert_rejected Windows ARM64

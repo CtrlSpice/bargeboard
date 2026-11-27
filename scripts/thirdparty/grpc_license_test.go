@@ -1,6 +1,6 @@
 package main
 
-// Complete internal/casing/LICENSE.md from grpc-gateway v2.29.0, including
+// Complete internal/casing/LICENSE.md from grpc-gateway v2.34.0, including
 // its final blank line. Provenance and SHA-256: notices/README.md.
 const testGrpcGoLicense = `Copyright 2010, 2019 The Go Authors.  All rights reserved.
 

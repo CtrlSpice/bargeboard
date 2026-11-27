@@ -175,6 +175,25 @@ func TestHTTPErrorIsOpaqueAndExtractable(t *testing.T) {
 	}
 }
 
+func TestHTTPErrorPreservesPointerIdentity(t *testing.T) {
+	failure := setupHTTPFailure(stageNegotiate, http.StatusServiceUnavailable, "60", time.Unix(100, 0))
+	wrapped := fmt.Errorf("bounded wrapper: %w", failure)
+	if !errors.Is(wrapped, failure) || errors.Unwrap(wrapped) != failure || asSetupHTTPError(wrapped) != failure {
+		t.Fatalf("wrapped HTTP error lost pointer identity: %v", wrapped)
+	}
+	if errors.Is(wrapped, setupHTTPFailure(stageNegotiate, http.StatusServiceUnavailable, "60", time.Unix(100, 0))) {
+		t.Fatal("distinct HTTP failures share error identity")
+	}
+	if _, ok := any(*failure).(error); ok {
+		t.Fatal("a copied HTTP failure can enter an error chain without pointer identity")
+	}
+	if got, want := *failure, (setupHTTPError{
+		stage: stageNegotiate, status: http.StatusServiceUnavailable, retryAt: time.Unix(160, 0),
+	}); got != want {
+		t.Fatalf("wrapping changed HTTP metadata: got %#v, want %#v", got, want)
+	}
+}
+
 func TestHTTPRetryAfterRejectsMonotonicDeadlineOverflow(t *testing.T) {
 	// Obtain a monotonic value, then place its reading above the sub-second
 	// headroom left by the largest representable whole-second duration.

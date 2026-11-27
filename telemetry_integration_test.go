@@ -27,6 +27,7 @@ import (
 	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/confmap/provider/fileprovider"
 	"go.opentelemetry.io/collector/extension"
+	"go.opentelemetry.io/collector/extension/extensioncapabilities"
 	"go.opentelemetry.io/collector/featuregate"
 	"go.opentelemetry.io/collector/otelcol"
 	"go.opentelemetry.io/collector/pipeline"
@@ -37,9 +38,11 @@ import (
 // Starting/OK handling, without adding an extension to the shipped distribution.
 type syntheticStatusWatcher struct{ logger *zap.Logger }
 
+var _ extensioncapabilities.ComponentStatusWatcher = (*syntheticStatusWatcher)(nil)
+
 func (*syntheticStatusWatcher) Start(context.Context, component.Host) error { return nil }
 func (*syntheticStatusWatcher) Shutdown(context.Context) error              { return nil }
-func (w *syntheticStatusWatcher) ComponentStatusChanged(id *componentstatus.InstanceID, event *componentstatus.Event) {
+func (w *syntheticStatusWatcher) Changed(id *componentstatus.InstanceID, event *componentstatus.Event) {
 	if id.ComponentID().String() != "f1livetiming" {
 		return
 	}

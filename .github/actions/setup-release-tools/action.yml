@@ -18,19 +18,19 @@ runs:
           printf 'unsupported release-tools runner: %s/%s\n' "$RUNNER_OS" "$RUNNER_ARCH" >&2
           exit 1
         fi
-        readonly syft_archive=syft_1.51.1_linux_amd64.tar.gz
-        readonly syft_checksum=8fcb33017a0dc1058298c923c436d19dfa68ae93968e0b423248542e3afb9fc3
+        readonly syft_archive=syft_1.57.2_linux_amd64.tar.gz
+        readonly syft_checksum=ad92bd3ec1b94a3df01d4d0aec199afa9c42b72e86da436ff5f837914d32706b
         readonly goreleaser_archive=goreleaser-pro_Linux_x86_64.tar.gz
-        readonly goreleaser_checksum=8480fde5637af908722b40c4dd7b4400058d5bade28e2dcc41ef1f16886888bd
+        readonly goreleaser_checksum=ad70c01676333af54d5540e4b1b789539c5c8b13986ab108b727bbe4455dd7d3
         readonly install_root="$RUNNER_TEMP/authenticated-release-tools"
         trap 'rm -f "$RUNNER_TEMP/$syft_archive" "$RUNNER_TEMP/$goreleaser_archive"' EXIT
 
         curl --fail --location --proto '=https' --proto-redir '=https' \
           --retry 3 --retry-all-errors --output "$RUNNER_TEMP/$syft_archive" \
-          "https://github.com/anchore/syft/releases/download/v1.51.1/$syft_archive"
+          "https://github.com/anchore/syft/releases/download/v1.57.2/$syft_archive"
         curl --fail --location --proto '=https' --proto-redir '=https' \
           --retry 3 --retry-all-errors --output "$RUNNER_TEMP/$goreleaser_archive" \
-          "https://github.com/goreleaser/goreleaser-pro/releases/download/v2.18.1/$goreleaser_archive"
+          "https://github.com/goreleaser/goreleaser-pro/releases/download/v2.20.3/$goreleaser_archive"
         bash "$GITHUB_WORKSPACE/scripts/verify-sha256.sh" \
           "$RUNNER_TEMP/$syft_archive" "$syft_checksum"
         bash "$GITHUB_WORKSPACE/scripts/verify-sha256.sh" \

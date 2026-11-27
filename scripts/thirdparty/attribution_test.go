@@ -89,11 +89,12 @@ func TestReviewedSourcePolicy(t *testing.T) {
 	for _, tt := range []struct {
 		fixture, path, version, sum, file, digest string
 	}{
-		{"cbrt", "stdlib", "go1.26.8", "-", "src/math/cbrt.go", "abbc05b6173bb8800201f22499ddda1fd32bf8fd4dac764d14befa911845c365"},
-		{"cephes", "stdlib", "go1.26.8", "-", "src/math/cmplx/sqrt.go", "2893977d9c52c29b61d86c6cca5492f53895be8dfd598228ffdcbc3fff5bbae7"},
-		{"fiat", "stdlib", "go1.26.8", "-", "src/crypto/internal/fips140/edwards25519/scalar.go", "d63eafda50d8ef034c574babbd3348a4f8bb6995d692a56b2fee6fca0f15f10b"},
-		{"grpc", "github.com/grpc-ecosystem/grpc-gateway/v2", "v2.29.0", "h1:5VipnvEpbqr2gA2VbM+nYVbkIF28c5ZQfqCBQ5g2xfk=", "runtime/pattern.go", "245eaa90da43a552ab725ffa5cbb89f87f73ccfc68b0be51fb4ffbe6009be7a3"},
-		{"ntgo", "github.com/shirou/gopsutil/v4", "v4.26.7", "h1:IXzpHz/dkMRYAhKkOXr1HB6SuzWU3eoyyeWe7g3bNZc=", "internal/common/endian.go", "3aef969f82b3136421f2e033b7c73c32dc5a79850751e19f9081c7085dfd837c"},
+		{"cbrt", "stdlib", "go1.27.4", "-", "src/math/cbrt.go", "abbc05b6173bb8800201f22499ddda1fd32bf8fd4dac764d14befa911845c365"},
+		{"cephes", "stdlib", "go1.27.4", "-", "src/math/cmplx/sqrt.go", "2893977d9c52c29b61d86c6cca5492f53895be8dfd598228ffdcbc3fff5bbae7"},
+		{"fiat", "stdlib", "go1.27.4", "-", "src/crypto/internal/fips140/edwards25519/scalar.go", "d63eafda50d8ef034c574babbd3348a4f8bb6995d692a56b2fee6fca0f15f10b"},
+		{"fiat-p256", "stdlib", "go1.27.4", "-", "src/crypto/internal/fips140/nistec/p256_ordinv.go", "819fa70a1f6b0f78d58e2d74cf94c4daece1d2214b9b5cd503016d3b2d29661f"},
+		{"grpc", "github.com/grpc-ecosystem/grpc-gateway/v2", "v2.34.0", "h1:vzlTzzi4tHLa/JQdIE5LeXw6SEX5EVVhq/VPqKHnKOk=", "runtime/pattern.go", "245eaa90da43a552ab725ffa5cbb89f87f73ccfc68b0be51fb4ffbe6009be7a3"},
+		{"ntgo", "github.com/shirou/gopsutil/v4", "v4.26.10", "h1:MJN6euesJx53MVEjscYeyRSRcrdIcy3sz5k9nosjldg=", "internal/common/endian.go", "3aef969f82b3136421f2e033b7c73c32dc5a79850751e19f9081c7085dfd837c"},
 		{"half-rs", "github.com/x448/float16", "v0.8.4", "h1:qLwI1I70+NjRFUR3zs1JPUCgaCXSh3SW62uAKT1mSBM=", "float16.go", "78ccf3f8db7542088bb6f300dc9741fc82380ff0255169e852f815e9ba59e8a6"},
 		{"cephes", "gonum.org/v1/gonum", "v0.17.0", "h1:VbpOemQlsSMrYmn7T2OUvQ4dqxQXU+ouZFQsZOx50z4=", "internal/cmplx64/sqrt.go", "2893977d9c52c29b61d86c6cca5492f53895be8dfd598228ffdcbc3fff5bbae7"},
 		{"LINPACK", "gonum.org/v1/gonum", "v0.17.0", "h1:VbpOemQlsSMrYmn7T2OUvQ4dqxQXU+ouZFQsZOx50z4=", "mat/cholesky.go", "ecdefb4690f61ba875747ed10b802692a14a04657e6caa79642b1e84e34cd5ba"},
@@ -150,7 +151,7 @@ func TestReviewedSourcePolicy(t *testing.T) {
 		})
 	}
 	for _, text := range []string{"// Permission to use, copy, modify, and distribute this\n", "// fiat-crypto code comes under the following license.\n"} {
-		if _, err := classifyAttributedSource(&component{path: "stdlib", version: "go1.26.8", sum: "-"}, "src/math/cbrt.go", []byte(text)); err == nil {
+		if _, err := classifyAttributedSource(&component{path: "stdlib", version: "go1.27.4", sum: "-"}, "src/math/cbrt.go", []byte(text)); err == nil {
 			t.Errorf("accepted loose fragment %q", text)
 		}
 	}
@@ -244,9 +245,9 @@ func TestCollectAttributionAssociations(t *testing.T) {
 		documents          map[string]string
 		local              []string
 	}{
-		{"github.com/shirou/gopsutil/v4", "v4.26.7", "h1:IXzpHz/dkMRYAhKkOXr1HB6SuzWU3eoyyeWe7g3bNZc=", map[string][]string{"internal/common/endian.go": {"ntgo"}}, nil, []string{"ntgo-LICENSE.txt", "ntgo-source-notice.txt"}},
+		{"github.com/shirou/gopsutil/v4", "v4.26.10", "h1:MJN6euesJx53MVEjscYeyRSRcrdIcy3sz5k9nosjldg=", map[string][]string{"internal/common/endian.go": {"ntgo"}}, nil, []string{"ntgo-LICENSE.txt", "ntgo-source-notice.txt"}},
 		{"github.com/x448/float16", "v0.8.4", "h1:qLwI1I70+NjRFUR3zs1JPUCgaCXSh3SW62uAKT1mSBM=", map[string][]string{"float16.go": {"half-rs-header", "half-rs"}}, nil, []string{"half-rs-LICENSE-MIT.txt", "half-rs-provenance.txt"}},
-		{"github.com/grpc-ecosystem/grpc-gateway/v2", "v2.29.0", "h1:5VipnvEpbqr2gA2VbM+nYVbkIF28c5ZQfqCBQ5g2xfk=", map[string][]string{"runtime/pattern.go": {"grpc"}}, nil, nil},
+		{"github.com/grpc-ecosystem/grpc-gateway/v2", "v2.34.0", "h1:vzlTzzi4tHLa/JQdIE5LeXw6SEX5EVVhq/VPqKHnKOk=", map[string][]string{"runtime/pattern.go": {"grpc"}}, nil, nil},
 		{"gonum.org/v1/gonum", "v0.17.0", "h1:VbpOemQlsSMrYmn7T2OUvQ4dqxQXU+ouZFQsZOx50z4=", map[string][]string{"internal/cmplx64/sqrt.go": {"cephes"}, "mat/cholesky.go": {"LINPACK"}}, map[string]string{"THIRD_PARTY_LICENSES/Cephes-LICENSE": "gonum-Cephes-LICENSE", "THIRD_PARTY_LICENSES/Go-LICENSE": "gonum-Go-LICENSE"}, []string{"LINPACK.txt"}},
 	} {
 		t.Run(tt.path, func(t *testing.T) {
@@ -298,7 +299,7 @@ func TestCollectAttributionAssociations(t *testing.T) {
 }
 
 func TestSupplementalFailurePreservesState(t *testing.T) {
-	current := &component{path: "github.com/shirou/gopsutil/v4", version: "v4.26.7", sum: "h1:IXzpHz/dkMRYAhKkOXr1HB6SuzWU3eoyyeWe7g3bNZc=", root: "module", sourceFile: map[string]struct{}{filepath.Join("module", "internal", "common", "endian.go"): {}}, materials: map[string][]byte{"LICENSE": []byte(testMITLicense)}, mpl: true}
+	current := &component{path: "github.com/shirou/gopsutil/v4", version: "v4.26.10", sum: "h1:MJN6euesJx53MVEjscYeyRSRcrdIcy3sz5k9nosjldg=", root: "module", sourceFile: map[string]struct{}{filepath.Join("module", "internal", "common", "endian.go"): {}}, materials: map[string][]byte{"LICENSE": []byte(testMITLicense)}, mpl: true}
 	want := *current
 	want.materials = maps.Clone(current.materials)
 	size := maxNoticeMaterialSize
@@ -323,7 +324,7 @@ func TestCollectAttributionRejectsChangedScopeAndGroups(t *testing.T) {
 		t.Run(change, func(t *testing.T) {
 			root := t.TempDir()
 			file := filepath.Join(root, "internal", "common", "endian.go")
-			current := &component{path: "github.com/shirou/gopsutil/v4", version: "v4.26.7", sum: "h1:IXzpHz/dkMRYAhKkOXr1HB6SuzWU3eoyyeWe7g3bNZc=", root: root, sourceFile: map[string]struct{}{file: {}}, materials: map[string][]byte{}}
+			current := &component{path: "github.com/shirou/gopsutil/v4", version: "v4.26.10", sum: "h1:MJN6euesJx53MVEjscYeyRSRcrdIcy3sz5k9nosjldg=", root: root, sourceFile: map[string]struct{}{file: {}}, materials: map[string][]byte{}}
 			group := noticeFixture(t, "ntgo")
 			var extra string
 			switch change {

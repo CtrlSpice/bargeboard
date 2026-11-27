@@ -382,8 +382,10 @@ for archive in "${archives[@]}"; do
 
   if command -v sha1sum >/dev/null 2>&1; then
     binary_sha1="$(sha1sum "$binary_path" | cut -d ' ' -f 1)"
+    verification_code="$(printf '%s' "$binary_sha1" | sha1sum | cut -d ' ' -f 1)"
   else
     binary_sha1="$(shasum -a 1 "$binary_path" | cut -d ' ' -f 1)"
+    verification_code="$(printf '%s' "$binary_sha1" | shasum -a 1 | cut -d ' ' -f 1)"
   fi
   if command -v sha256sum >/dev/null 2>&1; then
     binary_sha256="$(sha256sum "$binary_path" | cut -d ' ' -f 1)"
@@ -409,6 +411,14 @@ for archive in "${archives[@]}"; do
     exit 1
   fi
 
+  if ! jq -e --arg archive "$archive" --arg code "$verification_code" '
+    [.packages[] | select(.name == $archive) | .packageVerificationCode] ==
+      [{packageVerificationCodeValue: $code}]
+  ' "$sbom" >/dev/null; then
+    printf 'SBOM archive verification code does not match binary payload: %s\n' "$sbom" >&2
+    exit 1
+  fi
+
   module_version="$(jq -er --arg package "$project_package" '
     select(.Path == $package and .Main.Path == $package) |
     .Main.Version | select(type == "string" and length > 0)
@@ -427,7 +437,7 @@ for archive in "${archives[@]}"; do
         .name == $package and
         .versionInfo == $version and
         .checksums == null and
-        .sourceInfo == ("acquired package info from go module information: " + $source) and
+        .sourceInfo == ("acquired package info from go module information: /" + $source) and
         ([.externalRefs[]? | select(.referenceType == "purl")]) == [{
           referenceCategory: "PACKAGE-MANAGER",
           referenceType: "purl",
@@ -505,7 +515,7 @@ for archive in "${archives[@]}"; do
             "licenseDeclared", "name", "sourceInfo", "supplier", "versionInfo"
           ] and
           .versionInfo == $version and
-          .sourceInfo == ("acquired package info from go module information: " + $source) and
+          .sourceInfo == ("acquired package info from go module information: /" + $source) and
           .checksums == [{algorithm: "SHA256", checksumValue: $checksum}] and
           .licenseConcluded == "NOASSERTION" and
           .licenseDeclared == "NOASSERTION" and
@@ -535,7 +545,8 @@ for archive in "${archives[@]}"; do
     ([.packages[] | select(.SPDXID != $root) | .SPDXID] | sort) as $contained |
     ([.packages[] | select(.SPDXID != $root and .SPDXID != $project) | .SPDXID] | sort) as $dependencies |
     ([
-      ["SPDXRef-DOCUMENT", "DESCRIBES", $root]
+      ["SPDXRef-DOCUMENT", "DESCRIBES", $root],
+      [$root, "CONTAINS", $binary]
     ] +
       ($contained | map([$root, "CONTAINS", .])) +
       ($dependencies | map([., "DEPENDENCY_OF", $project])) +

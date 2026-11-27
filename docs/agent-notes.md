@@ -7,6 +7,53 @@ landing. Notes, issue assignments, and milestones cannot override either source.
 
 ## Approved Decisions
 
+### DEPENDENCY-REFRESH — Update dependencies and the release toolchain
+
+**Approved; implementation in progress on `chore/refresh-dependencies`.** The user
+requested current dependencies, including viewer v0.8.1, with small verified
+commits on feature branches and pushes as work progresses. They requested
+`openai/gpt-6.1-sol` for adversarial review after each pushed candidate.
+
+`k8s.io/kube-openapi v0.0.0-20261124193638-7c5f465a2be7` requires Go 1.27. The user approved
+Go 1.27.0 as the module minimum and authenticated Go 1.27.4 for CI and releases.
+This supersedes [GO127-COMPAT](#go127-compat--verify-the-explicit-receiver-contract-on-go-127)'s release-toolchain pin. The refresh must update
+standard-library attribution, dependency notices, corresponding source pins,
+SBOM expectations, and toolchain checks together. Required verification includes
+`make check`, the receiver race suite, release-tool tests, workflow validation,
+and complete release artifact verification.
+
+The candidate uses Collector's v0.166.0 experimental modules and v1.72.0 stable
+modules, OTel v1.47.0, Syft v1.57.2,
+GoReleaser Pro v2.20.3, and setup-node v7.1.0. `gobwas/glob` remains at v0.2.3:
+both v1.0.0 and v1.1.0 remove the `Glob` API required by Collector confmap.
+HTTP setup errors implement `error` only as pointers, preserving wrapped error
+identity under Go 1.27 vet. The foreground status test implements Collector's
+new `extensioncapabilities.ComponentStatusWatcher.Changed` method.
+
+The release checks and exact commands are in the `package` job of
+[check.yml](../.github/workflows/check.yml). Local verification uses that job's
+scripts and an authenticated toolchain with `GOTOOLCHAIN=local`. The archive
+mutation suite also requires `EXPECTED_GO_VERSION=go1.27.4`; set
+`EXPECTED_VCS_MODIFIED=true` only when testing a snapshot built from an edited
+working tree.
+
+### EMBEDDED-VIEWER — Configure the persistent local viewer
+
+**Approved; implementation pending after the dependency refresh.** The user
+requested the viewer as Bargeboard's configured exporter and approved using the
+viewer distribution as the integration reference. The accepted setup is viewer
+v0.8.1, its `desktop` exporter and `duckdb` extension, UI at `127.0.0.1:8000`,
+existing OTLP listener ports, `db: ./bargeboard.duckdb`, and `db_max_size: "0"`.
+Recorded data persists across shutdown; automatic pruning is disabled.
+
+The user approved native CGO builds for the existing five release targets while
+preserving artifact verification. The canonical topology update belongs in the
+viewer integration commit. The follow-on goal is accurate F1 telemetry in the
+viewer, implemented from accepted signal mappings in tested, pushed, independently
+reviewed slices. Pending source mappings still require evidence and a decision.
+Current Go production reduces SessionInfo and invokes a no-op post-reduction
+consumer; it does not yet emit racing traces, metrics, or logs.
+
 ### DEL-TS — Remove the obsolete replay implementation
 
 **Landed in PR #45 at `2290ca4c45123d492a367d83d9de1df6b1c6855f`.**

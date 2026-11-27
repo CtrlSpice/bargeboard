@@ -261,6 +261,16 @@ mutate_sbom "$work/dist-invalid-archive-license" '
 '
 expect_failure 'SPDX archive license' 'invalid release SPDX document' "$work/dist-invalid-archive-license"
 
+cp -R "$source_dist" "$work/dist-wrong-verification-code"
+mutate_sbom "$work/dist-wrong-verification-code" '
+  (.packages[] | select(.primaryPackagePurpose == "ARCHIVE") |
+    .packageVerificationCode.packageVerificationCodeValue) = "0000000000000000000000000000000000000000"
+'
+expect_failure \
+  'SPDX archive verification binding' \
+  'SBOM archive verification code does not match binary payload' \
+  "$work/dist-wrong-verification-code"
+
 cp -R "$source_dist" "$work/dist-archive-purl"
 mutate_sbom "$work/dist-archive-purl" '
   (.packages[] | select(.primaryPackagePurpose == "ARCHIVE") | .externalRefs) = [{
@@ -406,6 +416,18 @@ expect_failure \
   'SPDX dependency relationships' \
   'SBOM relationships do not match binary package ownership' \
   "$work/dist-incomplete-relationships"
+
+cp -R "$source_dist" "$work/dist-missing-binary-containment"
+mutate_sbom "$work/dist-missing-binary-containment" '
+  .files[0].SPDXID as $binary |
+  .relationships = [.relationships[] | select(
+    .relatedSpdxElement != $binary or .relationshipType != "CONTAINS"
+  )]
+'
+expect_failure \
+  'SPDX archive binary containment' \
+  'SBOM relationships do not match binary package ownership' \
+  "$work/dist-missing-binary-containment"
 
 cp -R "$source_dist" "$work/dist-extra-relationship"
 mutate_sbom "$work/dist-extra-relationship" '

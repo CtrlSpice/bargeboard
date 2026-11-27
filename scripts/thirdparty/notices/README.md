@@ -2,10 +2,12 @@
 
 `../attribution.go` associates complete source comment groups and supplemental
 texts with the pinned owning module, its Go checksum, and selected source path.
-These are the approved attribution-cleanup inputs for the five-target release
-graph at `b87dc4b02a1ceaddc1cfaa1a91c689c4cc5ba042`. They approve no license family
-or permission fragment generally. The existing MPL source archive requirements
-remain separate; none of these additions requires a binary source offer.
+The current inputs cover 193 components in the five-target release graph with
+Go 1.27.4. The [refresh record](#go-1274-and-dependency-refresh) gives the current
+output digest and the changes from the previous graph.
+Approvals apply to exact texts and source paths, not to license families or
+permission fragments. The MPL source archive requirements remain separate;
+none of these attribution supplements requires a binary source offer.
 
 Go comments are selected throughout each parsed file, in lexical order. Whole
 groups retain their comment delimiters, indentation, technical discussion, and
@@ -26,18 +28,18 @@ notices. Supplemental files have their own complete normalized text pins.
 
 | Material | Reviewed scope and terms |
 |---|---|
-| Sun/fdlibm | Fifteen Go 1.26.8 math groups; retain the notice-preservation grant and all three attribution variants: 1993 SunPro, 1993 SunSoft (`cbrt.go`), and 2004 Sun (`exp.go`). |
+| Sun/fdlibm | Fifteen Go 1.27.4 math groups; retain the notice-preservation grant and all three attribution variants: 1993 SunPro, 1993 SunSoft (`cbrt.go`), and 2004 Sun (`exp.go`). |
 | Cephes | Six distinct custom free-use/no-support-or-guarantee groups across twelve Go files and Gonum `internal/cmplx64/sqrt.go`. Preserve the descriptive commercial-product passage. Gonum's supplemental BSD document applies to Gonum; it does not relicense Go's copies. |
-| fiat-crypto | Go `src/crypto/internal/fips140/edwards25519/scalar.go:29–55`; exact BSD-1-Clause group, including the original Berkeley Software Design disclaimer. Its retention condition applies to source redistribution, without requiring a source offer with binaries. |
-| grpc-gateway | `runtime/pattern.go:266–273`, Go Authors 2009 BSD reference, plus the already-collected `internal/casing/LICENSE.md` Go BSD terms. Both the complete source reference and supporting document are checked. |
+| fiat-crypto | Go `src/crypto/internal/fips140/edwards25519/scalar.go:29–55` and `src/crypto/internal/fips140/nistec/p256_ordinv.go:74–107`; exact BSD-1-Clause groups, including the original Berkeley Software Design disclaimer. Their retention condition applies to source redistribution, without requiring a source offer with binaries. |
+| grpc-gateway | The Go Authors 2009 BSD reference in `runtime/pattern.go`, plus `internal/casing/LICENSE.md` Go BSD terms. Both the complete source reference and supporting document are checked. |
 | ntgo, half-rs, LINPACK | The exact references and supporting materials described below. |
 
-The Go fixture source is the complete Go 1.26.8 darwin-arm64 SDK:
-<https://go.dev/dl/go1.26.8.darwin-arm64.tar.gz>, archive SHA-256
-`a012b25b571bd0138a03dcd25375ceba866fe5ca822f426d2c66a4de56fd3f4b`.
+The Go fixture source is the complete Go 1.27.4 darwin-arm64 SDK:
+<https://go.dev/dl/go1.27.4.darwin-arm64.tar.gz>, archive SHA-256
+`91a44a2b8a716600ad94a4f143e156116620db8828086a6e3602291be9bd0bb4`.
 The source groups retain their original FreeBSD/Netlib references. Those historical
 URLs identify provenance; the pinned Go archive supplies the reviewed bytes.
-The fiat-crypto notice is corroborated by
+The scalar fiat-crypto notice is corroborated by
 [LICENSE-BSD-1 at v0.0.9](https://github.com/mit-plv/fiat-crypto/blob/23d2dbc4ab897d14bde4404f70cd6991635f9c01/LICENSE-BSD-1),
 SHA-256 `0c1240e29b4a2c528bcc3ccc38a98b1dba5e3e6b465da910208935f082e2ced6`.
 
@@ -45,15 +47,15 @@ SHA-256 `0c1240e29b4a2c528bcc3ccc38a98b1dba5e3e6b465da910208935f082e2ced6`.
 
 | Owning module | Go module checksum | Selected source and raw SHA-256 |
 |---|---|---|
-| `github.com/grpc-ecosystem/grpc-gateway/v2@v2.29.0` | `h1:5VipnvEpbqr2gA2VbM+nYVbkIF28c5ZQfqCBQ5g2xfk=` | `runtime/pattern.go`: `babf890951c6cf8bcfdfc1e74b7797bad0de3fdbfd4c3ecb3410934e86252ac2` |
-| `github.com/shirou/gopsutil/v4@v4.26.7` | `h1:IXzpHz/dkMRYAhKkOXr1HB6SuzWU3eoyyeWe7g3bNZc=` | `internal/common/endian.go`: `cd16be328bef13a20d71dc380f0551b8e2406a84354750cfc77cebc65e4fd424` |
+| `github.com/grpc-ecosystem/grpc-gateway/v2@v2.34.0` | `h1:vzlTzzi4tHLa/JQdIE5LeXw6SEX5EVVhq/VPqKHnKOk=` | `runtime/pattern.go`: `0f9e96257309a8e2b5d7b8577b025b883d2eae36e6659de566f2e391978a345c` |
+| `github.com/shirou/gopsutil/v4@v4.26.10` | `h1:MJN6euesJx53MVEjscYeyRSRcrdIcy3sz5k9nosjldg=` | `internal/common/endian.go`: `cd16be328bef13a20d71dc380f0551b8e2406a84354750cfc77cebc65e4fd424` |
 | `github.com/x448/float16@v0.8.4` | `h1:qLwI1I70+NjRFUR3zs1JPUCgaCXSh3SW62uAKT1mSBM=` | `float16.go`: `9218ebb08f57932871049a3aa35a9da8e56f0117e56ff44d36713d562b81505b` |
 | `gonum.org/v1/gonum@v0.17.0` | `h1:VbpOemQlsSMrYmn7T2OUvQ4dqxQXU+ouZFQsZOx50z4=` | `internal/cmplx64/sqrt.go`: `b710cee134b376cfbdc53437c3ab7da181682888ef1988e95ef2d239515b61d5`; `mat/cholesky.go`: `a397b3bb624daf26fe4f653cda9faf0a74a6530a535cced9b7e525dcad88c1c9` |
 
 The grpc-gateway witnesses are
-[runtime/pattern.go](https://github.com/grpc-ecosystem/grpc-gateway/blob/v2.29.0/runtime/pattern.go)
-and [internal/casing/LICENSE.md](https://github.com/grpc-ecosystem/grpc-gateway/blob/v2.29.0/internal/casing/LICENSE.md)
-from its checksum-pinned v2.29.0 module.
+[runtime/pattern.go](https://github.com/grpc-ecosystem/grpc-gateway/blob/v2.34.0/runtime/pattern.go)
+and [internal/casing/LICENSE.md](https://github.com/grpc-ecosystem/grpc-gateway/blob/v2.34.0/internal/casing/LICENSE.md)
+from its checksum-pinned v2.34.0 module.
 
 Module version/checksum and source-group matching are the executable scope checks.
 Raw source hashes above document the reviewed witnesses, rather than imposing an
@@ -166,7 +168,8 @@ read from the pinned owning module, with no fresh network requirement.
 `../testdata` holds full normalized groups, without editing the legal or technical
 passages: `cbrt.txt` (Go `src/math/cbrt.go:7–17`), `cephes.txt` (Go
 `src/math/cmplx/sqrt.go:9–29`, also Gonum `internal/cmplx64/sqrt.go:13–33`),
-`fiat.txt` (Go scalar source above), `grpc.txt` (`runtime/pattern.go:266–273`),
+`fiat.txt` (Go scalar source above), `fiat-p256.txt` (Go P256 source above),
+`grpc.txt` (Go Authors reference in `runtime/pattern.go`),
 `ntgo.txt` (`internal/common/endian.go:6–7`), `half-rs-header.txt`
 (`float16.go:1–4`), `half-rs.txt` (`float16.go:256–258`), and `LINPACK.txt`
 (`mat/cholesky.go:587–611`). Fixture hashes are asserted against the reviewed
@@ -182,10 +185,11 @@ and a complete deterministic render oracle. Required repository checks are
 `make check`, `go test -race -count=1 ./scripts/thirdparty`, and
 `git diff --check`.
 
-## Complete output delta
+## Original attribution cleanup
 
-With the complete Go 1.26.8 SDK, the five-target graph contains 178 components.
-The cleanup adds 42 material associations: the 32 post-package groups from the
+At `b87dc4b02a1ceaddc1cfaa1a91c689c4cc5ba042`, the complete Go 1.26.8 SDK
+selected 178 components across five targets. The cleanup added 42 material
+associations: the 32 post-package groups from the
 original inventory, the ntgo/half-rs/LINPACK references missed by the selector,
 and seven supplemental associations. These contribute 34 new distinct texts;
 Gonum's Go BSD document already existed under other module labels. The existing
@@ -209,3 +213,47 @@ unchanged. The comparison also checks all 32 original source occurrences against
 their complete source-file and comment-group evidence and exercises all 34 scoped
 source approvals (including the existing half-rs header) against mutations and
 additional terms. No unchecked production override is provided.
+
+## Go 1.27.4 and dependency refresh
+
+The refreshed graph selects 193 components. Compared with the Go 1.26.8 output
+above, it adds 19 modules and removes four. Collector's split status helper and
+AWS detector dependencies account for most additions. The old GCP detector
+module, go-difflib, Collector root module, and gopkg.in/yaml.v3 leave the selected
+graph. Source-file changes add 259 material associations and remove 108.
+Where the module path and material label occur in both inventories, their
+normalized text is unchanged.
+
+There are eleven new distinct texts: AWS and Smithy notices, Smithy's Apache
+license, their copied Go BSD license, go-abnf and Kubernetes httpcache MIT
+licenses, two Kubernetes Apache source headers, a Go map-hash BSD header,
+Smithy's copied Go JSON copyright, and the P256 fiat-crypto group.
+The four removed distinct texts belong to the unselected yaml.v3 source header
+and kube-openapi's removed copy of the experimental Go JSON package.
+The corresponding source payloads for `go-version v1.9.0`, `golang-lru v2.0.7`,
+and the Public Suffix List retain their SHA-256 pins in `sourceRequirements` in
+[`../main.go`](../main.go), as does the Public Suffix List license. The public-suffix
+provenance marker also matches in `golang.org/x/net v0.63.0`.
+
+The P256 source file has raw SHA-256
+`175611bd57870e7aa046836a21c223696c3f14f3ceefc3ec1b5db04604b5e5d6`.
+Its full comment group is retained in `fiat-p256.txt`, with SHA-256
+`819fa70a1f6b0f78d58e2d74cf94c4daece1d2214b9b5cd503016d3b2d29661f`.
+The other scoped source groups and supplemental text pins are unchanged.
+
+The legal-file walk excludes `.prototext` source data and YAML workflow programs
+under `.github/workflows/`. This prevents grpc-gateway's
+`license_missing_name.prototext` and the AWS SDK's `license-check.yml` from being
+classified as license documents. YAML legal documents elsewhere remain subject
+to validation; selected source comments still use the source-notice collector.
+Focused path tests cover both exclusions and retained YAML license discovery.
+
+| Complete representation | Refreshed value |
+|---|---|
+| Notices bytes | 1,417,894 |
+| Notices SHA-256 | `8daa00bae884074499cd01fcfe59e80aa9a3746a9595c75c379b997e3b4e95a1` |
+| Full inventory SHA-256 | `b0b808620437a9a1f4ae409ffccb14b83f9d38efd59a37f2b86ac1a6a830b6d0` |
+
+The inventory uses the sorted TSV format described above. Release generation
+must match the complete notices digest, and archive verification checks the
+generated notices and pinned source payloads for every target.

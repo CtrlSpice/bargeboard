@@ -4,28 +4,24 @@ set -euo pipefail
 runner_os="${1:?runner OS required}"
 runner_arch="${2:?runner architecture required}"
 
-readonly version="${3:-1.26.8}"
+readonly version="${3:-1.27.4}"
 
 case "$version/$runner_os/$runner_arch" in
-  1.26.8/Linux/X64)
+  1.27.4/Linux/X64)
     archive="go${version}.linux-amd64.tar.gz"
-    checksum=d0f743b33e8d8945e6b1f432edd15785c70507121d6e2a723b21285eddf8b57b
+    checksum=7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840
     ;;
-  1.26.8/macOS/X64)
+  1.27.4/macOS/X64)
     archive="go${version}.darwin-amd64.tar.gz"
-    checksum=186be014105aa6542b767d2c6ed5cca10a0214bdff809ef1724022a8c7894150
+    checksum=2b799377704ef12db39bd254995d5c348c9cc8d86562ca817724390e56c38f43
     ;;
-  1.26.8/macOS/ARM64)
+  1.27.4/macOS/ARM64)
     archive="go${version}.darwin-arm64.tar.gz"
-    checksum=a012b25b571bd0138a03dcd25375ceba866fe5ca822f426d2c66a4de56fd3f4b
+    checksum=91a44a2b8a716600ad94a4f143e156116620db8828086a6e3602291be9bd0bb4
     ;;
-  1.26.8/Windows/X64)
+  1.27.4/Windows/X64)
     archive="go${version}.windows-amd64.zip"
-    checksum=b92c3b2adae85a11ba71fe7216daf0d84e82af4c8ab6c5625807f28622043a59
-    ;;
-  1.27.1/Linux/X64)
-    archive="go${version}.linux-amd64.tar.gz"
-    checksum=63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445
+    checksum=178ab98950ac69ab25069307dc6ade79f3816e414cce95b4da166a115cde1e7e
     ;;
   *)
     printf 'unsupported GitHub runner for Go %s: %s/%s\n' "$version" "$runner_os" "$runner_arch" >&2
