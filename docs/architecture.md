@@ -601,11 +601,26 @@ The extension's [instrumentation is disabled by default](https://github.com/Ctrl
 The debug exporter remains compiled for diagnostic configs.
 
 Building the distribution and release binaries requires a native C/C++ toolchain
-with CGO enabled. Release builds MUST run natively for Linux and macOS on amd64
-and arm64, and Windows on amd64, while retaining the authenticated
-Go toolchain, independent artifact verification, deterministic notices and
-required corresponding source. The approved racing reducers/projector remain
-separate work; normal OTLP ingress already reaches persistent viewer storage.
+with CGO enabled. The release targets are Linux on amd64 and arm64, macOS on
+arm64, and Windows on amd64. Intel macOS is not a release target.
+Native jobs MUST use `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15`, and
+`windows-2025`, respectively, with the authenticated Go toolchain. The macOS
+deployment target MUST be `13.0`, set explicitly in C, C++, and linker flags.
+
+Each native job MUST compare its candidate binary with an independent rebuild
+from the same commit using separate source and Go cache directories. Transfer
+both sets within the current workflow run using pinned `actions/upload-artifact`
+v7.0.2 and `actions/download-artifact` v8.0.2. Central GoReleaser prebuilt
+packaging MUST package each set independently and compare the complete archives,
+SBOMs, and checksums. Verification MUST require exactly the four target binaries
+in each set, reject missing or mismatched inputs, and retain canonical archive
+validation, deterministic notices, and required corresponding source.
+Native checks MUST inspect build metadata and runtime-library requirements and
+execute the binary's version and configuration checks on its matching runner.
+The deployment target alone does not prove runtime compatibility on macOS 13.
+
+The approved racing reducers/projector remain separate work; normal OTLP
+ingress already reaches persistent viewer storage.
 
 Verification MUST check the complete shipped extension configuration and all
 three pipeline routes. A local integration test MUST send independently authored

@@ -13,8 +13,8 @@ The canonical design is the evolving [Bargeboard architecture](docs/architecture
 ## Quick start
 
 Development requires Go 1.27.0 or newer and a native C/C++ toolchain with CGO
-enabled for DuckDB. CI authenticates and verifies Go 1.27.4; release archives use
-the same pinned version.
+enabled for DuckDB. CI authenticates and verifies Go 1.27.4. Native CGO release
+packaging is in progress and must use the same pinned version.
 Before `make run`, prepare your [F1 token file](#f1-live-timing).
 
 Use Xcode Command Line Tools on macOS, GCC/G++ on Linux, or MinGW-w64 GCC/G++
@@ -42,8 +42,8 @@ that connection, follow [Live Timing connectivity](https://github.com/CtrlSpice/
 
 ## Releases
 
-GitHub releases provide native `bargeboard` archives for Linux and macOS on
-amd64 and arm64, and for Windows on amd64. Each archive includes the binary,
+Native release targets are Linux on amd64 and arm64, macOS on arm64, and Windows
+on amd64. Each `bargeboard` archive includes the binary,
 `config.yaml`, this README, and the Apache 2.0 license. The release also includes
 SHA-256 checksums and an SPDX SBOM for every archive.
 

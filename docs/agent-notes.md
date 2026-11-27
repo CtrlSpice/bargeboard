@@ -53,9 +53,10 @@ v0.8.1, its `desktop` exporter and `duckdb` extension, UI at `127.0.0.1:8000`,
 existing OTLP listener ports, `db: ./bargeboard.duckdb`, and `db_max_size: "0"`.
 Recorded data persists across shutdown; automatic pruning is disabled.
 
-The user approved native CGO builds for Linux and macOS on amd64 and arm64,
-and Windows on amd64, while preserving artifact verification. The canonical topology update belongs in the
-viewer integration commit. The follow-on goal is accurate F1 telemetry in the
+The user approved native CGO builds for Linux on amd64 and arm64, macOS on
+arm64, and Windows on amd64, matching viewer v0.8.1's release targets. Intel macOS
+is excluded. The [canonical topology](architecture.md#local-runtime-and-verification-boundaries)
+belongs in the viewer integration commit. The follow-on goal is accurate F1 telemetry in the
 viewer, implemented from accepted signal mappings in tested, pushed, independently
 reviewed slices. Pending source mappings still require evidence and a decision.
 Current Go production reduces SessionInfo and invokes a no-op post-reduction
@@ -68,14 +69,18 @@ shutdown and database reopening. It covers nanosecond timestamps and an Int64
 value beyond binary64 precision. Startup-failure tests reject a directory or
 invalid database file and preserve the existing file.
 
-Native packaging and release verification remain pending. Preliminary review
-recommends comparing each native binary with an independent rebuild from the same
-commit using separate source and cache directories. Central GoReleaser prebuilt
-packaging would then compare archives from both sets. Artifact-transfer action
-dependencies and a macOS deployment target remain proposals. A local default
-build inherited macOS 26.0 from the compiler;
-explicit C/C++/linker flags produce a 13.0 target, but runtime compatibility on
-macOS 13 has not been tested.
+Native packaging is approved and implementation remains pending. The user
+approved `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15`, and `windows-2025` for
+the four targets; explicit macOS 13.0 C/C++/linker flags; independent rebuilds
+using separate source and Go cache directories; and central GoReleaser prebuilt
+packaging with independent archive, SBOM, and checksum comparisons.
+The approved artifact-transfer actions are `actions/upload-artifact v7.0.2`
+at `cf430e030ddbb5b0abf93d22962f4752f3646cd9` and
+`actions/download-artifact v8.0.2` at
+`9000827ccba6bdab643e8b6fd33ac0654aef8333`, restricted to the current workflow run.
+The local explicit flags produce a 13.0 deployment target; runtime compatibility
+on macOS 13 has not been tested. Linux and Windows runtime-library requirements
+need evidence from native jobs.
 
 The attribution audit found MPL-covered Madoromi palette source already present in
 the viewer module, which needs a pinned corresponding-source archive in Bargeboard
@@ -84,13 +89,14 @@ the Go package inventory. The classifier in `scripts/thirdparty/main.go` does no
 cover the observed OFL-1.1 font, Boost, zlib, Unicode data, and TPC benchmark terms.
 Their inclusion and attribution need review before proposing policy changes.
 
-The Go bindings' standard prebuilt loader registers TPC-H and TPC-DS. DuckDB
-maintainers [removed bundled TPC-H from their releases in 2025](https://github.com/duckdb/duckdb/pull/15905).
-That history and the pinned Go libraries need to be reconciled. The audit has not
-established that TPC-DS cannot be redistributed. The user approved investigating
-TPC-free static linkage, then questioned its need; verify the upstream context
-before proposing a build change. No custom linkage has been implemented, and no
-dependency replacement or license-policy change has been approved.
+The Go bindings' [upstream packager](https://github.com/duckdb/duckdb-go-bindings/blob/dfee88b7d2972ff9250da14f6d79ea92ca89a112/internal/cmd/brood/stage.go#L18-L41)
+links and registers TPC-H and TPC-DS from separate official static-library
+archives. DuckDB's [ordinary release configuration](https://github.com/duckdb/duckdb/blob/d54cbbe3df17e8e5ce68312f483b4155836112aa/.github/config/bundled_extensions.cmake)
+builds those archives without linking them into its ordinary release targets.
+This explains why the DuckDB Go bindings include extensions that those targets omit.
+The audit has not established a blanket redistribution prohibition or a need for
+custom linkage. The user approved investigation only; changing linked extensions
+still needs approval. No custom linkage has been implemented.
 
 ### DEL-TS — Remove the obsolete replay implementation
 
