@@ -33,7 +33,7 @@ const (
 	maxNoticeMaterialSize = 64 << 20
 	packageCommandWait    = 5 * time.Second
 	packageCommandTimeout = 5 * time.Minute
-	approvedNoticesSHA256 = "40ecd0bf944708aa75f9ea1b7db1d7d5e9dc4c296ebe9d214d97af489923011b" // Go 1.26.8; notices/README.md records the reviewed delta
+	approvedNoticesSHA256 = "8daa00bae884074499cd01fcfe59e80aa9a3746a9595c75c379b997e3b4e95a1" // Go 1.27.4; notices/README.md records the reviewed delta
 )
 
 type buildTarget struct {
@@ -126,8 +126,8 @@ var sourceRequirements = []sourceRequirement{
 	},
 	{
 		path:       "golang.org/x/net",
-		version:    "v0.58.0",
-		sum:        "h1:ynWG7rqYi4ccpTEuPZ2QGWHktVEM9DMCj9yzDE0Q7To=",
+		version:    "v0.63.0",
+		sum:        "h1:HCoTmNh9EpD1PpK8gBNFY4gcTY4N+KQEO8ylfIKqFJ0=",
 		archive:    "SOURCE-public-suffix-list.dat",
 		archiveSHA: "a5638281157e8c902b127a5376f9ea2d024bf2ee11524133a6a76cd1d14ee7be",
 		sourceURL:  "https://raw.githubusercontent.com/publicsuffix/list/d6c92f1bbb7433e5db7b8405c25d4035fb8ff376/public_suffix_list.dat",
@@ -152,7 +152,7 @@ var approvedLicenseReferenceHashes = map[string]bool{
 	"a94710b55e03b5285f77d048c5ba61bb9d6ee04a06c0eb90e68821e11b0c707a": false, // go.yaml.in/yaml/v2 v2.4.4 libyaml files
 	"ef523ecf6292d4b80e02e6003dcbaf386e774efe70e8607ad762b1437d1f383b": false, // sigs.k8s.io/json scoped Apache/BSD terms
 	"d18f6323b71b0b768bb5e9616e36da390fbd39369a81807cca352de4e4e6aa0b": false, // gopkg.in/yaml.v3 v3.0.1 scoped MIT/Apache terms
-	"21c83efb2c5770a5c0bac0fb414ebb69e9c3738498bb4dba5b40ee075b6fc296": false, // gopsutil/v4 v4.26.7 scoped BSD terms
+	"21c83efb2c5770a5c0bac0fb414ebb69e9c3738498bb4dba5b40ee075b6fc296": false, // gopsutil/v4 v4.26.10 scoped BSD terms
 	"6d462371baa8649492b06f51f154dba9b25d2ac9548369b8b4fdbbbb85f2f75d": false, // golang-lru/v2 v2.0.7 list implementation
 	"5dc79da695aea39a47245008a168e3f7d461b686da8bec299fd55fee0393cbcc": false, // sigs.k8s.io/yaml v1.6.0 aggregate terms
 	"ad39d76dfbea8c0dd0e62fcf0112787305e565938d898ecb1275736de0df89a5": true,  // canonical MPL 2.0 URL reference
@@ -461,7 +461,7 @@ func isSourceFilename(name string) bool {
 	switch filepath.Ext(strings.ToLower(name)) {
 	case ".go", ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".m", ".mm",
 		".s", ".asm", ".f", ".for", ".f77", ".f90", ".f95", ".f03", ".f08", ".java",
-		".js", ".jsx", ".ts", ".tsx", ".py", ".rb", ".rs", ".cs", ".proto", ".swig", ".swigcxx", ".syso",
+		".js", ".jsx", ".ts", ".tsx", ".py", ".rb", ".rs", ".cs", ".proto", ".prototext", ".swig", ".swigcxx", ".syso",
 		".kt", ".kts", ".swift", ".sh", ".bash", ".zsh", ".fish", ".bat", ".cmd", ".ps1":
 		return true
 	}
@@ -472,10 +472,15 @@ func isLegalPath(name string) bool {
 	if isSourceFilename(filepath.Base(name)) {
 		return false
 	}
+	slashPath := filepath.ToSlash(name)
+	extension := strings.ToLower(filepath.Ext(name))
+	if strings.HasPrefix(slashPath, ".github/workflows/") && (extension == ".yml" || extension == ".yaml") {
+		return false
+	}
 	if isLegalFilename(filepath.Base(name)) {
 		return true
 	}
-	parts := strings.Split(filepath.ToSlash(name), "/")
+	parts := strings.Split(slashPath, "/")
 	for _, part := range parts[:len(parts)-1] {
 		lower := strings.ToLower(part)
 		if lower == "license" || lower == "licenses" || lower == "licence" || lower == "licences" {

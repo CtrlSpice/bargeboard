@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go_version: ["1.26.8", "1.27.1"]
+        go_version: ["1.27.4"]
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -135,7 +135,7 @@ jobs:
         uses: ./.github/actions/setup-go
 
       - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 
@@ -149,12 +149,12 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s  %s\n' \
-            e6a6c163ef25bcaee8454b4943adffcad748a4dd6090d4e9f39ced5a72ee38d7 \
+            7f488e727e1d49ca7cf7463b78ebfa7307fbbb9741075ef33d75223c004657a2 \
             "$(command -v goreleaser)" | sha256sum --check --strict
           printf '%s  %s\n' \
-            abca2def61de9952fa06d3977bb1e064818facb9badfce502b450d3d6846a91f \
+            17cc40c1e40dbfdeb8c84b6d9928909bceb793f22e8a8023ef408625f1d96ec5 \
             "$(command -v syft)" | sha256sum --check --strict
-          test "$(go version)" = "go version go1.26.8 linux/amd64"
+          test "$(go version)" = "go version go1.27.4 linux/amd64"
           actionlint -version
 
       - name: Check workflow definitions
@@ -234,7 +234,7 @@ jobs:
       - name: Test release artifacts
         env:
           EXPECTED_COMMIT: ${{ github.sha }}
-          EXPECTED_GO_VERSION: go1.26.8
+          EXPECTED_GO_VERSION: go1.27.4
           EXPECTED_VCS_MODIFIED: "false"
         run: bash scripts/verify-release-artifacts_test.sh build/release
 

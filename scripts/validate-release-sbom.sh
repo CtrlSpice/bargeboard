@@ -35,10 +35,16 @@ if ! jq --exit-status --null-input \
     (keys - [
       "SPDXID", "checksums", "copyrightText", "downloadLocation", "externalRefs",
       "filesAnalyzed", "licenseConcluded", "licenseDeclared", "name",
-      "primaryPackagePurpose", "sourceInfo", "supplier", "versionInfo"
+      "packageVerificationCode", "primaryPackagePurpose", "sourceInfo", "supplier", "versionInfo"
     ] | length) == 0 and
     ((has("primaryPackagePurpose") | not) or .primaryPackagePurpose == "ARCHIVE") and
     ((has("sourceInfo") | not) or (.sourceInfo | type) == "string") and
+    ((has("packageVerificationCode") | not) or (
+      .name == $name and
+      (.packageVerificationCode | keys) == ["packageVerificationCodeValue"] and
+      (.packageVerificationCode.packageVerificationCodeValue | type) == "string" and
+      (.packageVerificationCode.packageVerificationCodeValue | test("\\A[0-9a-f]{40}\\z"))
+    )) and
     ((has("checksums") | not) or (
       (.checksums | type) == "array" and
       all(.checksums[];
@@ -84,10 +90,10 @@ if ! jq --exit-status --null-input \
   .name == $name and
   .documentNamespace == $namespace and
   .creationInfo.created == $created and
-  .creationInfo.licenseListVersion == "3.28" and
+  .creationInfo.licenseListVersion == "3.29" and
   .creationInfo.creators == [
     "Organization: Anchore, Inc",
-    "Tool: syft-1.51.1"
+    "Tool: syft-1.57.2"
   ] and
   (.packages | type) == "array" and
   (.files | type) == "array" and
@@ -100,7 +106,7 @@ if ! jq --exit-status --null-input \
     (.versionInfo | type) == "string" and (.versionInfo | length) > 0 and
     .supplier == "NOASSERTION" and
     .downloadLocation == "NOASSERTION" and
-    .filesAnalyzed == false and
+    .filesAnalyzed == (.name == $name) and
     (.licenseConcluded | type) == "string" and (.licenseConcluded | length) > 0 and
     (.licenseDeclared | type) == "string" and (.licenseDeclared | length) > 0 and
     .copyrightText == "NOASSERTION"
@@ -120,7 +126,7 @@ if ! jq --exit-status --null-input \
     (keys | sort) == [
       "SPDXID", "checksums", "copyrightText", "downloadLocation",
       "filesAnalyzed", "licenseConcluded", "licenseDeclared", "name",
-      "primaryPackagePurpose", "supplier", "versionInfo"
+      "packageVerificationCode", "primaryPackagePurpose", "supplier", "versionInfo"
     ] and
     .versionInfo == $archive_version and
     .primaryPackagePurpose == "ARCHIVE" and
@@ -137,7 +143,7 @@ if ! jq --exit-status --null-input \
     ] and
     .versionInfo == $go_version and
     .checksums == null and
-    .sourceInfo == ("acquired package info from go module information: " + $source) and
+    .sourceInfo == ("acquired package info from go module information: /" + $source) and
     .licenseConcluded == "NOASSERTION" and
     .licenseDeclared == "BSD-3-Clause"
   )] | length) == 1 and

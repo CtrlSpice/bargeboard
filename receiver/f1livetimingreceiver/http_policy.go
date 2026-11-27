@@ -71,11 +71,13 @@ type setupHTTPError struct {
 	retryAt time.Time
 }
 
-func (e setupHTTPError) Error() string {
+func (e setupHTTPError) String() string {
 	return fmt.Sprintf("%s returned HTTP %d", e.stage, e.status)
 }
 
-func (e setupHTTPError) GoString() string { return e.Error() }
+func (e *setupHTTPError) Error() string { return e.String() }
+
+func (e setupHTTPError) GoString() string { return e.String() }
 
 func (e setupHTTPError) permanent() bool {
 	return classifySetupHTTP(e.stage, e.status) != httpRetry

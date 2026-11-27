@@ -11,7 +11,7 @@ trap 'rm -rf "$work"' EXIT
 
 fixture() {
   jq -cn --arg commit "$commit" '{
-    GoVersion: "go1.26.8",
+    GoVersion: "go1.27.4",
     Path: "github.com/CtrlSpice/bargeboard",
     Main: {
       Path: "github.com/CtrlSpice/bargeboard",
@@ -34,7 +34,7 @@ fixture() {
 }
 
 validate() {
-  bash "$validator" go1.26.8 linux amd64 GOAMD64 v1 "$commit" false 2026-09-09T00:00:00Z v1.2.3
+  bash "$validator" go1.27.4 linux amd64 GOAMD64 v1 "$commit" false 2026-09-09T00:00:00Z v1.2.3
 }
 
 reject() {
@@ -42,7 +42,7 @@ reject() {
   local filter="${2:?jq filter required}"
   if fixture | jq -c "$filter" |
     bash "$validator" \
-      go1.26.8 linux amd64 GOAMD64 v1 "$commit" false \
+      go1.27.4 linux amd64 GOAMD64 v1 "$commit" false \
       2026-09-09T00:00:00Z v1.2.3 >/dev/null 2>&1; then
     printf 'expected invalid release binary metadata: %s\n' "$description" >&2
     exit 1
@@ -50,16 +50,16 @@ reject() {
 }
 
 fixture | validate
-fixture | bash "$validator" go1.26.8 linux amd64 GOAMD64 v1 "$commit" "" 2026-09-09T00:00:00Z v1.2.3
+fixture | bash "$validator" go1.27.4 linux amd64 GOAMD64 v1 "$commit" "" 2026-09-09T00:00:00Z v1.2.3
 fixture | jq -c --arg commit "$commit" \
   '.Main.Version = ("v1.2.4-0.20260909000000-" + $commit[0:12])' |
-  bash "$validator" go1.26.8 linux amd64 GOAMD64 v1 "$commit" false 2026-09-09T00:00:00Z v1.2.4-0.20260909000000-aaaaaaaaaaaa
+  bash "$validator" go1.27.4 linux amd64 GOAMD64 v1 "$commit" false 2026-09-09T00:00:00Z v1.2.4-0.20260909000000-aaaaaaaaaaaa
 fixture | jq -c --arg commit "$commit" \
   '.Main.Version = ("v0.0.0-20260909000000-" + $commit[0:12])' |
-  bash "$validator" go1.26.8 linux amd64 GOAMD64 v1 "$commit" false 2026-09-09T00:00:00Z v0.0.0-20260909000000-aaaaaaaaaaaa
+  bash "$validator" go1.27.4 linux amd64 GOAMD64 v1 "$commit" false 2026-09-09T00:00:00Z v0.0.0-20260909000000-aaaaaaaaaaaa
 
 mkdir "$work/module"
-printf 'module github.com/CtrlSpice/bargeboard\n\ngo 1.26\n' >"$work/module/go.mod"
+printf 'module github.com/CtrlSpice/bargeboard\n\ngo 1.27.0\n' >"$work/module/go.mod"
 printf 'package main\n\nfunc main() {}\n' >"$work/module/main.go"
 git -C "$work/module" init -q
 git -C "$work/module" add go.mod main.go

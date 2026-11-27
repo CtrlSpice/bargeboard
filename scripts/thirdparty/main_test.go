@@ -60,18 +60,23 @@ func TestIsLegalFilename(t *testing.T) {
 			t.Errorf("isLegalFilename(%q) = false", name)
 		}
 	}
-	if !isLegalPath("LICENSES/Apache-2.0.txt") {
-		t.Fatal("isLegalPath rejected a file in a LICENSES directory")
+	for _, name := range []string{"LICENSES/Apache-2.0.txt", "LICENSE.yaml", "licenses/terms.yml", ".github/LICENSE.yml"} {
+		if !isLegalPath(name) {
+			t.Errorf("isLegalPath(%q) = false", name)
+		}
 	}
 	if !isLicensePath("LICENSES/Apache-2.0.txt") || isLicensePath("NOTICE") {
 		t.Fatal("license path classification is incorrect")
 	}
-	for _, name := range []string{"license.go", "license_test.go", "licensecheck.go", "LICENSE.py", "LICENSE.f90", "notices.go", "README.md"} {
+	for _, name := range []string{"license.go", "license_test.go", "licensecheck.go", "LICENSE.py", "LICENSE.f90", "license_missing_name.prototext", "LICENSE.PROTOTEXT", "notices.go", "README.md"} {
 		if isLegalFilename(name) {
 			t.Errorf("isLegalFilename(%q) = true", name)
 		}
 	}
-	for _, name := range []string{"LICENSES/license.go", "internal/licenses/parser.go"} {
+	for _, name := range []string{
+		"LICENSES/license.go", "internal/licenses/parser.go", "testdata/license_missing_name.prototext", "LICENSES/license.prototext",
+		".github/workflows/license-check.yml", ".github/workflows/license-check.yaml",
+	} {
 		if isLegalPath(name) {
 			t.Errorf("isLegalPath(%q) = true", name)
 		}
@@ -550,7 +555,7 @@ func TestValidateEmbeddedSource(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(marker), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// This is the provenance marker from golang.org/x/net/publicsuffix/table.go at v0.58.0.
+	// This is the provenance marker from golang.org/x/net/publicsuffix/table.go at v0.63.0.
 	const revision = "git revision d6c92f1bbb7433e5db7b8405c25d4035fb8ff376"
 	if err := os.WriteFile(marker, []byte("const version = \""+revision+"\"\n"), 0o600); err != nil {
 		t.Fatal(err)

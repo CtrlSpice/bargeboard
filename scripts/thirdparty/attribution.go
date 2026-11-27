@@ -39,7 +39,7 @@ type componentAttribution struct {
 // Generic legal-document approvals and source-license classification stay separate.
 var reviewedAttributions = []componentAttribution{
 	{
-		path: "stdlib", version: "go1.26.8", sum: "-",
+		path: "stdlib", version: "go1.27.4", sum: "-",
 		sources: []sourceAttribution{
 			{file: "src/math/acosh.go", groups: []string{"558003954908d41ed09bcc3daf891cd32994ac9d204c0a1133e0c06339457029"}},
 			{file: "src/math/asinh.go", groups: []string{"d2a0d020c35b9e830a694d97ebcfcb506043109080b6ef6bea67c9311c38787d"}},
@@ -69,17 +69,18 @@ var reviewedAttributions = []componentAttribution{
 			{file: "src/math/cmplx/sqrt.go", groups: []string{"2893977d9c52c29b61d86c6cca5492f53895be8dfd598228ffdcbc3fff5bbae7"}},
 			{file: "src/math/cmplx/tan.go", groups: []string{"2893977d9c52c29b61d86c6cca5492f53895be8dfd598228ffdcbc3fff5bbae7"}},
 			{file: "src/crypto/internal/fips140/edwards25519/scalar.go", groups: []string{"d63eafda50d8ef034c574babbd3348a4f8bb6995d692a56b2fee6fca0f15f10b"}},
+			{file: "src/crypto/internal/fips140/nistec/p256_ordinv.go", groups: []string{"819fa70a1f6b0f78d58e2d74cf94c4daece1d2214b9b5cd503016d3b2d29661f"}},
 		},
 	},
 	{
-		path: "github.com/grpc-ecosystem/grpc-gateway/v2", version: "v2.29.0", sum: "h1:5VipnvEpbqr2gA2VbM+nYVbkIF28c5ZQfqCBQ5g2xfk=",
+		path: "github.com/grpc-ecosystem/grpc-gateway/v2", version: "v2.34.0", sum: "h1:vzlTzzi4tHLa/JQdIE5LeXw6SEX5EVVhq/VPqKHnKOk=",
 		sources: []sourceAttribution{{
 			file: "runtime/pattern.go", groups: []string{"245eaa90da43a552ab725ffa5cbb89f87f73ccfc68b0be51fb4ffbe6009be7a3"},
 			materials: []supplementalMaterial{{name: "internal/casing/LICENSE.md", sha256: "20873bd48d04a4e4075ee881ec2a5f3a3b14bf4920018b1131a7c52ec9b4a318"}},
 		}},
 	},
 	{
-		path: "github.com/shirou/gopsutil/v4", version: "v4.26.7", sum: "h1:IXzpHz/dkMRYAhKkOXr1HB6SuzWU3eoyyeWe7g3bNZc=",
+		path: "github.com/shirou/gopsutil/v4", version: "v4.26.10", sum: "h1:MJN6euesJx53MVEjscYeyRSRcrdIcy3sz5k9nosjldg=",
 		sources: []sourceAttribution{{
 			file: "internal/common/endian.go", groups: []string{"3aef969f82b3136421f2e033b7c73c32dc5a79850751e19f9081c7085dfd837c"},
 			materials: []supplementalMaterial{
