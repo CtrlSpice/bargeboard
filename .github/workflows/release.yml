@@ -40,9 +40,55 @@ jobs:
         shell: bash
         run: bash scripts/verify-release-ref.sh >>"$GITHUB_OUTPUT"
 
+  native:
+    name: native release (${{ matrix.target }})
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      GOTOOLCHAIN: local
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: linux_amd64_v1
+          - runner: ubuntu-24.04-arm
+            target: linux_arm64_v8.0
+          - runner: macos-15
+            target: darwin_arm64_v8.0
+          - runner: windows-2025
+            target: windows_amd64_v1
+    steps:
+      - name: Check out trusted main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Set up Go
+        uses: ./.github/actions/setup-go
+      - name: Resolve validated release version
+        id: version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          bash scripts/validate-release-tag.sh "$RELEASE_TAG"
+          printf 'version=%s\n' "${RELEASE_TAG#v}" >>"$GITHUB_OUTPUT"
+      - name: Build independent native binaries
+        uses: ./.github/actions/build-native
+        with:
+          target: ${{ matrix.target }}
+          version: ${{ steps.version.outputs.version }}
+          release-tag: ${{ needs.validate.outputs.tag }}
+
   release:
     name: build and publish release
-    needs: validate
+    needs: [validate, native]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment:
@@ -116,6 +162,26 @@ jobs:
       - name: Validate GoReleaser configuration
         run: goreleaser check
 
+      - name: Download native binaries from this run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: bargeboard-native-*
+          path: ${{ runner.temp }}/bargeboard-native-inputs
+          merge-multiple: true
+          skip-decompress: true
+          digest-mismatch: error
+
+      - name: Verify native inputs
+        env:
+          EXPECTED_COMMIT: ${{ steps.release_ref.outputs.commit }}
+          EXPECTED_TAG: ${{ steps.release_ref.outputs.tag }}
+          EXPECTED_VCS_MODIFIED: "false"
+        run: |
+          set -euo pipefail
+          native_binaries="$RUNNER_TEMP/bargeboard-native-inputs"
+          bash scripts/verify-native-release-inputs.sh "$native_binaries"
+          printf 'NATIVE_BINARIES=%s\nNATIVE_BUILD_SET=candidate\n' "$native_binaries" >>"$GITHUB_ENV"
+
       - name: Clone independent release source
         env:
           RELEASE_REPRO_SOURCE: ${{ runner.temp }}/bargeboard-release-repro-source
@@ -128,6 +194,7 @@ jobs:
         env:
           GOCACHE: ${{ runner.temp }}/bargeboard-release-repro-go-build
           GOMODCACHE: ${{ runner.temp }}/bargeboard-release-repro-go-mod
+          NATIVE_BUILD_SET: reference
           GORELEASER_CURRENT_TAG: ${{ steps.release_ref.outputs.tag }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
         shell: bash

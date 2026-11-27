@@ -44,7 +44,6 @@ type buildTarget struct {
 }
 
 var releaseTargets = []buildTarget{
-	{goos: "darwin", goarch: "amd64", tuningKey: "GOAMD64", tuning: "v1"},
 	{goos: "darwin", goarch: "arm64", tuningKey: "GOARM64", tuning: "v8.0"},
 	{goos: "linux", goarch: "amd64", tuningKey: "GOAMD64", tuning: "v1"},
 	{goos: "linux", goarch: "arm64", tuningKey: "GOARM64", tuning: "v8.0"},
@@ -223,7 +222,7 @@ func discoverComponents() (map[string]*component, error) {
 		command.WaitDelay = packageCommandWait
 		command.Env = append(
 			os.Environ(),
-			"CGO_ENABLED=0",
+			"CGO_ENABLED=1",
 			"GOOS="+target.goos,
 			"GOARCH="+target.goarch,
 			target.tuningKey+"="+target.tuning,

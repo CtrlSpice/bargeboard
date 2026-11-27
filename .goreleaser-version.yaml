@@ -1,0 +1,8 @@
+# Resolve snapshot identity with the same pinned GoReleaser used for packaging.
+# No binary is built or published by this configuration.
+version: 2
+project_name: bargeboard
+dist: build/native-version
+builds:
+  - id: bargeboard
+    skip: true

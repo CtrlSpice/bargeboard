@@ -30,7 +30,7 @@ function releaseFixture(t) {
   const releaseDir = fs.mkdtempSync(path.join(os.tmpdir(), "bargeboard-release-"));
   t.after(() => fs.rmSync(releaseDir, { recursive: true, force: true }));
 
-  const subjects = Array.from({ length: 10 }, (_, index) => `subject-${index}.txt`);
+  const subjects = Array.from({ length: 8 }, (_, index) => `subject-${index}.txt`);
   const checksumLines = [];
   for (const subject of subjects) {
     const contents = `${subject}\n`;
@@ -173,7 +173,7 @@ test("rejects malformed, duplicate, and incomplete checksum manifests", (t) => {
   assert.throws(() => expectedAssets(releaseDir), /duplicate release asset name/);
 
   fs.writeFileSync(path.join(releaseDir, "checksums.txt"), `${digest(value)}  duplicate.txt\n`);
-  assert.throws(() => expectedAssets(releaseDir), /expected 11 release assets/);
+  assert.throws(() => expectedAssets(releaseDir), /expected 9 release assets/);
 });
 
 test("rejects unexpected, duplicate, and mismatched draft assets", (t) => {

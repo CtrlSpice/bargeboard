@@ -83,6 +83,76 @@ func TestIsLegalFilename(t *testing.T) {
 	}
 }
 
+func TestDiscoverComponentsIncludesNativeSources(t *testing.T) {
+	directory := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module example.invalid/native-attribution\n\ngo 1.27.0\n",
+		"main.go": `//go:build cgo
+
+package main
+
+/*
+static int value(void) { return 42; }
+*/
+import "C"
+
+func main() { _ = C.value() }
+`,
+		"excluded.go": `//go:build darwin && amd64
+
+package main
+
+import _ "example.invalid/unsupported-intel-macos"
+`,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(directory)
+	t.Setenv("GOPROXY", "off")
+	t.Setenv("GOSUMDB", "off")
+	t.Setenv("GOTOOLCHAIN", "local")
+	t.Setenv("CGO_ENABLED", "0")
+	components, err := discoverComponents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	standard := components["stdlib@"+runtime.Version()]
+	if len(components) != 1 || standard == nil {
+		t.Fatalf("discovered components = %#v, want only the Go standard library", components)
+	}
+	identity := *standard
+	identity.sourceFile = nil
+	wantIdentity := component{
+		path: "stdlib", version: runtime.Version(), sum: "-",
+		root: runtime.GOROOT(), materials: map[string][]byte{},
+	}
+	if !reflect.DeepEqual(identity, wantIdentity) {
+		t.Fatalf("standard library identity = %#v, want %#v", identity, wantIdentity)
+	}
+	for _, name := range []string{
+		"cgo.go", "gcc_arm64.S", "gcc_amd64.S",
+		"gcc_libinit_windows.c", "gcc_libinit_unix.c", "linux_syscall.c",
+	} {
+		path := filepath.Join(runtime.GOROOT(), "src", "runtime", "cgo", name)
+		if _, ok := standard.sourceFile[path]; !ok {
+			t.Errorf("native attribution omitted %s", name)
+		}
+	}
+	// A failure on the last target must not return an earlier target's inventory.
+	if err := os.WriteFile("unsupported_windows.go", []byte(`package main
+import _ "example.invalid/missing-native-source"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	components, err = discoverComponents()
+	if err == nil || components != nil || !strings.Contains(err.Error(), "go list for windows/amd64") {
+		t.Fatalf("failed native discovery = %#v, %v; want no partial inventory", components, err)
+	}
+}
+
 func TestValidateLicenseText(t *testing.T) {
 	if _, err := validateLicenseText([]byte(testMITLicense)); err != nil {
 		t.Fatalf("validate permissive license: %v", err)

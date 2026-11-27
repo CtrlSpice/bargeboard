@@ -45,7 +45,8 @@ verification commands and review outcomes.
 
 ### EMBEDDED-VIEWER — Configure the persistent local viewer
 
-**Approved; implementation in progress on `feature/persistent-viewer`.** The user
+**Approved; implementation in draft [PR #71](https://github.com/CtrlSpice/bargeboard/pull/71)
+on `feature/persistent-viewer`.** The user
 requested the viewer as Bargeboard's configured exporter and approved using
 [its v0.8.1 distribution](https://github.com/CtrlSpice/otel-desktop-viewer/tree/v0.8.1)
 as the integration reference. The accepted setup is viewer
@@ -56,7 +57,7 @@ Recorded data persists across shutdown; automatic pruning is disabled.
 The user approved native CGO builds for Linux on amd64 and arm64, macOS on
 arm64, and Windows on amd64, matching viewer v0.8.1's release targets. Intel macOS
 is excluded. The [canonical topology](architecture.md#local-runtime-and-verification-boundaries)
-belongs in the viewer integration commit. The follow-on goal is accurate F1 telemetry in the
+defines the integration. The follow-on goal is accurate F1 telemetry in the
 viewer, implemented from accepted signal mappings in tested, pushed, independently
 reviewed slices. Pending source mappings still require evidence and a decision.
 Current Go production reduces SessionInfo and invokes a no-op post-reduction
@@ -69,7 +70,7 @@ shutdown and database reopening. It covers nanosecond timestamps and an Int64
 value beyond binary64 precision. Startup-failure tests reject a directory or
 invalid database file and preserve the existing file.
 
-Native packaging is approved and implementation remains pending. The user
+Native packaging is approved and implementation is in progress. The user
 approved `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15`, and `windows-2025` for
 the four targets; explicit macOS 13.0 C/C++/linker flags; independent rebuilds
 using separate source and Go cache directories; and central GoReleaser prebuilt
@@ -81,6 +82,23 @@ at `cf430e030ddbb5b0abf93d22962f4752f3646cd9` and
 The local explicit flags produce a 13.0 deployment target; runtime compatibility
 on macOS 13 has not been tested. Linux and Windows runtime-library requirements
 need evidence from native jobs.
+
+The pushed runtime candidate is `ad5e7ce8e2f423eacaa5c75f3af9d77b60a4230c`.
+Its Go quality and CodeQL checks passed. Its release jobs used CGO-disabled
+builds and failed; they did not verify native packaging. An independent
+`openai/gpt-6.1-sol` static adversarial review
+found no additional runtime defect; it did not execute tests or satisfy the final
+merge review gate.
+
+The native packaging work adds four native candidate/reference builds, transfers
+raw binaries between jobs in the same workflow run, and packages them centrally.
+Focused tests cover independent
+CGO rebuilds, snapshot version resolution, input cardinality and metadata, and
+CGO source discovery. Local macOS build checks confirm the 13.0 deployment target,
+version command, configuration validation, and system-library dependencies.
+Four-runner execution, complete archive/SBOM comparisons, and final reviews
+remain pending. Attribution generation still fails closed until the viewer,
+frontend, and native-library materials have been reviewed.
 
 The attribution audit found MPL-covered Madoromi palette source already present in
 the viewer module, which needs a pinned corresponding-source archive in Bargeboard

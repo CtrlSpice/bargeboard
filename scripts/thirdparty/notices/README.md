@@ -2,8 +2,10 @@
 
 `../attribution.go` associates complete source comment groups and supplemental
 texts with the pinned owning module, its Go checksum, and selected source path.
-The current inputs cover 193 components in the five-target release graph with
-Go 1.27.4. The [refresh record](#go-1274-and-dependency-refresh) gives the current
+The approved digest covers 193 components in the pre-viewer, five-target release
+graph with Go 1.27.4. The viewer's four-target CGO graph, embedded frontend, and
+native-library attribution are under review; generation rejects the unapproved
+output. The [refresh record](#go-1274-and-dependency-refresh) gives the approved
 output digest and the changes from the previous graph.
 Approvals apply to exact texts and source paths, not to license families or
 permission fragments. The MPL source archive requirements remain separate;

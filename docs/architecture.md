@@ -561,10 +561,12 @@ diff, CI, and independent-review gates.
 
 ## Local Runtime and Verification Boundaries
 
-**Status: GREEN; embedded OTLP storage implemented, racing projection pending**
+**Decision status: GREEN (approved). Embedded OTLP storage is implemented;
+native packaging verification and racing projection are pending.**
 
 Bargeboard is the credential-owning local F1 client. Each user supplies their own
-F1 TV `subscriptionToken` through the existing local token-file reference.
+F1 TV `subscriptionToken` through `f1livetiming.token_file`, configured as
+`$HOME/.config/bargeboard/f1tv-token`.
 Bargeboard processes that user's real input; synthetic data belongs to tests.
 The local viewer arrangement is:
 
@@ -619,8 +621,18 @@ Native checks MUST inspect build metadata and runtime-library requirements and
 execute the binary's version and configuration checks on its matching runner.
 The deployment target alone does not prove runtime compatibility on macOS 13.
 
-The approved racing reducers/projector remain separate work; normal OTLP
-ingress already reaches persistent viewer storage.
+`scripts/build-native-release.sh` owns native build flags and executable checks.
+The version-resolution job uses the pinned GoReleaser to determine snapshot
+versions, including non-SemVer local tags. Release versions come from the
+separately validated signed tag. Artifact transfer carries raw binaries; central
+verification rejects extra entries, empty files, directories, and symbolic links,
+then checks each candidate against its reference and the expected Go/VCS/target
+metadata. The complete archive verifier compares each packaged binary with that
+target's transferred reference. It MUST NOT substitute a cross-compiled or
+CGO-disabled reference.
+
+Accepted racing mappings still require implementation. Pending source mappings
+remain non-binding. Normal OTLP ingress already reaches persistent viewer storage.
 
 Verification MUST check the complete shipped extension configuration and all
 three pipeline routes. A local integration test MUST send independently authored

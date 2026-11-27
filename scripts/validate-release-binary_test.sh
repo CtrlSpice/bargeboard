@@ -21,7 +21,7 @@ fixture() {
     Settings: [
       {Key: "-buildmode", Value: "exe"},
       {Key: "-trimpath", Value: "true"},
-      {Key: "CGO_ENABLED", Value: "0"},
+      {Key: "CGO_ENABLED", Value: "1"},
       {Key: "GOOS", Value: "linux"},
       {Key: "GOARCH", Value: "amd64"},
       {Key: "GOAMD64", Value: "v1"},
@@ -82,7 +82,7 @@ git -C "$work/module" \
   tag -a -m fixture v1.9.9
 (
   cd "$work/module"
-  CGO_ENABLED=0 go build -buildvcs=true -trimpath -o "$work/bargeboard" .
+  CGO_ENABLED=1 go build -buildvcs=true -trimpath -o "$work/bargeboard" .
 )
 real_commit="$(git -C "$work/module" rev-parse HEAD)"
 readonly real_commit
@@ -144,7 +144,7 @@ reject 'module version' '.Main.Version = "v9.9.9"'
 reject 'missing dependency inventory' 'del(.Deps)'
 reject 'build mode' '(.Settings[] | select(.Key == "-buildmode") | .Value) = "pie"'
 reject 'trimpath' '(.Settings[] | select(.Key == "-trimpath") | .Value) = "false"'
-reject 'CGO' '(.Settings[] | select(.Key == "CGO_ENABLED") | .Value) = "1"'
+reject 'CGO disabled' '(.Settings[] | select(.Key == "CGO_ENABLED") | .Value) = "0"'
 reject 'operating system' '(.Settings[] | select(.Key == "GOOS") | .Value) = "darwin"'
 reject 'architecture' '(.Settings[] | select(.Key == "GOARCH") | .Value) = "arm64"'
 reject 'tuning' '(.Settings[] | select(.Key == "GOAMD64") | .Value) = "v3"'

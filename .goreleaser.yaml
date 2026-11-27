@@ -13,20 +13,13 @@ before:
 
 builds:
   - id: bargeboard
-    main: .
+    builder: prebuilt
     binary: bargeboard
-    env:
-      - CGO_ENABLED=0
-    flags:
-      - -mod=readonly
-      - -trimpath
-    ldflags:
-      - -s -w -X main.version={{ .Version }}
-    mod_timestamp: "{{ .CommitTimestamp }}"
+    prebuilt:
+      path: "{{ .Env.NATIVE_BINARIES }}/bargeboard-native-{{ .Env.NATIVE_BUILD_SET }}-{{ .Target }}{{ .Ext }}"
     targets:
       - linux_amd64_v1
       - linux_arm64_v8.0
-      - darwin_amd64_v1
       - darwin_arm64_v8.0
       - windows_amd64_v1
 
@@ -46,6 +39,7 @@ archives:
       owner: root
       group: root
       mtime: "{{ .CommitDate }}"
+      mode: 0755
     files:
       - src: LICENSE
         dst: LICENSE
