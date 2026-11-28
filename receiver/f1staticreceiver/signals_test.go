@@ -255,11 +255,11 @@ func (h *recordingStatusHost) Report(event *componentstatus.Event) {
 func TestReceiverLifecycleStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/ok/SessionInfo.json":
+		case "/ok/SessionInfo.json", "/mirror/SessionInfo.json":
 			fmt.Fprint(w, info)
-		case "/ok/DriverList.json":
+		case "/ok/DriverList.json", "/mirror/DriverList.json":
 			fmt.Fprint(w, drivers)
-		case "/ok/Heartbeat.jsonStream":
+		case "/ok/Heartbeat.jsonStream", "/mirror/Heartbeat.jsonStream":
 			fmt.Fprint(w, `00:00:00.000{"Utc":"2025-03-10T10:00:00Z"}`)
 		default:
 			http.NotFound(w, r)
@@ -312,6 +312,72 @@ func TestReceiverLifecycleStatus(t *testing.T) {
 			if err := r.Shutdown(t.Context()); err != nil {
 				t.Fatal(err)
 			}
+			r.status.Report(componentstatus.NewEvent(componentstatus.StatusOK))
+			h3 := &recordingStatusHost{events: make(chan componentstatus.Status, 4)}
+			if err := r.Start(t.Context(), h3); !errors.Is(err, errReceiverStopped) || len(h1.events) != 0 || len(h3.events) != 0 {
+				t.Fatalf("post-shutdown Start err=%v h1=%d h3=%d", err, len(h1.events), len(h3.events))
+			}
 		})
 	}
+
+	t.Run("duplicate_canonical_session_across_mirror_paths", func(t *testing.T) {
+		factory := NewFactory()
+		sink, _ := consumer.NewTraces(func(context.Context, ptrace.Traces) error { return nil })
+
+		cfg1 := factory.CreateDefaultConfig().(*Config)
+		cfg1.Enabled = true
+		cfg1.Endpoint = server.URL
+		cfg1.SessionPath = "ok"
+		r1, err := factory.CreateTraces(t.Context(), receiver.Settings{ID: component.MustNewIDWithName("f1static", "a")}, cfg1, sink)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg2 := factory.CreateDefaultConfig().(*Config)
+		cfg2.Enabled = true
+		cfg2.Endpoint = server.URL
+		cfg2.SessionPath = "mirror"
+		r2, err := factory.CreateTraces(t.Context(), receiver.Settings{ID: component.MustNewIDWithName("f1static", "b")}, cfg2, sink)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		h1 := &recordingStatusHost{events: make(chan componentstatus.Status, 4)}
+		if err := r1.Start(t.Context(), h1); err != nil {
+			t.Fatal(err)
+		}
+		if <-h1.events != componentstatus.StatusRecoverableError || <-h1.events != componentstatus.StatusOK {
+			t.Fatal("first archive did not complete cleanly")
+		}
+
+		h2 := &recordingStatusHost{events: make(chan componentstatus.Status, 4)}
+		if err := r2.Start(t.Context(), h2); err != nil {
+			t.Fatal(err)
+		}
+		if <-h2.events != componentstatus.StatusRecoverableError || <-h2.events != componentstatus.StatusPermanentError {
+			t.Fatal("mirror archive serving identical SessionIdentity was not rejected")
+		}
+
+		if err := r1.Shutdown(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if err := r2.Shutdown(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+
+		// Shutdown releases the identity reservation for subsequent runs.
+		r3, err := factory.CreateTraces(t.Context(), receiver.Settings{ID: component.MustNewIDWithName("f1static", "b")}, cfg2, sink)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h3 := &recordingStatusHost{events: make(chan componentstatus.Status, 4)}
+		if err := r3.Start(t.Context(), h3); err != nil {
+			t.Fatal(err)
+		}
+		if <-h3.events != componentstatus.StatusRecoverableError || <-h3.events != componentstatus.StatusOK {
+			t.Fatal("released identity could not replay after Shutdown")
+		}
+		if err := r3.Shutdown(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	})
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/CtrlSpice/bargeboard/internal/f1id"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/receiver"
@@ -20,6 +21,7 @@ func NewFactory() receiver.Factory {
 	}
 	instances := map[instanceKey]*staticReceiver{}
 	activeSessions := map[string]*staticReceiver{}
+	activeIdentities := map[f1id.SessionIdentity]*staticReceiver{}
 	// Signal pipelines are assembled before the Collector starts components.
 	register := func(settings receiver.Settings, config component.Config, attach func(*staticReceiver)) (component.Component, error) {
 		cfg, ok := config.(*Config)
@@ -44,6 +46,15 @@ func NewFactory() receiver.Factory {
 			if cfg.Enabled {
 				activeSessions[cfg.SessionPath] = r
 			}
+			r.claim = func(id f1id.SessionIdentity) error {
+				mu.Lock()
+				defer mu.Unlock()
+				if owner := activeIdentities[id]; owner != nil && owner != r {
+					return errors.New("duplicate static replay session identity")
+				}
+				activeIdentities[id] = r
+				return nil
+			}
 			r.remove = func() {
 				mu.Lock()
 				defer mu.Unlock()
@@ -52,6 +63,11 @@ func NewFactory() receiver.Factory {
 				}
 				if cfg.Enabled && activeSessions[cfg.SessionPath] == r {
 					delete(activeSessions, cfg.SessionPath)
+				}
+				for id, owner := range activeIdentities {
+					if owner == r {
+						delete(activeIdentities, id)
+					}
 				}
 			}
 		}

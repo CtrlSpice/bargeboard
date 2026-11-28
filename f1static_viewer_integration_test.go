@@ -302,24 +302,29 @@ service:
 	done := make(chan error, 1)
 	go func() { done <- collector.Run(ctx) }()
 
+	stopReplay := sync.OnceFunc(func() {
+		collector.Shutdown()
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("shut down replay Collector: %v", err)
+		}
+	})
+	t.Cleanup(stopReplay)
+
 	select {
 	case <-completed:
 	case status := <-failed:
-		collector.Shutdown()
-		<-done
+		stopReplay()
 		t.Fatalf("f1static reported failure status %s", status)
 	case err := <-done:
+		done <- err
 		t.Fatalf("Collector exited before replay completed: %v", err)
 	case <-ctx.Done():
-		collector.Shutdown()
-		<-done
+		stopReplay()
 		t.Fatalf("timed out waiting for f1static replay completion: %v", ctx.Err())
 	}
 
-	collector.Shutdown()
-	if err := <-done; err != nil {
-		t.Fatalf("shut down replay Collector: %v", err)
-	}
+	stopReplay()
 
 	// Reopen the persisted DuckDB file in a fresh Collector instance to verify
 	// durable waterfall spans, corner enrichment, metrics, and race-control logs.

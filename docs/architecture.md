@@ -2089,7 +2089,10 @@ leading/trailing `/`, empty segment, `.`, or `..`) and `pace` (`instant` by
 default, or canonical `<N>x` for integer `1..1000`). Endpoints MUST use HTTPS
 or loopback HTTP without trailing `/`, user-info, query, or fragment; redirects
 are disabled. Optional `auth.token_file` attaches a Bearer token only to that
-validated endpoint and MUST never leak through errors or logs.
+validated endpoint and MUST never leak through errors or logs. Active `f1static`
+instances within one factory MUST reject both duplicate configured
+`session_path` values at creation and duplicate canonical `SessionIdentity`
+values after materialization before emitting replay signals.
 
 Before replay begins, `f1static` materializes and freezes the complete session
 input:
@@ -2147,9 +2150,10 @@ input:
    timestamps are invariant across `instant` and `1x..1000x`, while racing log
    `ObservedTimestamp` uses actual process wall time. Enabled `f1static`
    instances report `StatusRecoverableError` across attached signal hosts while
-   materialization and replay are in progress, `StatusOK` on clean completion,
-   and `StatusPermanentError` if materialization, replay, or downstream delivery
-   fails without caller cancellation.
+   materialization and replay are in progress, `StatusOK` once all frozen
+   batches have been accepted by the attached pipeline consumers, and
+   `StatusPermanentError` if materialization, replay, or immediate consumer
+   acceptance fails without caller cancellation.
 
 A deleted pre-completion replay prototype was not conforming: it grouped events
 by endpoint and globally sorted them by relative event time; a coarse tick could

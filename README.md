@@ -11,7 +11,7 @@ The Go Collector distribution accepts OTLP traces, metrics, and logs, batches th
 - `f1livetiming` connects to the live SignalR feed, validates updates, and reports input activity and interruptions. **Live F1 race export is not yet implemented:** `f1livetiming` maintains session identity and scheduling information, while live multi-topic reduction and OTLP projection remain pending.
 - `f1static` (`enabled: false` by default) replays finished F1 `/static/<session_path>/` archives once per Collector run at original historical timestamps, emitting `driver.session -> stint -> lap -> sector` waterfall traces (with optional MultiViewer circuit corner and marshal-sector event enrichment), session/driver metrics, and curated race-control and team-radio logs.
 - `openf1` (`enabled: false` by default) polls OpenF1 `/v1/sessions` and `/v1/session_result` for post-session Race and Sprint observed result snapshots (`f1.driver.result.observed` / `f1.driver.result.revised` logs) without re-emitting laps, stints, weather, or car telemetry.
-- `jolpica` (`enabled: false` by default) polls Jolpica-F1 for official FIA post-round classification causes, grid slots, awarded points, and WDC/WCC championship standings logs and Gauges.
+- `jolpica` (`enabled: false` by default) polls Jolpica-F1 for official FIA post-round classification logs (`f1.classification.fia`) plus classification and WDC/WCC championship standings Gauges.
 
 The canonical design is the evolving [Bargeboard architecture](docs/architecture.md). It records accepted decisions, source limitations, pending candidates, implementation seams, and the required checks for future human and agent contributors.
 
@@ -289,8 +289,6 @@ receivers:
     meeting_key: 1259
     session_key: 9998
     session_name: race
-    drivers:
-      - { number: 4, acronym: NOR }
     root_drivers: [4]
   jolpica:
     enabled: true

@@ -111,13 +111,13 @@ registers three opt-in (`enabled: false`) receivers alongside `f1livetiming` and
 - `receiver/f1staticreceiver` (`f1static`): single-run original-time replay of
   finished `/static/<session_path>/` archives across traces, metrics, and logs,
   reporting `StatusRecoverableError` until completion and `StatusOK` once frozen
-  delivery finishes.
+  batches are accepted by the attached pipeline consumers.
 - `receiver/openf1receiver` (`openf1`): post-session Race and Sprint result
   observation logs (`f1.driver.result.observed`, `f1.driver.result.revised`) and
   pure root-outcome handoff reducer, with zero lap/stint/telemetry duplication.
 - `receiver/jolpicareceiver` (`jolpica`): official FIA Race and Sprint
-  classifications (`f1.driver.classification.official` logs and classification
-  Gauges) and post-round WDC/WCC standings Gauges.
+  classifications (`f1.classification.fia` logs and classification Gauges) and
+  post-round WDC/WCC standings Gauges.
 
 All unit and end-to-end DuckDB viewer tests use synthetic fixtures and local
 `httptest` servers with zero live external requests.

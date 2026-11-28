@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/CtrlSpice/bargeboard/internal/f1id"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componentstatus"
 	"go.opentelemetry.io/collector/consumer"
@@ -15,19 +16,31 @@ import (
 	"go.uber.org/zap"
 )
 
+var errReceiverStopped = errors.New("static replay receiver stopped")
+
 type statusBroadcaster struct {
 	delivery sync.Mutex
 	mu       sync.Mutex
 	hosts    []component.Host
 	current  *componentstatus.Event
+	stopped  bool
 }
 
-func (b *statusBroadcaster) register(host component.Host) {
-	if host == nil {
-		return
-	}
+func (b *statusBroadcaster) setInitial(event *componentstatus.Event) {
+	b.mu.Lock()
+	b.current = event
+	b.mu.Unlock()
+}
+
+func (b *statusBroadcaster) register(host component.Host) error {
 	b.delivery.Lock()
 	defer b.delivery.Unlock()
+	if b.stopped {
+		return errReceiverStopped
+	}
+	if host == nil {
+		return nil
+	}
 	b.mu.Lock()
 	b.hosts = append(b.hosts, host)
 	current := b.current
@@ -35,11 +48,15 @@ func (b *statusBroadcaster) register(host component.Host) {
 	if current != nil {
 		componentstatus.ReportStatus(host, current)
 	}
+	return nil
 }
 
 func (b *statusBroadcaster) Report(event *componentstatus.Event) {
 	b.delivery.Lock()
 	defer b.delivery.Unlock()
+	if b.stopped {
+		return
+	}
 	b.mu.Lock()
 	b.current = event
 	hosts := append([]component.Host(nil), b.hosts...)
@@ -49,20 +66,26 @@ func (b *statusBroadcaster) Report(event *componentstatus.Event) {
 	}
 }
 
+func (b *statusBroadcaster) stop() {
+	b.delivery.Lock()
+	b.stopped = true
+	b.delivery.Unlock()
+}
+
 type staticReceiver struct {
-	cfg        Config
-	settings   receiver.Settings
-	metrics    consumer.Metrics
-	logs       consumer.Logs
-	traces     consumer.Traces
-	clock      Clock
-	status     statusBroadcaster
-	statusInit sync.Once
-	mu         sync.Mutex
-	cancel     context.CancelFunc
-	done       chan struct{}
-	stopped    bool
-	remove     func()
+	cfg      Config
+	settings receiver.Settings
+	metrics  consumer.Metrics
+	logs     consumer.Logs
+	traces   consumer.Traces
+	clock    Clock
+	status   statusBroadcaster
+	mu       sync.Mutex
+	cancel   context.CancelFunc
+	done     chan struct{}
+	stopped  bool
+	claim    func(f1id.SessionIdentity) error
+	remove   func()
 }
 
 func newReceiver(cfg Config, settings receiver.Settings) *staticReceiver {
@@ -70,53 +93,50 @@ func newReceiver(cfg Config, settings receiver.Settings) *staticReceiver {
 }
 func (r *staticReceiver) Start(ctx context.Context, host component.Host) error {
 	r.mu.Lock()
-	stopped := r.stopped
-	r.mu.Unlock()
-	if stopped {
-		return errors.New("static replay receiver stopped")
-	}
-	if !r.cfg.Enabled {
-		return nil
-	}
-	r.statusInit.Do(func() {
-		r.status.Report(componentstatus.NewRecoverableErrorEvent(errors.New("static archive replay in progress")))
-	})
-	r.status.register(host)
-
-	r.mu.Lock()
 	if r.stopped {
 		r.mu.Unlock()
-		return errors.New("static replay receiver stopped")
+		return errReceiverStopped
 	}
-	if r.done != nil {
+	if !r.cfg.Enabled {
 		r.mu.Unlock()
 		return nil
 	}
-	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	done := make(chan struct{})
-	r.cancel = cancel
-	r.done = done
+	first := r.done == nil
+	var runCtx context.Context
+	var done chan struct{}
+	if first {
+		runCtx, r.cancel = context.WithCancel(context.WithoutCancel(ctx))
+		done = make(chan struct{})
+		r.done = done
+		r.status.setInitial(componentstatus.NewRecoverableErrorEvent(errors.New("static archive replay in progress")))
+	}
 	r.mu.Unlock()
 
-	go func() {
-		defer close(done)
-		if err := r.run(runCtx); err != nil {
-			if runCtx.Err() == nil {
-				if r.settings.Logger != nil {
-					r.settings.Logger.Error("static replay collection stopped", zap.Error(err))
+	if err := r.status.register(host); err != nil {
+		return err
+	}
+	if first {
+		go func() {
+			defer close(done)
+			if err := r.run(runCtx); err != nil {
+				if runCtx.Err() == nil {
+					if r.settings.Logger != nil {
+						r.settings.Logger.Error("static replay collection stopped", zap.Error(err))
+					}
+					r.status.Report(componentstatus.NewPermanentErrorEvent(errors.New("static archive replay failed")))
 				}
-				r.status.Report(componentstatus.NewPermanentErrorEvent(errors.New("static archive replay failed")))
+				return
 			}
-			return
-		}
-		if r.settings.Logger != nil {
-			r.settings.Logger.Info("Static archive replay completed")
-		}
-		r.status.Report(componentstatus.NewEvent(componentstatus.StatusOK))
-	}()
+			if r.settings.Logger != nil {
+				r.settings.Logger.Info("Static archive replay completed")
+			}
+			r.status.Report(componentstatus.NewEvent(componentstatus.StatusOK))
+		}()
+	}
 	return nil
 }
 func (r *staticReceiver) Shutdown(ctx context.Context) error {
+	r.status.stop()
 	r.mu.Lock()
 	if !r.stopped {
 		r.stopped = true
@@ -142,6 +162,11 @@ func (r *staticReceiver) run(ctx context.Context) error {
 	p, err := Materialize(ctx, r.cfg)
 	if err != nil {
 		return err
+	}
+	if r.claim != nil {
+		if err := r.claim(p.Identity); err != nil {
+			return err
+		}
 	}
 	return r.play(ctx, p)
 }
