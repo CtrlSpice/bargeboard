@@ -93,10 +93,7 @@ func (r *roundReceiver) run(ctx context.Context) error {
 		tables = append(tables, sprint)
 	}
 	if r.cfg.IncludeStandings {
-		tables = append(tables, wdc)
-		if r.cfg.Season >= 1958 {
-			tables = append(tables, wcc)
-		}
+		tables = append(tables, wdc, wcc)
 	}
 	interval, err := pollInterval(r.cfg.PollInterval)
 	if err != nil {
@@ -106,6 +103,9 @@ func (r *roundReceiver) run(ctx context.Context) error {
 		s := snapshot{}
 		delay := interval
 		for i, t := range tables {
+			if t == wcc && r.cfg.Season < 1958 {
+				continue
+			}
 			if i > 0 {
 				if err := r.wait(ctx, time.Second); err != nil {
 					return err

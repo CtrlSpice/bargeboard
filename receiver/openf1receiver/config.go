@@ -22,6 +22,9 @@ type Config struct {
 	Endpoint       string           `mapstructure:"endpoint"`
 	FinalisedGrace string           `mapstructure:"finalised_grace"`
 	SessionKey     int64            `mapstructure:"session_key"`
+	Year           int64            `mapstructure:"year"`
+	CountryName    string           `mapstructure:"country_name"`
+	Session        string           `mapstructure:"session"`
 	MeetingKey     int64            `mapstructure:"meeting_key"`
 	Season         int64            `mapstructure:"season"`
 	SessionName    f1id.SessionName `mapstructure:"session_name"`
@@ -88,7 +91,14 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if c.Enabled {
-		if !raceLike(c.identity()) || c.SessionKey <= 0 {
+		if c.SessionKey == 0 {
+			validYear := func(y int64) bool { return y == 0 || y >= 1000 && y <= 9999 }
+			validName := c.SessionName == "" || c.SessionName == "race" || c.SessionName == "sprint"
+			if !validYear(c.Year) || !validYear(c.Season) || c.Year != 0 && c.Season != 0 && c.Year != c.Season ||
+				c.MeetingKey < 0 || c.Session != "" && c.Session != "latest" || !validName {
+				return errors.New("invalid OpenF1 discovery selector")
+			}
+		} else if !raceLike(c.identity()) || c.SessionKey < 0 {
 			return errors.New("invalid race-like session identity")
 		}
 		if _, ok := roster(c.Drivers); !ok {

@@ -22,7 +22,8 @@ type Config struct {
 }
 
 type AuthConfig struct {
-	TokenFile string `mapstructure:"token_file"`
+	OptionalToken bool   `mapstructure:"optional_token"`
+	TokenFile     string `mapstructure:"token_file"`
 }
 
 type CircuitEnrichmentConfig struct {

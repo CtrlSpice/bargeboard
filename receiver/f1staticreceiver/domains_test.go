@@ -67,6 +67,7 @@ func TestSharedSingleRun(t *testing.T) {
 	}))
 	defer server.Close()
 	c := DefaultConfig()
+	c.CircuitEnrichment.Enabled = false
 	c.Enabled = true
 	c.Endpoint = server.URL
 	c.SessionPath = "s"

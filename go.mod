@@ -6,6 +6,7 @@ require (
 	github.com/CtrlSpice/otel-desktop-viewer v0.8.1
 	github.com/coder/websocket v1.8.15
 	github.com/google/licensecheck v0.3.1
+	github.com/spf13/cobra v1.10.2
 	go.opentelemetry.io/collector/component v1.72.0
 	go.opentelemetry.io/collector/component/componentstatus v0.166.0
 	go.opentelemetry.io/collector/component/componenttest v0.166.0
@@ -108,7 +109,6 @@ require (
 	github.com/prometheus/procfs v0.23.0 // indirect
 	github.com/rs/cors v1.11.1 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.10 // indirect
-	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.1.0 // indirect
 	github.com/stretchr/testify v1.12.1 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect

@@ -73,26 +73,34 @@ func ParseStreamRecords(data []byte, compressed bool) ([]StreamRecord, error) {
 		if newline {
 			line = bytes.TrimSuffix(line, []byte{'\r'})
 		}
-		if len(line) < 13 || bytes.ContainsRune(line, '\r') {
-			return nil, errRecord
+		r, err := parseLine(line, compressed)
+		if err != nil {
+			return nil, err
 		}
-		offset, ok := parseOffset(line[:12])
-		if !ok {
-			return nil, errRecord
-		}
-		raw := line[12:]
-		if compressed {
-			var err error
-			raw, err = inflate(raw)
-			if err != nil {
-				return nil, err
-			}
-		}
-		if !utf8.Valid(raw) || !json.Valid(raw) {
-			return nil, errRecord
-		}
-		records = append(records, StreamRecord{offset, string(raw)})
+		records = append(records, r)
 		data = rest
 	}
 	return records, nil
+}
+
+func parseLine(line []byte, compressed bool) (StreamRecord, error) {
+	if len(line) < 13 || bytes.ContainsRune(line, '\r') {
+		return StreamRecord{}, errRecord
+	}
+	offset, ok := parseOffset(line[:12])
+	if !ok {
+		return StreamRecord{}, errRecord
+	}
+	raw := line[12:]
+	if compressed {
+		var err error
+		raw, err = inflate(raw)
+		if err != nil {
+			return StreamRecord{}, err
+		}
+	}
+	if !utf8.Valid(raw) || !json.Valid(raw) {
+		return StreamRecord{}, errRecord
+	}
+	return StreamRecord{offset, string(raw)}, nil
 }

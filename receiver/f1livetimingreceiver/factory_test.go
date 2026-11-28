@@ -3,6 +3,7 @@ package f1livetimingreceiver
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -60,6 +61,81 @@ func TestFactoriesRejectEmptyEndpointHostname(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestOptionalMissingTokenAcrossPipelines(t *testing.T) {
+	f := NewFactory()
+	c := f.CreateDefaultConfig().(*Config)
+	if c.Auth.OptionalToken || !c.CircuitEnrichment.Enabled {
+		t.Fatal("incorrect live defaults")
+	}
+	c.Auth.OptionalToken = true
+	c.Auth.TokenFile = filepath.Join(t.TempDir(), "missing")
+	set := receivertest.NewNopSettings(Type)
+	tr, err := f.CreateTraces(t.Context(), set, c, consumertest.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	met, err := f.CreateMetrics(t.Context(), set, c, consumertest.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []component.Component{tr, met} {
+		if err := r.Start(t.Context(), componenttest.NewNopHost()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tr.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOptionalTokenStillRejectsInvalidFiles(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("invalid token reached the preflight server")
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	unreadable := writeTokenFile(t, "invented-token")
+	if err := os.Chmod(unreadable, 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name, path, want string
+		optional         bool
+	}{
+		{"required missing", filepath.Join(t.TempDir(), "missing"), "file does not exist", false},
+		{"empty", writeTokenFile(t, "\n"), "is empty", true},
+		{"multiline", writeTokenFile(t, "invented-token\nanother-line"), "one line", true},
+		{"directory", t.TempDir(), "auth token file", true},
+		{"unreadable", unreadable, "open auth token file", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.name == "unreadable" {
+				f, err := os.Open(tt.path)
+				if err == nil {
+					f.Close()
+					t.Skip("process can read a file with mode 000")
+				}
+				if !errors.Is(err, os.ErrPermission) {
+					t.Fatal(err)
+				}
+			}
+			f := NewFactory()
+			c := f.CreateDefaultConfig().(*Config)
+			c.Auth = AuthConfig{OptionalToken: tt.optional, TokenFile: tt.path}
+			c.NegotiateEndpoint = server.URL + "/negotiate"
+			c.Endpoint = "ws" + strings.TrimPrefix(server.URL, "http") + "/connect"
+			r, err := f.CreateTraces(t.Context(), receivertest.NewNopSettings(Type), c, consumertest.NewNop())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := r.Start(t.Context(), componenttest.NewNopHost()); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Start() = %v, want %q", err, tt.want)
+			}
+		})
 	}
 }
 

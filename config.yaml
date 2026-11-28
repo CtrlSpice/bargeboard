@@ -1,6 +1,7 @@
 receivers:
   f1livetiming:
     auth:
+      optional_token: true
       token_file: ${env:HOME}/.config/bargeboard/f1tv-token
   otlp:
     protocols:

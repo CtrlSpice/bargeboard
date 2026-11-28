@@ -20,7 +20,6 @@ The canonical design is the evolving [Bargeboard architecture](docs/architecture
 Development requires Go 1.27.0 or newer and a native C/C++ toolchain with CGO
 enabled for DuckDB. CI authenticates and verifies Go 1.27.4. Native CGO release
 archives use the same pinned version.
-Before `make run`, prepare your [F1 token file](#f1-live-timing).
 
 The commands below require GNU Make and a POSIX shell, such as Git Bash on
 Windows. Use Xcode Command Line Tools on macOS, GCC/G++ on Linux, or MinGW-w64
@@ -32,9 +31,11 @@ make check
 make run
 ```
 
-The shipped `config.yaml` enables F1 Live Timing and listens for OTLP/gRPC on
-`localhost:4317` and OTLP/HTTP on `localhost:4318`. Run `make components` to
-inspect the components compiled into the distribution.
+The shipped `config.yaml` starts the viewer and listens for OTLP/gRPC on
+`localhost:4317` and OTLP/HTTP on `localhost:4318`. If the
+[F1 token file](#f1-live-timing) is missing, live timing stays inactive.
+If the file exists, the receiver reads it and connects to F1 Live Timing.
+Run `make components` to see which components are included.
 
 Open [the embedded viewer](http://127.0.0.1:8000) after startup. The `duckdb`
 extension stores telemetry in `./bargeboard.duckdb`, relative to the process
@@ -43,8 +44,7 @@ disables automatic pruning.
 The viewer displays live F1 racing telemetry, incoming OTLP, and any enabled historical replay or companion receivers.
 The incoming OTLP ports and the viewer belong to the same Bargeboard process.
 
-`make check` uses synthetic F1 inputs and local test servers. `make run` starts
-the real client using the user's token file. For an optional private check of
+`make check` uses synthetic F1 inputs and local test servers. For a private check of
 that connection, follow [Live Timing connectivity](https://github.com/CtrlSpice/bargeboard/blob/main/docs/live-connectivity.md).
 
 ## Releases
@@ -74,8 +74,8 @@ fi
 ```
 
 Extract the archive for your platform, then run its binary from the extracted
-directory with `--config config.yaml`. Prepare the [F1 token file](#f1-live-timing)
-first. For example, the Linux amd64 archive for `v1.2.3` would use:
+directory with `--config config.yaml`. For example, the Linux amd64 archive
+for `v1.2.3` would use:
 
 ```bash
 tar -xzf bargeboard_1.2.3_linux_amd64.tar.gz
@@ -257,6 +257,29 @@ establish provider permission for third-party clients or device-limit treatment.
 
 ## Historical replay and companion receivers
 
+Run `bargeboard sessions 2025` to list meetings and sessions, or add `--json`
+for the season index as JSON. Omit the year to list the current UTC season.
+Replay accepts `year/meeting/session` and only selects completed sessions.
+Use the meeting and session names shown in the list, for example
+`2025/las-vegas/race`. Hyphens and underscores work in place of spaces.
+
+For interactive use, run `bargeboard replay` and visit `http://127.0.0.1:8000`.
+Without a selector, replay selects the latest completed Race. Add `--any-type`
+to select the latest completed session regardless of type. The viewer stays
+open after replay and stores data in `./bargeboard.duckdb` by default.
+
+```sh
+bargeboard replay 2025/last/race --once --db ./bargeboard.duckdb
+```
+
+Here `last` selects the last completed Race of 2025. `--once` flushes and
+closes the database before printing a JSON summary and exiting. Open the database
+later with `odv --db ./bargeboard.duckdb`, using the CLI from
+[otel-desktop-viewer](https://github.com/CtrlSpice/otel-desktop-viewer).
+Use `--no-circuit` to skip MultiViewer lookups and omit the circuit details
+they add to trace events. `bargeboard skills` prints the query guide.
+Install it with `bargeboard skills --install ~/.agents/skills`.
+
 Live timing and static replay share a session engine. Both produce 10-second
 Delta ExponentialHistograms for field speed and engine speed from `CarData.z`.
 Each window pools measurements across drivers. Its lowest and highest readings
@@ -266,11 +289,18 @@ tick at that time. Ticks are one second apart. Playback speed changes the wait
 between batches, not their timestamps.
 
 The shipped `config.yaml` keeps `[f1livetiming, otlp]` as the active default
-receivers so startup never requires a static archive path or unapproved
-third-party egress. To load a finished session and post-session context into the
-embedded viewer without duplicating live SignalR telemetry, enable `f1static`
-(instead of `f1livetiming`) and optional `openf1` / `jolpica` receivers in a
-local configuration:
+receivers. To load a finished session and post-session context into the
+embedded viewer without duplicating live SignalR telemetry, replace
+`f1livetiming` with `f1static` in the pipelines of a local configuration.
+Add `openf1` and `jolpica` to the relevant pipelines if you want their data.
+
+You can omit `session_path` and use the same selector as `bargeboard replay`
+in `f1static.session`. For OpenF1, omit `session_key` to discover a session.
+You can filter by `year` or `season`, `country_name` and `session_name`.
+If `drivers` is empty, OpenF1 uses the roster for the selected session.
+The separate `root_drivers` list controls which result logs link to driver traces.
+For Jolpica, `round: 0` selects the last published round of the configured season,
+or of the current season when `season: 0`. The example uses explicit paths and IDs.
 
 ```yaml
 receivers:

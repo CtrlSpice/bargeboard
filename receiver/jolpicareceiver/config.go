@@ -35,7 +35,7 @@ func (c Config) Validate() error {
 	if !c.Enabled {
 		return nil
 	}
-	if c.Season < 1950 || c.Season > 9999 || c.Round < 1 || c.Round > 99 {
+	if c.Season != 0 && c.Season < 1950 || c.Season > 9999 || c.Round < 0 || c.Round > 99 || c.Season == 0 && c.Round != 0 {
 		return errors.New("invalid season or round")
 	}
 	if c.MeetingKey < 0 || c.CorrelateTraces && c.MeetingKey == 0 {

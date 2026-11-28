@@ -14,6 +14,11 @@ import (
 var Type = component.MustNewType("f1static")
 
 func NewFactory() receiver.Factory {
+	return NewFactoryWithCompletion(nil)
+}
+
+// NewFactoryWithCompletion notifies the embedded CLI after terminal replay status.
+func NewFactoryWithCompletion(finished func(ReplaySummary, error)) receiver.Factory {
 	var mu sync.Mutex
 	type instanceKey struct {
 		cfg *Config
@@ -36,14 +41,15 @@ func NewFactory() receiver.Factory {
 		key := instanceKey{cfg, settings.ID}
 		r := instances[key]
 		if r == nil {
-			if cfg.Enabled {
+			if cfg.Enabled && cfg.SessionPath != "" {
 				if owner := activeSessions[cfg.SessionPath]; owner != nil {
 					return nil, errors.New("duplicate static replay session_path")
 				}
 			}
 			r = newReceiver(*cfg, settings)
+			r.finished = finished
 			instances[key] = r
-			if cfg.Enabled {
+			if cfg.Enabled && cfg.SessionPath != "" {
 				activeSessions[cfg.SessionPath] = r
 			}
 			r.claim = func(id f1id.SessionIdentity) error {

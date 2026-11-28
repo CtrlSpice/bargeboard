@@ -39,28 +39,46 @@ func Replay(ctx context.Context, p FrozenReplayPlan, pace string, clock Clock, c
 		return errors.New("incomplete replay")
 	}
 	start := clock.Now()
-	for _, b := range p.batches {
+	return p.walk(ctx, func(b FrozenBatch, _, _ bool) error {
+		if err := awaitBatch(ctx, clock, start, b, n); err != nil {
+			return err
+		}
+		return consume(ctx, b, clock.Now())
+	})
+}
+
+type batchSink func(batch FrozenBatch, endOfOffset, last bool) error
+type batchWalk func(context.Context, batchSink) error
+
+func (p FrozenReplayPlan) walk(ctx context.Context, sink batchSink) error {
+	for i, b := range p.batches {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if n != 0 {
-			wait := start.Add(time.Duration(b.CoordNs / int64(n))).Sub(clock.Now())
-			if wait > 0 {
-				if err := clock.Sleep(ctx, wait); err != nil {
-					return err
-				}
-			}
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := consume(ctx, b, clock.Now()); err != nil {
+		last := i+1 == len(p.batches)
+		if err := sink(b, last || p.batches[i+1].CoordNs != b.CoordNs, last); err != nil {
 			return err
 		}
 	}
 	return nil
 }
-
+func awaitBatch(ctx context.Context, clock Clock, start time.Time, b FrozenBatch, n int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if n != 0 {
+		wait := start.Add(time.Duration(b.CoordNs / int64(n))).Sub(clock.Now())
+		if wait > 0 {
+			if err := clock.Sleep(ctx, wait); err != nil {
+				return err
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return nil
+}
 func (b FrozenBatch) engineBatch() f1engine.Batch {
 	batch := f1engine.Batch{ObservationTime: b.ObservationUTC, Source: f1engine.Feed}
 	if b.Snapshot {

@@ -19,6 +19,7 @@ import (
 
 var errPermanentLiveTimingFailure = errors.New("F1 live timing receiver stopped after receiving invalid server data; Collector can still run")
 var errReceiverStopping = errors.New("F1 live timing receiver is stopping")
+var errTokenMissing = errors.New("open auth token file: file does not exist")
 
 type circuitLoadResult struct {
 	gen      f1engine.SessionInfoGeneration
@@ -119,6 +120,12 @@ func (r *liveTimingReceiver) Start(ctx context.Context, host component.Host) err
 	}
 	connection, err := r.connect(ctx)
 	if err != nil {
+		if r.config.Auth.OptionalToken && errors.Is(err, errTokenMissing) {
+			if r.settings.Logger != nil {
+				r.settings.Logger.Info("Live timing disabled: optional token file is missing")
+			}
+			return nil
+		}
 		return errors.Join(fmt.Errorf("connect to F1 live timing: %w", err), r.operational.stop(ctx))
 	}
 

@@ -206,6 +206,7 @@ func TestParseToken(t *testing.T) {
 		{name: "raw token", contents: "subscription-token", want: "subscription-token"},
 		{name: "surrounding whitespace", contents: " \nsubscription-token\r\n", want: "subscription-token"},
 		{name: "empty", contents: " \n", wantErr: "empty"},
+		{name: "multiline", contents: "invented-token\nanother-line", wantErr: "one line"},
 		{name: "too large", contents: strings.Repeat("x", maxTokenFileSize+1), wantErr: "exceeds"},
 	}
 

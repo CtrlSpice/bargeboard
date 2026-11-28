@@ -68,6 +68,7 @@ func TestFrozenDelivery(t *testing.T) {
 		"TimingData.jsonStream": "00:00:03.000{}\n00:00:01.000null\n00:00:03.000[]",
 	}
 	c := DefaultConfig()
+	c.CircuitEnrichment.Enabled = false
 	c.Enabled = true
 	c.SessionPath = "2025/Test_Race"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -155,11 +156,14 @@ func TestAnchorFallback(t *testing.T) {
 
 func TestRedirectAndConfig(t *testing.T) {
 	c := DefaultConfig()
-	if c.Enabled || c.Validate() != nil {
+	if c.Enabled || !c.CircuitEnrichment.Enabled || c.Validate() != nil {
 		t.Fatal("default configuration")
 	}
 	c.Enabled = true
-	for _, s := range []string{"", ".", "..", "a//b", "/x", "a/", "foo/../bar", "a%2fb", "x?y", "a#b", "a\\b"} {
+	if err := c.Validate(); err != nil {
+		t.Fatal("default selector", err)
+	}
+	for _, s := range []string{".", "..", "a//b", "/x", "a/", "foo/../bar", "a%2fb", "x?y", "a#b", "a\\b"} {
 		c.SessionPath = s
 		if c.Validate() == nil {
 			t.Errorf("accepted %q", s)

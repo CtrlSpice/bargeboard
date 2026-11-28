@@ -2,6 +2,7 @@ package f1livetimingreceiver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -86,6 +87,9 @@ func bootstrapConnection(ctx context.Context, client *http.Client, cfg *Config) 
 
 func readTokenFile(path string) (string, error) {
 	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", errTokenMissing
+	}
 	if err != nil {
 		return "", fmt.Errorf("open auth token file: %w", err)
 	}
@@ -106,6 +110,9 @@ func parseToken(contents []byte) (string, error) {
 	token := strings.TrimSpace(string(contents))
 	if token == "" {
 		return "", fmt.Errorf("auth token file is empty")
+	}
+	if strings.ContainsAny(token, "\r\n") {
+		return "", errors.New("auth token file must contain one line")
 	}
 	return token, nil
 }

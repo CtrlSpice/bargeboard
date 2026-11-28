@@ -1,5 +1,5 @@
 build/
-bargeboard
+/bargeboard
 *.test
 coverage.out
 *.log
