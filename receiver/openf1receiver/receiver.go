@@ -128,11 +128,21 @@ func (r *resultReceiver) Start(ctx context.Context, _ component.Host) error {
 		return errors.New("openf1 receiver is stopping")
 	}
 	if !r.started && r.cfg.Enabled {
+		var nextRequest time.Time
+		if r.cfg.SessionKey == 0 {
+			started := time.Now()
+			c, err := r.http.discover(ctx, r.cfg, started)
+			if err != nil {
+				return err
+			}
+			r.cfg = c
+			nextRequest = started.Add(time.Second)
+		}
 		r.started = true
 		runCtx := context.WithoutCancel(ctx)
 		var delivery context.Context
 		delivery, r.cancelDelivery = context.WithCancel(runCtx)
-		go r.run(runCtx, delivery)
+		go r.run(runCtx, delivery, nextRequest)
 	}
 	return nil
 }
@@ -155,9 +165,9 @@ func (r *resultReceiver) Shutdown(ctx context.Context) error {
 		return ctx.Err()
 	}
 }
-func (r *resultReceiver) run(ctx, delivery context.Context) {
+func (r *resultReceiver) run(ctx, delivery context.Context, nextRequest time.Time) {
 	defer close(r.done)
-	var s AdapterState
+	s := AdapterState{globalSpacing: nextRequest}
 	c := r.cfg
 	s, _ = s.Update(Session{Identity: c.identity(), RouteKey: c.SessionKey, Enabled: true, Terminal: true, Drivers: c.Drivers, DiscoverRoster: len(c.Drivers) == 0}, time.Now())
 	var workers sync.WaitGroup

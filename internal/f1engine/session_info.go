@@ -392,6 +392,13 @@ func parseSessionInfoLocalTimeValue(value string) (time.Time, bool) {
 	return parsed, true
 }
 
+// LocalScheduleUTC converts an F1 local schedule field and its GMT offset to UTC.
+func LocalScheduleUTC(date, offset string) (time.Time, bool) {
+	t, ok := parseSessionInfoLocalTimeValue(date)
+	d, valid := parseSessionInfoGMTOffsetValue(offset)
+	return t.Add(-d), ok && valid
+}
+
 func parseSessionInfoGMTOffset(raw json.RawMessage) (time.Duration, bool) {
 	value, ok, _ := parseJSONString(raw)
 	if !ok {

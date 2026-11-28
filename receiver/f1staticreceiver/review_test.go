@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path"
-
 	"strings"
 	"testing"
 
@@ -25,6 +25,7 @@ func TestArchiveDownloadPolicy(t *testing.T) {
 		{"SessionInfo.json", 200, 4<<20 + 1}, {"Position.z.jsonStream", 200, 64<<20 + 1},
 	} {
 		t.Run(fmt.Sprintf("%s/%d", tc.file, tc.status), func(t *testing.T) {
+			expectReplayFilesRemoved(t)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				file := path.Base(r.URL.Path)
 				if file == tc.file {
@@ -51,6 +52,7 @@ func TestArchiveDownloadPolicy(t *testing.T) {
 			}))
 			defer srv.Close()
 			c := DefaultConfig()
+			c.CircuitEnrichment.Enabled = false
 			c.Enabled, c.Endpoint, c.SessionPath = true, srv.URL, "s"
 			p, err := Materialize(t.Context(), c)
 			switch {
@@ -75,19 +77,42 @@ func TestArchiveDownloadPolicy(t *testing.T) {
 }
 
 func TestArchiveInterruptedBody(t *testing.T) {
+	expectReplayFilesRemoved(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.(http.Flusher).Flush()
-		cancel()
-		<-r.Context().Done()
+		switch path.Base(r.URL.Path) {
+		case "SessionInfo.json":
+			fmt.Fprint(w, info)
+		case "DriverList.json":
+			fmt.Fprint(w, drivers)
+		default:
+			w.(http.Flusher).Flush()
+			cancel()
+			<-r.Context().Done()
+		}
 	}))
 	defer srv.Close()
 	c := DefaultConfig()
+	c.CircuitEnrichment.Enabled = false
 	c.Enabled, c.Endpoint, c.SessionPath = true, srv.URL, "s"
 	if _, err := Materialize(ctx, c); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
+}
+
+func expectReplayFilesRemoved(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("TMPDIR", dir)
+	t.Setenv("TMP", dir)
+	t.Setenv("TEMP", dir)
+	t.Cleanup(func() {
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) != 0 {
+			t.Errorf("temporary replay files remain: %v, %v", entries, err)
+		}
+	})
 }
 
 func TestFreezeTimelineRange(t *testing.T) {

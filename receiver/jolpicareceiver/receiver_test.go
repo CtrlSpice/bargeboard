@@ -28,6 +28,52 @@ func empty(k table) string {
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
+func TestDiscoverLastRoundPinsStandings(t *testing.T) {
+	for _, season := range []int64{0, 2025} {
+		c := config()
+		c.Round = 0
+		c.Season = season
+		c.IncludeSprint = false
+		r := newReceiver(c, receiver.Settings{})
+		r.wait = func(context.Context, time.Duration) error { return nil }
+		first := "current"
+		if season != 0 {
+			first = "2025"
+		}
+		var paths []string
+		r.client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			paths = append(paths, req.URL.Path)
+			k := []table{race, wdc, wcc}[len(paths)-1]
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(fixture(t, k)))}, nil
+		})
+		want := []string{"/ergast/f1/" + first + "/last/results.json", "/ergast/f1/2025/4/driverstandings.json", "/ergast/f1/2025/4/constructorstandings.json"}
+		if err := r.run(t.Context()); err != nil || !reflect.DeepEqual(paths, want) || r.cfg.Season != 2025 || r.cfg.Round != 4 {
+			t.Fatal(paths, err)
+		}
+	}
+}
+
+func TestDiscoverRoundSkipsStandingsBeforeConstructorChampionship(t *testing.T) {
+	c := config()
+	c.Season, c.Round, c.IncludeSprint = 0, 0, false
+	r := newReceiver(c, receiver.Settings{})
+	r.wait = func(context.Context, time.Duration) error { return nil }
+	var paths []string
+	r.client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		k := wdc
+		if len(paths) == 1 {
+			k = race
+		}
+		body := strings.ReplaceAll(fixture(t, k), `"2025"`, `"1957"`)
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+	want := []string{"/ergast/f1/current/last/results.json", "/ergast/f1/1957/4/driverstandings.json"}
+	if err := r.run(t.Context()); err != nil || !reflect.DeepEqual(paths, want) || r.cfg.Season != 1957 || r.cfg.Round != 4 {
+		t.Fatal(paths, err)
+	}
+}
+
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func TestStandingsSeasonBoundary(t *testing.T) {

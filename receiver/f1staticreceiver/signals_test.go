@@ -258,6 +258,7 @@ func TestReceiverLifecycleStatus(t *testing.T) {
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			cfg := DefaultConfig()
+			cfg.CircuitEnrichment.Enabled = false
 			cfg.Enabled = true
 			cfg.Endpoint = server.URL
 			cfg.SessionPath = tc.path
@@ -295,6 +296,7 @@ func TestReceiverLifecycleStatus(t *testing.T) {
 		sink, _ := consumer.NewTraces(func(context.Context, ptrace.Traces) error { return nil })
 
 		cfg1 := factory.CreateDefaultConfig().(*Config)
+		cfg1.CircuitEnrichment.Enabled = false
 		cfg1.Enabled = true
 		cfg1.Endpoint = server.URL
 		cfg1.SessionPath = "ok"
@@ -303,6 +305,7 @@ func TestReceiverLifecycleStatus(t *testing.T) {
 			t.Fatal(err)
 		}
 		cfg2 := factory.CreateDefaultConfig().(*Config)
+		cfg2.CircuitEnrichment.Enabled = false
 		cfg2.Enabled = true
 		cfg2.Endpoint = server.URL
 		cfg2.SessionPath = "mirror"

@@ -27,7 +27,7 @@ func createDefaultConfig() component.Config {
 	return &Config{
 		Endpoint:          defaultEndpoint,
 		NegotiateEndpoint: defaultNegotiateEndpoint,
-		CircuitEnrichment: CircuitEnrichmentConfig{Endpoint: circuitmap.DefaultEndpoint},
+		CircuitEnrichment: CircuitEnrichmentConfig{Enabled: true, Endpoint: circuitmap.DefaultEndpoint},
 	}
 }
 

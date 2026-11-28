@@ -203,7 +203,7 @@ func TestConfiguration(t *testing.T) {
 		}
 	}
 	c.SessionName = "race"
-	for _, modify := range []func(*Config){func(c *Config) { c.SessionKey = 0 }, func(c *Config) { c.MeetingKey = 0 }, func(c *Config) { c.Season = 999 }, func(c *Config) { c.Season = 10000 }, func(c *Config) { c.Drivers = []DriverConfig{{1, "A"}, {1, "B"}} }, func(c *Config) { c.Endpoint = "https://user@private.test/v1" }} {
+	for _, modify := range []func(*Config){func(c *Config) { c.SessionKey = -1 }, func(c *Config) { c.MeetingKey = 0 }, func(c *Config) { c.Season = 999 }, func(c *Config) { c.Season = 10000 }, func(c *Config) { c.Drivers = []DriverConfig{{1, "A"}, {1, "B"}} }, func(c *Config) { c.Endpoint = "https://user@private.test/v1" }} {
 		v := *c
 		modify(&v)
 		if v.Validate() == nil {

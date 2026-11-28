@@ -68,6 +68,10 @@ func TestLoad(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(m, testMap(t)) {
 		t.Fatalf("unexpected map: %v", err)
 	}
+	s.Close()
+	if cached, err := c.Load(t.Context(), 91, 2026); err != nil || !reflect.DeepEqual(cached, m) {
+		t.Fatal("cached geometry unavailable", err)
+	}
 	for _, id := range [][2]int64{{0, 2026}, {91, 999}, {91, 10000}} {
 		if m, err := c.Load(context.Background(), id[0], id[1]); err == nil || m.Valid() {
 			t.Fatal("accepted invalid identity")

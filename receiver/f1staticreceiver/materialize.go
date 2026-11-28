@@ -1,6 +1,7 @@
 package f1staticreceiver
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,14 +10,15 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/CtrlSpice/bargeboard/internal/circuitmap"
 	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 	"github.com/CtrlSpice/bargeboard/internal/f1id"
+	"github.com/CtrlSpice/bargeboard/internal/f1index"
 )
 
 var ErrMissingHistoricalOrigin = errors.New("archive has no historical UTC anchor")
@@ -128,142 +130,156 @@ func anchor(streams map[string][]StreamRecord) (time.Time, error) {
 	return time.Time{}, ErrMissingHistoricalOrigin
 }
 
-func freeze(info, roster []byte, streams map[string][]StreamRecord) (FrozenReplayPlan, error) {
-	p, err := bootstrap(info, roster)
-	if err != nil {
-		return FrozenReplayPlan{}, err
-	}
-	t0, err := anchor(streams)
-	if err != nil {
-		return FrozenReplayPlan{}, err
-	}
-	type item struct {
-		effective int64
-		r         Record
-	}
-	var items []item
-	var minOffset int64 = 1<<63 - 1
-	for _, topic := range topics {
-		var effective int64
-		for i, r := range streams[topic] {
-			minOffset = min(minOffset, r.OffsetNs)
-			effective = max(effective, r.OffsetNs)
-			pub := t0.Add(time.Duration(r.OffsetNs))
-			// The bootstrap and effective offsets also select from these checked offsets.
-			if !validReplayTime(pub) {
-				return FrozenReplayPlan{}, errTimeline
-			}
-			items = append(items, item{effective, Record{topic, r.Payload, pub, topic == "TeamRadio" && i == 0}})
-		}
-	}
-	sort.SliceStable(items, func(i, j int) bool { return items[i].effective < items[j].effective })
-	origin := t0.Add(time.Duration(minOffset))
-	p.batches = []FrozenBatch{{Snapshot: true, ObservationUTC: origin, records: []Record{{Topic: "SessionInfo", Payload: string(info), PublicationUTC: origin}, {Topic: "DriverList", Payload: string(roster), PublicationUTC: origin}}}}
-	for i, it := range items {
-		p.batches = append(p.batches, FrozenBatch{int64(i + 1), it.effective - minOffset, t0.Add(time.Duration(it.effective)), false, []Record{it.r}})
-	}
-	return p, nil
-}
-
 // Materialize performs all archive and geometry I/O before any batch is released.
 func Materialize(ctx context.Context, c Config) (FrozenReplayPlan, error) {
-	var empty FrozenReplayPlan
+	p, err := openPlan(ctx, c)
+	if err != nil {
+		return FrozenReplayPlan{}, err
+	}
+	defer p.close()
+	err = p.walk(ctx, func(b FrozenBatch, _, _ bool) error { p.batches = append(p.batches, b); return nil })
+	if err != nil {
+		return FrozenReplayPlan{}, err
+	}
+	return p.FrozenReplayPlan, nil
+}
+
+func openPlan(ctx context.Context, c Config) (*streamPlan, error) {
 	if err := c.Validate(); err != nil {
-		return empty, err
+		return nil, err
 	}
 	if !c.Enabled {
-		return empty, errors.New("static replay disabled")
+		return nil, errors.New("static replay disabled")
+	}
+	if c.SessionPath == "" {
+		q, _ := f1index.ParseSelector(c.Session)
+		match, err := f1index.Resolve(ctx, c.Endpoint, q, time.Now())
+		if err != nil {
+			return nil, err
+		}
+		c.SessionPath = strings.TrimSuffix(match.Session.Path, "/")
+		if c.SessionPath == "" {
+			return nil, errors.New("empty archive path")
+		}
+		if err := c.Validate(); err != nil {
+			return nil, err
+		}
 	}
 	var token string
 	if c.Auth.TokenFile != "" {
 		b, err := os.ReadFile(c.Auth.TokenFile)
 		if err != nil {
-			return empty, errors.New("cannot read archive token")
+			return nil, errors.New("cannot read archive token")
 		}
 		token = strings.TrimSpace(string(b))
 		if token == "" || strings.ContainsAny(token, "\r\n") {
-			return empty, errors.New("invalid archive token")
+			return nil, errors.New("invalid archive token")
 		}
 	}
 	client := f1id.NewRestrictedHTTPClient(60 * time.Second)
-	fetch := func(file string, optional bool) ([]byte, error) {
+	fetch := func(file string, optional bool, dst io.Writer) (bool, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Endpoint+"/"+c.SessionPath+"/"+file, nil)
 		if err != nil {
-			return nil, errors.New("invalid archive request")
+			return false, errors.New("invalid archive request")
 		}
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
 		resp, err := client.Do(req)
 		if err != nil {
-			return nil, f1id.SanitizedHTTPError(ctx, "archive request", err)
+			return false, f1id.SanitizedHTTPError(ctx, "archive request", err)
 		}
 		defer resp.Body.Close()
 		if optional && (resp.StatusCode == http.StatusNotFound || file == "TeamRadio.jsonStream" && resp.StatusCode == http.StatusForbidden) {
-			return nil, nil
+			return false, nil
 		}
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("archive %s: HTTP %d", file, resp.StatusCode)
+			return false, fmt.Errorf("archive %s: HTTP %d", file, resp.StatusCode)
 		}
 		var limit int64 = 4 << 20
 		if optional {
 			limit = 64 << 20
 		}
 		if resp.ContentLength > limit {
-			return nil, f1id.ErrResponseTooLarge
+			return false, f1id.ErrResponseTooLarge
 		}
-		b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+		n, err := io.Copy(dst, io.LimitReader(resp.Body, limit+1))
 		if err != nil {
-			return nil, f1id.SanitizedHTTPError(ctx, "read archive", err)
+			return false, f1id.SanitizedHTTPError(ctx, "read archive", err)
 		}
-		if int64(len(b)) > limit {
-			return nil, f1id.ErrResponseTooLarge
+		if n > limit {
+			return false, f1id.ErrResponseTooLarge
 		}
-		return b, nil
+		return true, nil
 	}
-	info, err := fetch("SessionInfo.json", false)
+	var info, roster bytes.Buffer
+	if _, err := fetch("SessionInfo.json", false, &info); err != nil {
+		return nil, err
+	}
+	if _, err := fetch("DriverList.json", false, &roster); err != nil {
+		return nil, err
+	}
+	bom := []byte("\xef\xbb\xbf")
+	ib, rb := bytes.TrimPrefix(info.Bytes(), bom), bytes.TrimPrefix(roster.Bytes(), bom)
+	meta, err := bootstrap(ib, rb)
 	if err != nil {
-		return empty, err
+		return nil, err
 	}
-	roster, err := fetch("DriverList.json", false)
+	dir, err := os.MkdirTemp("", "bargeboard-replay-")
 	if err != nil {
-		return empty, err
+		return nil, err
 	}
-	streams := map[string][]StreamRecord{}
-	for _, topic := range topics {
+	p := &streamPlan{FrozenReplayPlan: meta, dir: dir, minimum: 1<<63 - 1}
+	ok := false
+	defer func() {
+		if !ok {
+			p.close()
+		}
+	}()
+	for index, topic := range topics {
 		if topic == "SessionInfo" || topic == "DriverList" {
 			continue
 		}
+		compressed := topic == "CarData" || topic == "Position"
 		file := topic + ".jsonStream"
-		compressed := topic == "Position" || topic == "CarData"
 		if compressed {
 			file = topic + ".z.jsonStream"
 		}
-		raw, err := fetch(file, true)
+		f, err := os.Create(filepath.Join(dir, file))
 		if err != nil {
-			return empty, err
+			return nil, err
 		}
-		if raw != nil {
-			streams[topic], err = ParseStreamRecords(raw, compressed)
-			if err != nil {
-				return empty, fmt.Errorf("%s: %w", file, err)
-			}
+		p.files = append(p.files, f)
+		present, err := fetch(file, true, f)
+		if err != nil {
+			return nil, err
+		}
+		if !present {
+			continue
+		}
+		cur := &cursor{index: index, compressed: compressed, reader: bufio.NewReader(f)}
+		if err = p.prepare(ctx, f, cur); err != nil {
+			return nil, fmt.Errorf("%s: %w", file, err)
 		}
 	}
-	bom := []byte("\xef\xbb\xbf")
-	p, err := freeze(bytes.TrimPrefix(info, bom), bytes.TrimPrefix(roster, bom), streams)
-	if err != nil {
-		return empty, err
+	if p.t0.IsZero() {
+		return nil, ErrMissingHistoricalOrigin
 	}
+	origin := p.t0.Add(time.Duration(p.minimum))
+	if !validReplayTime(origin) {
+		return nil, errTimeline
+	}
+	p.snapshot = FrozenBatch{Snapshot: true, ObservationUTC: origin, records: []Record{{Topic: "SessionInfo", Payload: string(ib), PublicationUTC: origin}, {Topic: "DriverList", Payload: string(rb), PublicationUTC: origin}}}
 	if c.CircuitEnrichment.Enabled && p.CircuitKey > 0 {
 		m, err := circuitmap.NewClient(c.CircuitEnrichment.Endpoint)
 		if err != nil {
-			return empty, err
+			return nil, err
 		}
 		p.Circuit, _ = m.Load(ctx, p.CircuitKey, p.Identity.Season)
 	}
 	if err := ctx.Err(); err != nil {
-		return empty, err
+		return nil, err
 	}
+	ok = true
 	return p, nil
 }

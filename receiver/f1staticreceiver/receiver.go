@@ -74,6 +74,8 @@ func (b *statusBroadcaster) stop() {
 }
 
 type staticReceiver struct {
+	summary  ReplaySummary
+	finished func(ReplaySummary, error)
 	cfg      Config
 	settings receiver.Settings
 	metrics  consumer.Metrics
@@ -87,6 +89,12 @@ type staticReceiver struct {
 	stopped  bool
 	claim    func(f1id.SessionIdentity) error
 	remove   func()
+}
+
+type ReplaySummary struct {
+	Session       string `json:"session"`
+	Meeting       string `json:"meeting"`
+	TraceIDSample string `json:"trace_id_sample"`
 }
 
 func newReceiver(cfg Config, settings receiver.Settings) *staticReceiver {
@@ -125,6 +133,9 @@ func (r *staticReceiver) Start(ctx context.Context, host component.Host) error {
 						r.settings.Logger.Error("static replay collection stopped", zap.Error(err))
 					}
 					r.status.Report(componentstatus.NewPermanentErrorEvent(errors.New("static archive replay failed")))
+					if r.finished != nil {
+						r.finished(r.summary, err)
+					}
 				}
 				return
 			}
@@ -132,6 +143,9 @@ func (r *staticReceiver) Start(ctx context.Context, host component.Host) error {
 				r.settings.Logger.Info("Static archive replay completed")
 			}
 			r.status.Report(componentstatus.NewEvent(componentstatus.StatusOK))
+			if r.finished != nil {
+				r.finished(r.summary, nil)
+			}
 		}()
 	}
 	return nil
@@ -160,18 +174,27 @@ func (r *staticReceiver) Shutdown(ctx context.Context) error {
 	return nil
 }
 func (r *staticReceiver) run(ctx context.Context) error {
-	p, err := Materialize(ctx, r.cfg)
+	p, err := openPlan(ctx, r.cfg)
 	if err != nil {
 		return err
+	}
+	defer p.close()
+	if r.finished != nil {
+		info := object([]byte(p.snapshot.records[0].Payload))
+		r.summary.Session = text(info["Name"])
+		r.summary.Meeting = text(object(info["Meeting"])["Name"])
 	}
 	if r.claim != nil {
 		if err := r.claim(p.Identity); err != nil {
 			return err
 		}
 	}
-	return r.play(ctx, p)
+	return r.playBatches(ctx, p.FrozenReplayPlan, p.walk)
 }
 func (r *staticReceiver) play(ctx context.Context, p FrozenReplayPlan) error {
+	return r.playBatches(ctx, p, p.walk)
+}
+func (r *staticReceiver) playBatches(ctx context.Context, p FrozenReplayPlan, walk batchWalk) error {
 	var state f1engine.State
 	var tracesFailed, metricsFailed, logsFailed bool
 	var reported f1engine.RacingDiagnostics
@@ -187,6 +210,16 @@ func (r *staticReceiver) play(ctx context.Context, p FrozenReplayPlan) error {
 		version := r.settings.BuildInfo.Version
 		if r.traces != nil && e.HasSpans() {
 			traces := f1engine.ProjectTracesWithCircuit(version, e, func(f1engine.SessionInfoIdentity) circuitmap.Map { return p.Circuit })
+			if r.finished != nil && r.summary.TraceIDSample == "" {
+				for _, rs := range traces.ResourceSpans().All() {
+					for _, ss := range rs.ScopeSpans().All() {
+						if ss.Spans().Len() > 0 {
+							r.summary.TraceIDSample = ss.Spans().At(0).TraceID().String()
+							break
+						}
+					}
+				}
+			}
 			if traces.SpanCount() > 0 && r.traces.ConsumeTraces(ctx, traces) != nil {
 				tracesFailed = true
 			}
@@ -214,7 +247,16 @@ func (r *staticReceiver) play(ctx context.Context, p FrozenReplayPlan) error {
 		deliver(e, now)
 		nextTick = nextTick.Add(time.Second)
 	}
-	err := Replay(ctx, p, r.cfg.Pace, r.clock, func(ctx context.Context, b FrozenBatch, now time.Time) error {
+	pace, err := multiplier(r.cfg.Pace)
+	if err != nil {
+		return err
+	}
+	start := r.clock.Now()
+	err = walk(ctx, func(b FrozenBatch, groupEnd, last bool) error {
+		if err := awaitBatch(ctx, r.clock, start, b, pace); err != nil {
+			return err
+		}
+		now := r.clock.Now()
 		if b.Snapshot {
 			nextTick = b.ObservationUTC
 		}
@@ -230,8 +272,7 @@ func (r *staticReceiver) play(ctx context.Context, p FrozenReplayPlan) error {
 		}
 		state = red.State
 		deliver(red.Effects, now)
-		last := b.Ordinal == int64(len(p.batches)-1)
-		if nextTick.Equal(b.ObservationUTC) && (last || p.batches[b.Ordinal+1].CoordNs != b.CoordNs) {
+		if nextTick.Equal(b.ObservationUTC) && groupEnd {
 			tick(now)
 		}
 		if last {

@@ -56,6 +56,9 @@ func TestShippedConfigResolvesTokenFileFromHome(t *testing.T) {
 	if filepath.Clean(tokenFile) != want {
 		t.Fatalf("resolved token file = %q, want %q", tokenFile, want)
 	}
+	if value := resolved.Get("receivers::f1livetiming::auth::optional_token"); value != true {
+		t.Fatalf("optional_token = %v, want true", value)
+	}
 }
 
 func TestShippedConfigUsesPersistentViewer(t *testing.T) {

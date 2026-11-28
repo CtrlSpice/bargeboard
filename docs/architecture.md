@@ -748,10 +748,20 @@ The Go distribution currently compiles:
 - The viewer's `desktop` exporter and `duckdb` extension.
 
 The shipped `config.yaml` runs both the F1 Live Timing and standard OTLP
-receivers while leaving `f1static`, `openf1`, and `jolpica` opt-in so default
-startup requires neither a static archive URL nor third-party HTTP egress. It
-contains no credentials: the F1 receiver resolves each user's
-token file through `${env:HOME}/.config/bargeboard/f1tv-token`.
+receivers. The `f1static`, `openf1`, and `jolpica` receivers are opt-in, so
+startup does not require a static archive URL. The F1 receiver looks for a
+token at `${env:HOME}/.config/bargeboard/f1tv-token`.
+The shipped configuration sets `auth.optional_token: true`. If that file is
+absent, live timing stays inactive and the Collector continues. Unreadable
+files and tokens that are empty or contain line breaks after trimming are
+still startup errors. The factory default requires the token.
+
+`bargeboard sessions` lists the season index. `bargeboard replay` connects all
+three `f1static` signals through `batch` to `desktop` with DuckDB retention
+disabled. With `--once`, terminal receiver status triggers Collector shutdown
+and batch flushing before the command prints its summary. Otherwise the viewer
+stays open after a successful replay. `bargeboard skills` prints or installs
+the embedded `odv` query guide.
 
 The F1 Live Timing receiver currently authenticates, negotiates SignalR,
 subscribes, reconnects, decodes records, distinguishes feed updates from
@@ -1494,7 +1504,7 @@ weather, or car telemetry.
 ### MultiViewer Circuit Geometry
 
 MultiViewer's circuit layout API (`https://api.multiviewer.app/api/v1/circuits`)
-owns opt-in static spatial corner and marshal-sector lookup metadata for
+supplies static spatial corner and marshal-sector lookup metadata for
 track-local `(X, Y)` coordinates already accepted from `Position.z`. It emits
 zero standalone spans, metrics, or logs.
 
@@ -2041,9 +2051,16 @@ replay of Formula 1's post-session `/static/<session_path>/` archive. It is NOT
 captured SignalR transport replay (which remains **YELLOW** above) because
 static per-topic `.jsonStream` files expose no global SignalR callback ordinal.
 
-`f1static` defaults to `enabled: false`. Replay requires `enabled: true` and a
+`f1static` defaults to `enabled: false`. An enabled receiver accepts a
 safe relative `session_path` (slash-separated `[A-Za-z0-9._-]+` segments, no
-leading/trailing `/`, empty segment, `.`, or `..`). The default `pace` is
+leading/trailing `/`, empty segment, `.`, or `..`). An explicit path takes
+precedence over `session`. Without a path, the receiver resolves `session`
+from the public `/{year}/Index.json`. `latest` (the default) selects the
+most recently ended Race this UTC year, then tries the previous year.
+`year/last/type` and `year/meeting/session` compare the local end date minus
+the GMT offset to current UTC. Matching ignores case and treats hyphens,
+underscores and runs of whitespace as a single space.
+The default `pace` is
 `instant`; canonical `<N>x` is also accepted for integers `1..1000`. Endpoints
 MUST use HTTPS or loopback HTTP without trailing `/`, user-info, query, or fragment; redirects
 are disabled. Optional `auth.token_file` attaches a Bearer token only to that
@@ -2052,8 +2069,10 @@ instances within one factory MUST reject both duplicate configured
 `session_path` values at creation and duplicate canonical `SessionIdentity`
 values after materialization before emitting replay signals.
 
-Before replay begins, `f1static` materializes and freezes the complete session
-input:
+The receiver downloads the raw archive into private temporary files. It scans
+line offsets before replay because a later offset can regress below the first.
+An invalid offset fails preparation. The receiver deletes the files on
+completion, failure or cancellation.
 
 1. `SessionInfo.json` and `DriverList.json` (stripping at most one leading UTF-8
    BOM) form ordinal `0`, an atomic bootstrap `snapshot` batch establishing
@@ -2061,10 +2080,13 @@ input:
    `Meeting.Circuit.Key`, and the frozen 1-to-32-driver roster. End-of-session
    stateful `.json` topic snapshots MUST NOT be loaded at `t=0` because they
    contain final session state rather than initial state.
-2. Each available `<Topic>.jsonStream` and `<Topic>.z.jsonStream` file is parsed
-   completely before replay starts (HTTP 404 on an optional topic stream, or
+2. A min-heap holds one decoded record per available topic. The receiver reads
+   successive records from disk and inflates compressed payloads on demand.
+   Invalid records stop replay permanently. Payload corruption detected
+   during the merge stops delivery at that record's position in merge order.
+   HTTP 404 on an optional topic stream, or
    HTTP 403 specifically on `TeamRadio.jsonStream`, means absent topic rather
-   than transport failure; each stream file is bounded to 64 MiB). After
+   than transport failure. Each stream file is bounded to 64 MiB. After
    optional single leading UTF-8 BOM removal, each CRLF- or LF-delimited record
    starts with an exact 12-byte ASCII offset `HH:MM:SS.mmm` (`00..99` hours,
    `00..59` minutes/seconds, `000..999` milliseconds) parsed via integer
@@ -2091,12 +2113,12 @@ input:
    Across topics sharing an effective offset, a fixed deterministic topic
    precedence orders identity, roster, and position context before dependent
    timing and race-control updates.
-5. `f1static` replays the frozen batches at most once per Collector run,
+5. `f1static` replays the merged batches at most once per Collector run,
    emitting `f1.data.source=livetiming` and canonical `bargeboard.otlp.id/v1`
    IDs across GREEN traces, metrics, and logs. It reduces `CarData.z` and
    timing observations through the same windows as the live receiver.
    Playback `pace` changes host sleeps between ordinals
-   only; reducer outcomes, deterministic IDs, metric windows, and OTLP racing
+   only. Reducer outcomes, deterministic IDs, metric windows, and OTLP racing
    timestamps are invariant across `instant` and `1x..1000x`, while racing log
    `ObservedTimestamp` uses actual process wall time. Enabled `f1static`
    instances report `StatusRecoverableError` across attached signal hosts while
@@ -4608,7 +4630,7 @@ metric series, trace/span IDs, event identity, or links.
 
 #### Circuit Corner And Marshal-Sector Enrichment
 
-**Status: GREEN for opt-in event enrichment; RED for standalone signals**
+**Status: GREEN for event enrichment. RED for standalone signals.**
 
 `internal/circuitmap` provides pure spatial lookup over MultiViewer circuit
 geometry (`https://api.multiviewer.app/api/v1/circuits/{circuitKey}/{year}`,
@@ -4647,11 +4669,12 @@ inclusive Euclidean proximity thresholds (default `75.0 m` for corners and
 
 Circuit enrichment emits zero standalone spans, metrics, or logs and never
 delays, suppresses, or alters event identity or status. Both `f1livetiming` and
-`f1static` expose opt-in `circuit_enrichment` (`enabled: false` by default,
-`endpoint: https://api.multiviewer.app/api/v1/circuits`); in `f1livetiming`, an
-unavailable or malformed circuit payload emits at most one bounded warning per
-session generation and leaves coordinate-bearing events unenriched rather than
-interrupting Live Timing input or export.
+`f1static` enable `circuit_enrichment` by default. Each client caches geometry
+by circuit key and season. With the default endpoint
+`https://api.multiviewer.app/api/v1/circuits` or a configured mirror, an
+unavailable or malformed circuit payload leaves coordinate-bearing events
+unenriched without interrupting input or export. Live Timing emits at most
+one bounded warning per session generation.
 
 #### Snapshot And Lifecycle
 
@@ -5159,7 +5182,15 @@ GET /drivers?session_key=<K_route>
 GET /session_result?session_key=<K_route>
 ```
 
-It MUST NOT use `latest`, broad meeting/year/name queries, mutable result-field
+When the standalone receiver has `session_key: 0`, one discovery request to
+`/sessions` selects the most recently completed Race or Sprint from the
+response. It filters by `session_type=Race` and adds `year` or `season`,
+`meeting_key`, `country_name`, and `session_name` when configured.
+The [OpenF1 `latest` alias](https://openf1.org/docs/#sessions) can refer to an
+ongoing session, so discovery checks the end time instead of using the alias.
+The exact-key requests above then validate the selected identity and discover
+the roster if `drivers` is empty.
+Polling MUST NOT use `latest`, broad meeting/year/name queries, mutable result-field
 filters, pagination parameters, or response order as identity. `/sessions` and
 `/drivers` establish one frozen OpenF1 identity bundle for that routing epoch and
 logical tuple. Once that succeeds, only `/session_result` is polled. A 200
@@ -5506,6 +5537,11 @@ trailing `/`, user-info, query, or fragment. Requests append literal paths
 `Accept-Encoding: identity`, `User-Agent: bargeboard/1.0`, no credentials, no
 redirects, a 10-second timeout, at least one second between requests, and a
 512 KiB response cap.
+
+`round: 0` uses [Jolpica's `last` round](https://github.com/jolpica/jolpica-f1/blob/84208541aaa6f8146ca18a516c0589a6d6a841c6/docs/endpoints/results.md#round)
+to request `last/results.json`. `season: 0` with `round: 0` uses
+`current/last/results.json`. The validated race result pins the numeric year
+and round for all subsequent requests and projected attributes.
 
 Every response MUST satisfy lossless UTF-8/JSON validation, `MRData.series="f1"`,
 canonical `offset="0"`, and `total <= limit` so truncated multi-page payloads fail

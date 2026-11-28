@@ -8,6 +8,7 @@ import (
 
 	"github.com/CtrlSpice/bargeboard/internal/circuitmap"
 	"github.com/CtrlSpice/bargeboard/internal/f1id"
+	"github.com/CtrlSpice/bargeboard/internal/f1index"
 )
 
 const DefaultEndpoint = "https://livetiming.formula1.com/static"
@@ -16,6 +17,7 @@ type Config struct {
 	Enabled     bool   `mapstructure:"enabled"`
 	Endpoint    string `mapstructure:"endpoint"`
 	SessionPath string `mapstructure:"session_path"`
+	Session     string `mapstructure:"session"`
 	Pace        string `mapstructure:"pace"`
 	Auth        struct {
 		TokenFile string `mapstructure:"token_file"`
@@ -29,6 +31,7 @@ type Config struct {
 func DefaultConfig() Config {
 	c := Config{Endpoint: DefaultEndpoint, Pace: "instant"}
 	c.CircuitEnrichment.Endpoint = circuitmap.DefaultEndpoint
+	c.CircuitEnrichment.Enabled = true
 	return c
 }
 
@@ -49,7 +52,11 @@ func (c Config) Validate() error {
 	if err := f1id.ValidateHTTPSOrLoopbackEndpoint("endpoint", c.Endpoint); err != nil {
 		return err
 	}
-	if c.Enabled || c.SessionPath != "" {
+	if c.SessionPath == "" {
+		if _, err := f1index.ParseSelector(c.Session); err != nil {
+			return err
+		}
+	} else {
 		for _, s := range strings.Split(c.SessionPath, "/") {
 			if s == "." || s == ".." || !segment.MatchString(s) {
 				return errors.New("invalid session_path")
