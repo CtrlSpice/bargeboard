@@ -201,6 +201,40 @@ func TestConfigValidate(t *testing.T) {
 				cfg.Auth.TokenFile = "/run/secrets/f1tv-token"
 			},
 		},
+		{
+			name: "circuit enrichment default endpoint",
+			mutate: func(cfg *Config) {
+				cfg.Auth.TokenFile = "/run/secrets/f1tv-token"
+				cfg.CircuitEnrichment.Enabled = true
+			},
+		},
+		{
+			name: "circuit enrichment loopback endpoint",
+			mutate: func(cfg *Config) {
+				cfg.Auth.TokenFile = "/run/secrets/f1tv-token"
+				cfg.CircuitEnrichment.Enabled = true
+				cfg.CircuitEnrichment.Endpoint = "http://127.0.0.1:8080/circuits"
+			},
+		},
+		{
+			name: "circuit enrichment insecure remote endpoint",
+			mutate: func(cfg *Config) {
+				cfg.Auth.TokenFile = "/run/secrets/f1tv-token"
+				cfg.CircuitEnrichment.Enabled = true
+				cfg.CircuitEnrichment.Endpoint = "http://example.test/circuits"
+			},
+			wantErr: "circuit_enrichment.endpoint",
+		},
+		{
+			name: "circuit enrichment secret query",
+			mutate: func(cfg *Config) {
+				cfg.Auth.TokenFile = "/run/secrets/f1tv-token"
+				cfg.CircuitEnrichment.Enabled = true
+				cfg.CircuitEnrichment.Endpoint = "https://example.test/circuits?token=secret"
+			},
+			wantErr:   "circuit_enrichment.endpoint",
+			forbidden: "secret",
+		},
 	}
 
 	for _, test := range tests {

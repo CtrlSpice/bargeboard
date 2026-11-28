@@ -353,11 +353,11 @@ func TestOperationalInputDoesNotImplyRacingEmission(t *testing.T) {
 		if got := collectOperational(t, reader); !reflect.DeepEqual(got, want) {
 			t.Fatalf("input metrics = %#v, want %#v", got, want)
 		}
-		if shared.receiver.state != identityGateTestState() {
+		if shared.receiver.state.sessionInfo != identityGateTestState().sessionInfo {
 			t.Fatalf("receiver state = %#v, want synchronized SessionInfo", shared.receiver.state)
 		}
 		if len(traces.AllTraces()) != 0 || len(metrics.AllMetrics()) != 0 || len(logs.AllLogs()) != 0 {
-			t.Fatal("unwired racing projection emitted data")
+			t.Fatal("SessionInfo alone emitted racing data")
 		}
 		if err := shared.Shutdown(t.Context()); err != nil {
 			t.Fatal(err)

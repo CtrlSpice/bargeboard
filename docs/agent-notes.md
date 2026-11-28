@@ -97,7 +97,7 @@ still needs approval. No custom linkage has been implemented.
 
 ### F1-COMPANION-RECEIVERS — Add non-duplicating historical replay, OpenF1, Jolpica, and circuit enrichment
 
-**Approved; implemented on `feat/f1-companion-receivers`.** The distribution
+**Landed in [PR #72](https://github.com/CtrlSpice/bargeboard/pull/72) at `9cd1adfca557e3d7b4ecde7765de520917e85c3d`.** The distribution
 registers three opt-in (`enabled: false`) receivers alongside `f1livetiming` and
 `otlp` in `components.go` while preserving `[f1livetiming, otlp]` in the shipped
 `config.yaml`:
@@ -121,6 +121,19 @@ registers three opt-in (`enabled: false`) receivers alongside `f1livetiming` and
 
 All unit and end-to-end DuckDB viewer tests use synthetic fixtures and local
 `httptest` servers with zero live external requests.
+
+### F1-LIVE-PROJECTION — Implement multi-topic Live Timing reduction and deterministic OTLP projection
+
+**Approved; implemented in [PR #73](https://github.com/CtrlSpice/bargeboard/pull/73).** `receiver/f1livetimingreceiver`
+reduces synchronized Live Timing topics (`DriverList`, `SessionData`,
+`SessionStatus`, `TrackStatus`, `LapCount`, `ExtrapolatedClock`, `TimingData`,
+`TimingAppData`, `TimingStats`, `PitLaneTimeCollection`, `PitStopSeries`,
+`PitStop`, `Position`, `CarData`, `WeatherData`, `RaceControlMessages`, and
+`TeamRadio`) in pure deterministic reducers and projects OTLP `pdata` traces,
+metrics, and logs through `internal/f1id` (`bargeboard.otlp.id/v1` deterministic
+IDs and common resource/scope/session attributes), with opt-in
+`circuit_enrichment` via `internal/circuitmap` and end-to-end persistence
+verified in the embedded DuckDB desktop viewer.
 
 ### DEL-TS — Remove the obsolete replay implementation
 
@@ -422,15 +435,14 @@ It groups the implementation work; issue text links back to the canonical policy
 | DRIVER-REGISTRY-PURE | Landed in PR #57 at `87d8cef` | Parse and reduce bounded DriverList identity state with synthetic fixtures while leaving aggregate/runtime integration, diagnostics, and projection disabled. |
 | DEPENDENCY-REFRESH | Landed in PR #70 at `c207e18` | Refresh dependencies to Collector v0.166.0/v1.72.0, viewer v0.8.1, and Go 1.27.4 CI/release toolchain. |
 | EMBEDDED-VIEWER | Landed in PR #71 at `ea1c26c` | Embed `otel-desktop-viewer v0.8.1` (`desktop` exporter and `duckdb` extension), native CGO four-target release builds, and persistent OTLP restart verification. |
-| F1-COMPANION-RECEIVERS | Implemented on `feat/f1-companion-receivers` | Register non-duplicating `f1static`, `openf1`, and `jolpica` receivers plus `internal/f1id` and `internal/circuitmap`, verified end-to-end into persistent DuckDB viewer storage. |
+| F1-COMPANION-RECEIVERS | Landed in PR #72 at `9cd1adf` | Register non-duplicating `f1static`, `openf1`, and `jolpica` receivers plus `internal/f1id` and `internal/circuitmap`, verified end-to-end into persistent DuckDB viewer storage. |
+| F1-LIVE-PROJECTION | Implemented in PR #73 | Wire multi-topic Live Timing reduction, unified `internal/f1id` OTLP projection, optional `circuit_enrichment`, and persistent DuckDB viewer verification. |
 
 U1 landed in PR #38 at `e2afacb0d6071f0a8e6a5c790c9039a3f52070d2`, the base of
 the U2 implementation. U2 landed in PR #39 at `0284a62`, the U3 implementation base.
 U3 landed in PR #40 at `7018b2a`, the F-SCAN implementation base. The
-approved policy remains GREEN with partial FORMATION LAP implementation until
-future topic integrations are complete. The receiver now owns SessionInfo aggregate
-state, while the separate pure DriverList core remains unwired and the
-post-reduction consumer remains a no-op.
+approved policy is GREEN with U1/U2/U3 and Live Timing multi-topic reduction and
+OTLP projection implemented.
 
 ### WS-ERROR Resume Details
 

@@ -5,8 +5,7 @@ using your existing F1 TV token file. It answers whether the current connection,
 subscription, and normalization path works with the source. Public CI covers
 implementation behavior with synthetic inputs and local servers instead.
 
-**Racing OTLP export is not implemented.** This input check produces no F1 racing
-records. The viewer can display previously stored records and telemetry from other
+Input notices confirm receipt. They do not confirm delivery of racing telemetry. The viewer can display previously stored records and telemetry from other
 OTLP clients. The
 [canonical boundary](architecture.md#local-runtime-and-verification-boundaries)
 keeps F1 credentials in Bargeboard and the viewer a generic OTLP destination.
@@ -60,7 +59,7 @@ make run
 
 Keep its terminal visible. The first-data notice is:
 
-> First Live Timing updates observed with validated subscription; no F1 race export is implemented
+> First Live Timing updates observed with validated subscription; input observation does not imply racing export
 
 This means subscription acceptance and at least one normalized update occurred
 on the same connection. It does not imply complete race coverage, coherent

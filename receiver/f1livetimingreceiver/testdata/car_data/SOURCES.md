@@ -33,10 +33,12 @@ prove the normalized payload is detached.
 The wrapper timestamp `2032-04-05T08:07:09.123456789+02:00` normalizes to
 `2032-04-05T06:07:09.123456789Z`, independently of the payload's earlier
 `timestamp`. Nested objects, arrays, scalars, and the escaped text test opaque
-byte preservation. The `CarData.z` topic tests compression suffix removal only;
-this fixture establishes no CarData container shapes, channel mappings, active
-driver rules, sentinel handling, or scaling. The CarData source adapter remains
-**YELLOW** in the canonical architecture.
+byte preservation. The `CarData.z` topic in `normalization_cases.json` tests compression suffix
+removal only. Separate pure `CarData` reducer tests in `topics_cardata_test.go`
+use compact, independently authored synthetic JSON exercising the GREEN
+[CarData Field Adapter](../../../../docs/architecture.md#cardata-field-adapter)
+contract (`Entries`, `Utc`, `Cars`, and `Channels` `0`, `2`, `3`, `4`, `45`,
+including `104` sentinel exclusion and absent channel `45`).
 
 ## Prior Source Observation
 

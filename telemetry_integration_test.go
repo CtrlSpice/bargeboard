@@ -444,7 +444,7 @@ func TestForegroundCollectorOperationalTelemetry(t *testing.T) {
 				t.Fatalf("Collector exit = %v: %s", err, strings.Join(output, "\n"))
 			}
 			joined := strings.Join(output, "\n")
-			for _, required := range []string{"no F1 race export is implemented", "Press Ctrl-C to stop the Collector.", `"outages": 2`, `"recoveries": 1`, `"normalized_updates": 2`, `"unresolved_outage": true`} {
+			for _, required := range []string{"input observation does not imply racing export", "Press Ctrl-C to stop the Collector.", `"outages": 2`, `"recoveries": 1`, `"normalized_updates": 2`, `"unresolved_outage": true`} {
 				if !strings.Contains(joined, required) {
 					t.Errorf("stderr missing %q: %s", required, joined)
 				}
@@ -453,7 +453,7 @@ func TestForegroundCollectorOperationalTelemetry(t *testing.T) {
 			for _, line := range output {
 				var want map[string]any
 				switch {
-				case strings.Contains(line, "Live Timing payload contains malformed Unicode scalar escapes; normalized payload bytes preserved; no F1 race export is implemented"):
+				case strings.Contains(line, "Live Timing payload contains malformed Unicode scalar escapes; normalized payload bytes preserved; input observation does not imply racing export"):
 					qualityWarnings++
 					want = map[string]any{"invalid_unicode_updates": float64(1), "new_invalid_unicode_updates": float64(1)}
 				case strings.Contains(line, "interruption summary"):

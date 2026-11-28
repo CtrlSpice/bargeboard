@@ -5,9 +5,11 @@ import (
 	"cmp"
 	"encoding/json"
 	"errors"
+	"math"
 	"math/big"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/CtrlSpice/bargeboard/internal/f1id"
 )
@@ -147,7 +149,27 @@ func parseLandmarks(raw []byte, corners bool) ([]landmark, error) {
 
 // raw is a value from a validated JSON object.
 func coordinateMetres(raw json.RawMessage) *big.Rat {
-	dm, ok := new(big.Rat).SetString(string(raw))
+	s := strings.TrimSpace(string(raw))
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil && !errors.Is(err, strconv.ErrRange) || math.IsNaN(f) || math.IsInf(f, 0) || math.Abs(f) > 1.1e6 {
+		return nil
+	}
+	if f == 0 {
+		sig := s
+		if i := strings.IndexAny(s, "eE"); i >= 0 {
+			sig = s[:i]
+		}
+		if !strings.ContainsAny(sig, "123456789") {
+			return new(big.Rat)
+		}
+		if strings.HasPrefix(sig, "-") {
+			r, _ := new(big.Rat).SetString("-1e-401")
+			return r
+		}
+		r, _ := new(big.Rat).SetString("1e-401")
+		return r
+	}
+	dm, ok := new(big.Rat).SetString(s)
 	if !ok || dm.Cmp(big.NewRat(-1e6, 1)) < 0 || dm.Cmp(big.NewRat(1e6, 1)) > 0 {
 		return nil
 	}

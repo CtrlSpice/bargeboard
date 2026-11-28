@@ -18,6 +18,7 @@ func TestSubscriptionTopicsReturnsCopy(t *testing.T) {
 		"TimingAppData", "TimingStats", "TrackStatus", "WeatherData",
 		"Position.z", "CarData.z", "ContentStreams", "SessionData",
 		"TimingData", "TopThree", "RcmSeries", "LapCount",
+		"PitLaneTimeCollection", "PitStop", "PitStopSeries",
 	}
 	if !reflect.DeepEqual(first, want) {
 		t.Fatalf("subscriptionTopics() = %q, want %q", first, want)

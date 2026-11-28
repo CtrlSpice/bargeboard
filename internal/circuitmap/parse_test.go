@@ -19,6 +19,8 @@ func TestParseValidation(t *testing.T) {
 	}
 	for _, raw := range []string{minimal, strings.Repeat(" ", maxBodyBytes-len(minimal)) + minimal,
 		strings.Replace(minimal, `"number":`, `"letter":"","unknown":0,"unknown":1,"number":`, 1),
+		strings.Replace(minimal, `1e6`, `1e-17`, 1),
+		strings.Replace(minimal, `1e6`, `1e-99999999`, 1),
 	} {
 		check(raw, true)
 	}

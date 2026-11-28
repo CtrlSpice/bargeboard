@@ -10,7 +10,7 @@ import (
 
 func sessionInfoUnicodeFeed(topic, payload string) normalizedLiveTimingBatch {
 	return normalizedLiveTimingBatch{
-		source: liveTimingUpdateSourceFeed,
+		source: liveTimingUpdateSourceFeed, observationTime: identityGateTestState().origin,
 		updates: []normalizedLiveTimingUpdate{{
 			topic: topic, payload: json.RawMessage(payload), source: liveTimingUpdateSourceFeed,
 		}},
@@ -54,6 +54,7 @@ func TestSessionInfoUnicodeGateIndependentBundlesAndRecovery(t *testing.T) {
 				sessionScopedUpdatesAllowed: true,
 			}
 			if test.issues&sessionInfoIssueIdentity != 0 {
+				wantState = suspendedTestState(wantState)
 				wantState.sessionInfo.synchronized = false
 				want.sessionInfoDisposition = sessionInfoDispositionUnresolved
 				want.sessionScopedUpdatesAllowed = false
@@ -76,7 +77,7 @@ func TestSessionInfoUnicodeGateIndependentBundlesAndRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertLiveTimingReduction(t, got, want)
-			if state != sessionInfoUnicodeRecoveryState() {
+			if !reflect.DeepEqual(state, sessionInfoUnicodeRecoveryState()) {
 				t.Fatal("mutated input state")
 			}
 			if !reflect.DeepEqual(batch, sessionInfoUnicodeFeed("SessionInfo", raw)) {
@@ -91,7 +92,7 @@ func TestSessionInfoUnicodeGateIndependentBundlesAndRecovery(t *testing.T) {
 			}
 			want.sessionInfoRouteTransition = false
 			assertLiveTimingReduction(t, repeated, want)
-			unrelated, err := reduceLiveTimingBatch(repeated.state, sessionInfoUnicodeFeed("TimingData", `{"marker":"unbound"}`))
+			unrelated, err := reduceLiveTimingBatch(repeated.state, sessionInfoUnicodeFeed("Heartbeat", `{"marker":"unbound"}`))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -107,6 +108,9 @@ func TestSessionInfoUnicodeGateIndependentBundlesAndRecovery(t *testing.T) {
 				state: state, sessionInfoDisposition: sessionInfoDispositionRefreshed,
 				sessionInfoAuthoritative: true, sessionScopedUpdatesAllowed: true,
 			}
+			if test.issues&sessionInfoIssueIdentity != 0 {
+				wantRecovered.state = suspendedTestState(state)
+			}
 			if test.issues == sessionInfoIssueUnicode|sessionInfoIssueRoute {
 				wantRecovered.state.sessionInfo.routeEpoch += 2
 				wantRecovered.sessionInfoRouteTransition = true
@@ -119,11 +123,11 @@ func TestSessionInfoUnicodeGateIndependentBundlesAndRecovery(t *testing.T) {
 func TestSessionInfoUnicodeSnapshotAtomicGateAndOwnership(t *testing.T) {
 	state := sessionInfoUnicodeRecoveryState()
 	bad := strings.Replace(sessionInfoBatchDescriptorA, "Example", `\ud800`, 1)
-	for _, order := range [][]string{{"SessionInfo", "TimingData"}, {"TimingData", "SessionInfo"}} {
+	for _, order := range [][]string{{"SessionInfo", "Heartbeat"}, {"Heartbeat", "SessionInfo"}} {
 		makeBatch := func(payload string) normalizedLiveTimingBatch {
 			batch := normalizedLiveTimingBatch{
 				source:          liveTimingUpdateSourceSnapshot,
-				requestedTopics: []string{"TimingData", "SessionInfo", "DriverList"},
+				requestedTopics: []string{"Heartbeat", "SessionInfo", "DriverList"},
 				presentTopics:   append([]string(nil), order...),
 			}
 			for _, topic := range order {
@@ -141,6 +145,7 @@ func TestSessionInfoUnicodeSnapshotAtomicGateAndOwnership(t *testing.T) {
 			sessionInfoDisposition: sessionInfoDispositionUnresolved,
 			sessionInfoIssues:      sessionInfoIssueUnicode | sessionInfoIssueIdentity,
 		}
+		want.state = suspendedTestState(want.state)
 		want.state.sessionInfo.synchronized = false
 		got, err := reduceLiveTimingBatch(state, batch)
 		if err != nil {
@@ -163,7 +168,7 @@ func TestSessionInfoUnicodeSnapshotAtomicGateAndOwnership(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertLiveTimingReduction(t, restored, liveTimingReduction{
-			state: state, sessionInfoAuthoritative: true,
+			state: suspendedTestState(state), sessionInfoAuthoritative: true,
 			sessionInfoDisposition:      sessionInfoDispositionRefreshed,
 			sessionScopedUpdatesAllowed: true,
 		})
@@ -172,7 +177,7 @@ func TestSessionInfoUnicodeSnapshotAtomicGateAndOwnership(t *testing.T) {
 		invalid := makeBatch(bad)
 		invalid.updates[1].source = liveTimingUpdateSourceFeed
 		failed, err := reduceLiveTimingBatch(state, invalid)
-		if !errors.Is(err, errInvalidNormalizedSessionInfoBatch) || failed != (liveTimingReduction{}) {
+		if !errors.Is(err, errInvalidNormalizedSessionInfoBatch) || !reflect.DeepEqual(failed, liveTimingReduction{}) {
 			t.Fatal("invalid manifest exposed a partial reduction")
 		}
 	}
@@ -199,6 +204,7 @@ func TestSessionInfoUnicodeFeedOrderIssueUnionIsNotLastState(t *testing.T) {
 			occurrences |= got.sessionInfoIssues
 			current = got.state
 			wantState := state
+			wantState = suspendedTestState(wantState)
 			wantState.sessionInfo.synchronized = false
 			wantIssues := sessionInfoIssueClassification
 			switch raw {
@@ -211,7 +217,7 @@ func TestSessionInfoUnicodeFeedOrderIssueUnionIsNotLastState(t *testing.T) {
 				state: wantState, sessionInfoAuthoritative: true,
 				sessionInfoDisposition: sessionInfoDispositionUnresolved, sessionInfoIssues: wantIssues,
 			})
-			blocked, err := reduceLiveTimingBatch(current, sessionInfoUnicodeFeed("TimingData", `{"marker":"never replay"}`))
+			blocked, err := reduceLiveTimingBatch(current, sessionInfoUnicodeFeed("Heartbeat", `{"marker":"never replay"}`))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -223,7 +229,7 @@ func TestSessionInfoUnicodeFeedOrderIssueUnionIsNotLastState(t *testing.T) {
 		}
 		occurrences |= lastSessionInfo.sessionInfoIssues
 		assertLiveTimingReduction(t, lastSessionInfo, liveTimingReduction{
-			state: state, sessionInfoAuthoritative: true,
+			state: suspendedTestState(state), sessionInfoAuthoritative: true,
 			sessionInfoDisposition: sessionInfoDispositionRefreshed, sessionScopedUpdatesAllowed: true,
 		})
 		if occurrences != allIssues {
@@ -255,6 +261,7 @@ func TestSessionInfoUnicodeRetiredAndExhaustedOutcomesKeepIssues(t *testing.T) {
 				state: test.state, sessionInfoAuthoritative: true, sessionInfoDisposition: test.disposition,
 				sessionInfoIssues: sessionInfoIssueUnicode | sessionInfoIssueSchedule,
 			}
+			want.state = suspendedTestState(want.state)
 			want.state.sessionInfo.synchronized = false
 			assertLiveTimingReduction(t, got, want)
 		})
