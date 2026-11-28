@@ -15,8 +15,10 @@ Published DriverList payloads follow the accepted
 [Source Evidence and Synthetic Fixtures policy](../../../../docs/architecture.md#source-evidence-and-synthetic-fixtures).
 These tests do not establish new source mappings or live availability.
 
-The pure core exercises the already approved grammar and state-machine policy.
-This provenance file contains no attributable source observations for numeric
-entry keys, `RacingNumber`, or `Tla`. Completing that source evidence remains a
-prerequisite for aggregate/runtime integration; synthetic coverage does not
-satisfy it. The pending evidence does not change the accepted pure-core behavior.
+The pure core exercises the approved grammar and state-machine policy. Official
+archive references confirming canonical positive decimal entry keys, matching
+string `RacingNumber`, and uppercase ASCII `Tla` include
+[2024 British Grand Prix race DriverList](https://livetiming.formula1.com/static/2024/2024-07-07_British_Grand_Prix/2024-07-07_Race/DriverList.json)
+and
+[2025 British Grand Prix race DriverList](https://livetiming.formula1.com/static/2025/2025-07-06_British_Grand_Prix/2025-07-06_Race/DriverList.json).
+Tests never fetch those URLs and retain only synthetic fixtures.

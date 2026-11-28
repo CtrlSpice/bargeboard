@@ -18,7 +18,7 @@ import (
 )
 
 // Independent exact notice oracle: no payload-derived fields or category labels.
-const wantPayloadQualityMessage = "Live Timing payload contains malformed Unicode scalar escapes; normalized payload bytes preserved; no F1 race export is implemented"
+const wantPayloadQualityMessage = "Live Timing payload contains malformed Unicode scalar escapes; normalized payload bytes preserved; input observation does not imply racing export"
 
 func assertPayloadQualityWarnings(t *testing.T, logs *observer.ObservedLogs, totals, deltas []int64) {
 	t.Helper()
@@ -52,7 +52,7 @@ func TestPayloadQualityRuntimeCadenceAndSummary(t *testing.T) {
 				if metricsEnabled {
 					settings.MeterProvider = provider
 				}
-				r := newLiveTimingReceiver(nil, settings) // Keep the production no-op consumer.
+				r := newLiveTimingReceiver(nil, settings)
 				var err error
 				r.operational, err = newOperationalReporter(t.Context(), settings)
 				if err != nil {

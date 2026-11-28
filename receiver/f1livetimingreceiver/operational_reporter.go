@@ -22,7 +22,7 @@ const operationalScope = "github.com/CtrlSpice/bargeboard/receiver/f1livetimingr
 const metricPrefix = "otelcol_f1livetiming_"
 const outageMessage = "Live Timing input interrupted; updates may be missing. Press Ctrl-C to stop the Collector."
 const recoveryMessage = "Live Timing updates resumed; missed updates may be unrecoverable"
-const invalidUnicodeMessage = "Live Timing payload contains malformed Unicode scalar escapes; normalized payload bytes preserved; no F1 race export is implemented"
+const invalidUnicodeMessage = "Live Timing payload contains malformed Unicode scalar escapes; normalized payload bytes preserved; input observation does not imply racing export"
 
 var errInputOutage = errors.New("Live Timing input interrupted; updates may be missing")
 var errAwaitingInput = errors.New("Live Timing input not receiving: awaiting validated subscription and first normalized updates")
@@ -276,12 +276,12 @@ func (r *operationalReporter) applyLocked(in operationalInput) operationalState 
 	}
 	switch notice {
 	case noticeStarting, noticeWaiting:
-		r.logger.Info("Waiting for validated Live Timing subscription and first updates; no F1 race export is implemented. Press Ctrl-C to stop the Collector.", fields...)
+		r.logger.Info("Waiting for validated Live Timing subscription and first updates; input observation does not imply racing export. Press Ctrl-C to stop the Collector.", fields...)
 		if notice == noticeStarting {
 			componentstatus.ReportStatus(r.host, componentstatus.NewRecoverableErrorEvent(errAwaitingInput))
 		}
 	case noticeFirstData:
-		r.logger.Info("First Live Timing updates observed with validated subscription; no F1 race export is implemented", fields...)
+		r.logger.Info("First Live Timing updates observed with validated subscription; input observation does not imply racing export", fields...)
 		componentstatus.ReportStatus(r.host, componentstatus.NewEvent(componentstatus.StatusOK))
 	case noticeOutage:
 		r.logger.Warn(outageMessage, fields...)

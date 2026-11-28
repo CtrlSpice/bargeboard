@@ -43,6 +43,7 @@ func TestReceiverOwnsSessionInfoStateAcrossReconnect(t *testing.T) {
 
 	settings := receivertest.NewNopSettings(Type)
 	receiver := newLiveTimingReceiver(connectionTestConfig(t, server.URL), settings)
+	receiver.now = func() time.Time { return identityGateTestState().origin }
 	receiver.retryDelay = func(int) time.Duration { return 0 }
 	states := make(chan liveTimingState, 2)
 	var consumeCalls atomic.Int32
@@ -88,7 +89,7 @@ func TestReceiverOwnsSessionInfoStateAcrossReconnect(t *testing.T) {
 	if wantStates := []liveTimingState{wantA, wantBReduction.state}; !reflect.DeepEqual(gotStates, wantStates) {
 		t.Fatalf("runtime states = %#v, want %#v", gotStates, wantStates)
 	}
-	if receiver.state != wantBReduction.state {
+	if !reflect.DeepEqual(receiver.state, wantBReduction.state) {
 		t.Fatalf("receiver state = %#v, want %#v", receiver.state, wantBReduction.state)
 	}
 	if connections.Load() != 2 {
@@ -126,6 +127,7 @@ func TestReceiverContainsReductionFailure(t *testing.T) {
 	settings.Logger = zap.New(core)
 	host := &statusHost{events: make(chan *componentstatus.Event, 8)}
 	receiver := newLiveTimingReceiver(connectionTestConfig(t, server.URL), settings)
+	receiver.now = func() time.Time { return identityGateTestState().origin }
 	baseReduce := receiver.reduce
 	var reduceCalls atomic.Int32
 	var accountedUpdates []int64
@@ -182,7 +184,9 @@ func TestReceiverContainsReductionFailure(t *testing.T) {
 	if reduceCalls.Load() != 3 || connections.Load() != 1 || retries.Load() != 0 {
 		t.Fatalf("reduce calls = %d, connections = %d, retries = %d", reduceCalls.Load(), connections.Load(), retries.Load())
 	}
-	if receiver.state != identityGateTestState() {
+	wantState := identityGateTestState()
+	wantState.status.status = "Finished"
+	if !reflect.DeepEqual(receiver.state, wantState) {
 		t.Fatalf("failed reduction did not preserve receiver state: %#v", receiver.state)
 	}
 	gotOperational := *receiver.operational.state.Load()
@@ -219,15 +223,17 @@ func TestReceiverContainsReductionFailure(t *testing.T) {
 func TestLiveTimingReceiverStateIsInstanceOwned(t *testing.T) {
 	first := newLiveTimingReceiver(nil, receivertest.NewNopSettings(Type))
 	second := newLiveTimingReceiver(nil, receivertest.NewNopSettings(Type))
-	if err := first.reduceNormalizedBatch(
+	r, err := first.reduce(first.state,
 		normalizeIdentityGateSessionInfoFeed(t, identityGateDescriptorA, "2022-01-01T00:00:00Z"),
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if first.state != identityGateTestState() {
+	first.state = r.state
+	if !reflect.DeepEqual(first.state, identityGateTestState()) {
 		t.Fatalf("first receiver state = %#v", first.state)
 	}
-	if second.state != (liveTimingState{}) {
+	if !reflect.DeepEqual(second.state, liveTimingState{}) {
 		t.Fatalf("new receiver inherited state = %#v", second.state)
 	}
 }

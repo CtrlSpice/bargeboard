@@ -146,7 +146,7 @@ non-first platform SBOM through complete release-artifact verification.
 
 ## Layered Unicode and Input Quality
 
-**Status: GREEN policy; partial FORMATION LAP implementation (U1/U2 landed; U3 implemented; topic integrations pending)**
+**Status: GREEN policy; U1/U2/U3 implemented**
 
 The approved policy preserves independently useful input, never silently repairs
 identity, and makes resulting uncertainty visible. Blanket rejection of every
@@ -256,10 +256,9 @@ timing derivations remain authoritative.
 
 ### Visibility and Implementation Boundaries
 
-The first runtime integration MUST distinguish an input-quality finding from an
+Runtime reporting MUST distinguish an input-quality finding from an
 actual semantic disposition. Detecting a malformed payload string does not prove
-that a racing signal was dropped. Before reducers and projection are wired, report
-only what normalization and the implemented parser can establish.
+that a racing signal was dropped. The affected-envelope count measures input.
 
 Use an initial bounded terminal warning, coalesce repeated findings with the
 existing 30-second reporting cadence, and retain affected-input totals in the
@@ -371,7 +370,7 @@ policy. A valid A followed by control-invalid B commits A and stops before C;
 payload-scalar-invalid B with a valid envelope remains deliverable between A and
 C. Invalid snapshot keys return no batch, while valid manifests retain all
 opaque payload siblings in one atomic batch. These are input-delivery claims,
-not implemented semantic disposition or racing projection.
+independent of semantic disposition or racing projection.
 
 Focused synthetic tests cover the scalar ranges and boundaries, repair-key
 collisions, owning duplicate/null/casing policies, all control assignments,
@@ -451,9 +450,8 @@ cannot apply independently parsed replacement metadata. Route-only and
 schedule-only failures keep the existing independent scopes and counter rules.
 The aggregate gate retains no payload or delayed update queue. Restoring its
 identity admission decision does not establish topic resynchronization or replay
-earlier input. The receiver now commits its value state on the read goroutine, but
-the transition and issue results emit no counters, logs, semantic quarantine
-effects, or racing projection.
+earlier input. The receiver commits the resulting state before delivering any
+racing effects. SessionInfo issues do not produce counters or logs.
 
 Focused tests mutate independently authored synthetic SessionInfo fixtures,
 including `"\uD800 Grand Prix"`, and compare complete parse/reduction/gate results. They cover
@@ -462,8 +460,7 @@ opaque unknown values, whole-payload depth boundaries, source-byte ownership,
 snapshot order/atomicity, feed-order recovery, idempotence, retired tuples, and
 counter exhaustion. Structural result/state field assertions require explicit
 oracle review when a field is added. Future topic implementations must complete
-their own integration and verification before the overall policy leaves partial
-FORMATION LAP.
+their own integration and verification for their source-specific fields.
 
 #### U3 Normalized Payload Quality and Runtime Reporting
 
@@ -500,7 +497,7 @@ per-input diagnostic history is introduced.
 An advancing watermark produces this bounded warning independently of the existing
 readiness/outage notice, under the same reporting mutex:
 
-> Live Timing payload contains malformed Unicode scalar escapes; normalized payload bytes preserved; no F1 race export is implemented
+> Live Timing payload contains malformed Unicode scalar escapes; normalized payload bytes preserved; input observation does not imply racing export
 
 Its only receiver-added fields are `invalid_unicode_updates` (run total) and
 `new_invalid_unicode_updates` (envelopes since the preceding quality warning).
@@ -516,10 +513,7 @@ success. The final input summary includes `invalid_unicode_updates`, including a
 findings pending at shutdown or permanent stop. Summary emission still waits for
 the consumer callback to finish; a shutdown timeout cannot manufacture completion.
 After summary, periodic stopped notices do not reissue pending quality warnings.
-Metrics-None retains the same terminal notices and per-run totals. The production
-post-reduction consumer remains a no-op, and U2 issue results remain unreported;
-these findings establish no actual projection, quarantine, dropped signals, or
-semantic recovery.
+Metrics-None retains the same terminal notices and per-run totals. The affected-envelope count does not measure projection, quarantine, or dropped signals. U2 issue results remain unreported.
 
 Focused synthetic tests compare complete scanner/normalization and operational
 results, plain/inflated byte ownership, duplicate/nested keys, full depth and
@@ -561,8 +555,8 @@ diff, CI, and independent-review gates.
 
 ## Local Runtime and Verification Boundaries
 
-**Decision status: GREEN (approved). Embedded OTLP storage and native packaging are
-implemented; racing projection is pending.**
+**Decision status: GREEN (approved). Embedded OTLP storage, native packaging, and
+Live Timing racing projection are implemented.**
 
 Bargeboard is the credential-owning local F1 client. Each user supplies their own
 F1 TV `subscriptionToken` through `f1livetiming.token_file`, configured as
@@ -571,12 +565,13 @@ Bargeboard processes that user's real input; synthetic data belongs to tests.
 The local viewer arrangement is:
 
 ```text
-F1 service <-> f1livetiming receiver -> session state
-                       ^              (racing OTLP projection pending)
-                local token file
-
-OTLP receiver -> Collector pipelines -> desktop exporter -> duckdb extension
-                                                            persistent store + UI
+local token file -> f1livetiming receiver <-> F1 service
+                           |
+                      session state -> OTLP projection
+                                             |
+OTLP receiver -----------------------> Collector pipelines -> desktop exporter
+                                                                    |
+                                                          DuckDB store + UI
 ```
 
 The embedded viewer MUST remain a generic telemetry store and dashboard. It MUST NOT accept,
@@ -637,7 +632,7 @@ metadata. The complete archive verifier compares each packaged binary with that
 target's transferred reference. It MUST NOT substitute a cross-compiled or
 CGO-disabled reference.
 
-Accepted racing mappings still require implementation. Pending source mappings
+The Live Timing receiver exports racing signals. Pending source mappings
 remain non-binding. Normal OTLP ingress already reaches persistent viewer storage.
 
 Verification MUST check the complete shipped extension configuration and all
@@ -702,8 +697,8 @@ MUST NOT be inputs to these jobs. Toolchain and dependency downloads are separat
 build operations; this is not an air-gapped-build claim.
 
 The existing setup, cookie, subscription, framing, normalization, HTTP failure,
-retry, liveness, redaction, and Collector-process tests remain required. When
-racing export is implemented, synthetic end-to-end tests MUST verify the complete
+retry, liveness, redaction, and Collector-process tests remain required.
+Synthetic end-to-end tests MUST verify the complete
 OTLP signals received by a local test destination, including absence of credentials.
 Public CI cannot prove current token entitlement, current F1 wire compatibility,
 or live-session availability.
@@ -744,15 +739,9 @@ token file through `${env:HOME}/.config/bargeboard/f1tv-token`.
 The F1 Live Timing receiver currently authenticates, negotiates SignalR,
 subscribes, reconnects, decodes records, distinguishes feed updates from
 subscription snapshots, validates timestamps and JSON, and inflates compressed
-telemetry. SessionInfo parsing, descriptor reduction, and aggregate identity
-gating now feed one receiver-owned state value on the read goroutine. The
-multi-topic coordinator and OTLP projector are not implemented, so the
-post-reduction normalized-batch consumer is currently a no-op. Input notices and
-Collector internal metrics are implemented under Live Timing Operational
-Visibility below; they MUST NOT imply racing projection or export. The transport
-shell retains its valid-batch backoff reset even if state reduction or that
-consumer fails, emits one sanitized consumer warning per run, and continues
-reading rather than reconnecting.
+telemetry. One receiver owns the state for all three signals. It reduces each
+normalized batch before delivering its effects. A failed consumer does not
+suppress the other signals or cause a reconnect.
 
 U1 lossless JSON controls and raw manifest-key handling are implemented. Opaque
 plain and inflated payloads may still contain scalar-invalid strings; delivery
@@ -1134,9 +1123,7 @@ source close without reconnect. These tests MUST NOT wait for real 15- or
 This contract promotes only bounded input-operation metrics and foreground
 notices. Source lag, payload sizes, validation-failure metrics, and other pending
 metric candidates remain **YELLOW**. Operational activity MUST NOT substitute
-for evidence of F1 racing emission. Startup notices MUST state that F1 race
-export is unimplemented while the post-reduction consumer emits no racing data
-and the projector remains unwired.
+for evidence of F1 racing emission. Startup notices distinguish observed input from racing export.
 
 The receiver MUST distinguish established transport, validated subscription
 completion, normalized update observations, and actual racing export. After an
@@ -1267,7 +1254,7 @@ it. The only datapoint attribute is `receiver=settings.ID.String()`.
 | `normalized_updates` | Int64 counter | `{update}` | Update envelopes in fully normalized nonempty batches, independent of consumer success. |
 | `invalid_unicode_updates` | Int64 counter | `{update}` | Envelopes containing one or more malformed Unicode scalar escapes in plain or inflated normalized payload keys/values; once per affected envelope in a fully accepted batch, independent of consumer success. No contribution from rejected batches; not a count of rejected input or dropped racing signals. |
 | `last_update_age` | Float64 observable gauge | `s` | Process seconds since acceptance of the last normalized nonempty batch; omitted until one exists. |
-| `consumer_failures` | Int64 counter | `{failure}` | Failed normalized-batch state reductions or post-reduction consumer calls; this is not a count of failed racing signals. |
+| `consumer_failures` | Int64 counter | `{failure}` | Failed reductions or deliveries (once per batch with any consumer failure); this is not a count of failed racing signals. |
 
 Every instrument MUST have a concise description identifying its input count or
 state and its limits, including local acceptance age versus source freshness
@@ -1796,30 +1783,8 @@ and the exact 256-tuple FIFO horizon. The batch adapter locates exact
 `SessionInfo` updates independent of snapshot order, distinguishes feed or
 unrequested-snapshot no-update from requested snapshot omission, and composes
 parsing with descriptor reduction. It returns value state, transition metadata,
-and bounded parse-issue occurrences as defined by U2. The receiver now commits the
-returned value state synchronously, but it does not retain or publish transition
-metadata or issue occurrences and cannot stage or clear other topic state, return
-effects or commands, emit diagnostics, or project telemetry. No
-diagnostic-frequency or latching policy is accepted by this slice. The full
-transactional coordinator and all cross-topic projection remain disabled until
-that coordinator lands.
-
-The pure aggregate identity gate is also implemented. It owns SessionInfo state
-inside aggregate value state, reduces SessionInfo before calculating whether the
-remaining session-scoped outcomes are eligible for future staging, and preserves
-the descriptor disposition, routing-transition metadata, and bounded issue set.
-Eligibility requires synchronized `E`; route and schedule availability do not
-decide it. The gate retains no normalized update or payload, so an ineligible batch
-cannot replay after recovery. It implements the admission decision after steps 1
-and 2 above, not steps 3 through 5, and is now wired only to the receiver-owned
-aggregate state.
-
-A separate pure DriverList parser and bounded registry reducer implement the
-topic-local identity, sparse staging, authoritative freeze, reconnect-agreement,
-Unicode, and issue-result contract under Session Driver Registry. They are not
-called by the aggregate identity gate or receiver. DriverList omission,
-SessionInfo generation replacement, unbound-update rejection, same-snapshot
-coordination, runtime diagnostics, and projection therefore remain unimplemented.
+and bounded parse-issue occurrences as defined by U2. The receiver commits the resulting state and returns racing effects for the
+registered consumers. SessionInfo issue occurrences remain internal.
 
 End-to-end reducer and projection verification still requires testing with no
 phase layer, `Started` root opening, `Finalised` closure, singular best-lap state,
@@ -2188,13 +2153,23 @@ span.
 
 ### Delta Interval Contract
 
-**Status: YELLOW pending lifecycle-anchor definition**
+**Status: GREEN**
 
-The interval arithmetic and watermark rules below are accepted, but the default
-meanings of "observed session start" and "observed session end" are unresolved
-across `Started`, `Finished`, `Finalised`, `Ends`, recovered snapshots, session
-replacement, and shutdown. A domain-specific boundary overrides the default,
-but the default itself MUST be made GREEN before implementing a Delta projector.
+Default Delta lifecycle anchors are:
+
+- **Observed session start** is the first accepted `SessionData.StatusSeries`
+  `Started` record `Utc` in the session generation, or, when a coherent cold
+  snapshot establishes `Started` or `Aborted` without an earlier `Started`
+  `Utc` in `StatusSeries`, that snapshot's Collector observation UTC. Later
+  `Aborted`, `Inactive`, `Finished`, and `Finalised` transitions do not pause
+  admission or reset the start anchor; `Started` after `Aborted` or `Inactive`
+  keeps the original start anchor.
+- **Observed session end** is the first accepted `SessionData.StatusSeries`
+  `Ends` record `Utc`. On canonical session replacement or receiver shutdown
+  before `Ends`, candidate-specific buffers finalize first and any non-empty
+  partial interval flushes at that logical metric stream's greatest accepted
+  source watermark when strictly after window start. A domain-specific boundary
+  MAY refine these anchors where explicitly specified.
 
 All accepted Delta metrics use deterministic event-time intervals:
 
@@ -2318,7 +2293,7 @@ series.
 
 ### Session Driver Registry
 
-**Status: GREEN policy; pure topic core implemented; aggregate/runtime integration pending**
+**Status: GREEN**
 
 `DriverList` is the sole Live Timing owner of the all-session driver registry.
 A non-empty authoritative snapshot object establishes the complete roster for
@@ -2447,14 +2422,8 @@ normalized payload. It is discarded with the parse call and never enters registr
 state. A duplicate overflow key therefore returns shape and identity occurrences
 alongside the limit occurrence without enlarging the retained result.
 
-This core is deliberately not part of `liveTimingState` or
-`reduceLiveTimingBatch`. It does not receive production batches, reset on a
-SessionInfo generation replacement, process requested snapshot omission, or
-exercise the SessionInfo admission gate yet. Those aggregate responsibilities,
-same-snapshot ordering, and runtime ownership require a separate approved slice.
-Accordingly, only SessionInfo still reduces at runtime; no DriverList issue,
-transition, racing OTLP signal, lifecycle effect, status change, retry, or
-reconnect is produced.
+The aggregate reducer stages DriverList after SessionInfo admission and before
+any driver-dependent snapshot topic. Session replacement clears the registry.
 
 Focused tests use only compact synthetic JSON documented under
 `testdata/driver_list/SOURCES.md`. They cover lossless keys and strings, canonical
@@ -2464,15 +2433,14 @@ snapshot preservation, known-driver updates after bounded overflow, frozen
 agreement and conflicts, duplicate overflow keys, issue/result bounds, and input
 preservation. Published F1 payloads follow Source Evidence and Synthetic Fixtures;
 the canonical-session-type and SessionInfo replacement matrices belong to the
-future aggregate integration because the pure topic reducer has no session-type
+aggregate reducer because the pure topic reducer has no session-type
 input.
 
 The pure core's tests establish conformance to the approved grammar and reduction
-policy. Attributable source observations for DriverList numeric entry keys,
-`RacingNumber`, and `Tla` are not yet recorded in its provenance file. Completing
-that evidence remains a prerequisite for aggregate/runtime integration; the
-synthetic cases do not establish those source mappings or live availability.
-The accepted pure-core behavior and its unwired status are unchanged.
+policy. Official 2021–2026 `DriverList.json` and `DriverList.jsonStream` archives
+confirm canonical positive decimal driver entry keys, matching string
+`RacingNumber`, and uppercase ASCII `Tla`, recorded as non-payload references in
+`testdata/driver_list/SOURCES.md`; all executable fixtures remain synthetic.
 
 Metric series MUST NOT use:
 
@@ -2511,19 +2479,31 @@ explicit semantic-convention migration defines them.
 
 ### CarData Field Adapter
 
-**Status: YELLOW**
+**Status: GREEN**
 
-`CarData.z` is the intended Live Timing source for field speed, engine speed,
-gear, and throttle. Their exact `Entries` / `Cars` / `Channels` container shape,
-channel identifiers, JSON token grammar, missing and sentinel handling, active
-driver rule, and throttle scaling require attributable evidence and synthetic
-fixtures before source binding is accepted. The instrument contracts below do not
-authorize guessing those wire semantics, and these four metrics MUST NOT be implemented until this
-adapter becomes GREEN.
+Inflated `CarData` payloads carry an `Entries` array of samples, each with strict
+RFC3339 `Utc` and object-valued `Cars` keyed by canonical positive decimal driver
+number. Each car object carries object-valued `Channels` keyed by canonical
+channel code string with canonical JSON integer tokens fitting Int64:
+
+| Channel | Source meaning | Accepted grammar and domain |
+|---|---|---|
+| `"0"` | Engine speed | Non-negative canonical JSON integer (`{revolution}/min`). |
+| `"2"` | Vehicle speed | Non-negative canonical JSON integer (`km/h`). |
+| `"3"` | Gear (`n_gear`) | Canonical JSON integer in `0..8`. |
+| `"4"` | Throttle | Canonical JSON integer in `0..100`, normalized to `[0.0, 1.0]` by dividing by `100`; values outside `0..100` (including the `104` unavailable sentinel) are excluded rather than clamped. |
+| `"45"` | DRS | Canonical JSON integer mapped under [DRS](#drs) below; omitted when unreported. |
+
+Source mappings are grounded in the cited 2023–2026 official `CarData.z` archives,
+[OpenF1 `car_data` documentation](https://openf1.org/docs/#car-data), and
+[FastF1 channel decoding](https://github.com/theOehrly/Fast-F1/issues/44).
+Driver keys MUST resolve in the frozen, synchronized Session Driver Registry;
+unknown or non-roster car keys are ignored with a bounded issue. Snapshots update
+latest sample state and watermarks without replaying historical histogram windows.
 
 ### Field Speed
 
-**Status: GREEN instrument contract; YELLOW source adapter**
+**Status: GREEN**
 
 ```text
 Name:        f1.field.speed
@@ -2543,7 +2523,7 @@ telemetry coverage. Raw per-driver speed Gauges are **RED** by default.
 
 ### Field Engine Speed
 
-**Status: GREEN instrument contract; YELLOW source adapter**
+**Status: GREEN**
 
 ```text
 Name:        f1.field.engine_speed
@@ -2559,7 +2539,7 @@ Gauges and Sums are **RED**.
 
 ### Field Gear
 
-**Status: GREEN instrument contract; YELLOW source adapter**
+**Status: GREEN**
 
 ```text
 Name:        f1.field.gear
@@ -2579,7 +2559,7 @@ the source cadence can miss rapid shifts.
 
 ### Field Throttle
 
-**Status: GREEN instrument contract; YELLOW source adapter**
+**Status: GREEN**
 
 ```text
 Name:        f1.field.throttle
@@ -2889,13 +2869,17 @@ snapshot hydration MUST NOT create the event.
 project a lap-count metric. The dedicated `LapCount` topic owns session lap
 state.
 
-Implementation is blocked until source evidence and compact synthetic fixtures
-cover snapshots and feed patches; every grammar variant; clear, missing, and
-overflow cases; leader confirmation agreement and mismatch; leader suppression; independent field
+Grounded in 2024–2025 official `TimingData` race archives (e.g.
+[2024 British Grand Prix race TimingData](https://livetiming.formula1.com/static/2024/2024-07-07_British_Grand_Prix/2024-07-07_Race/TimingData.jsonStream)
+and
+[2025 British Grand Prix race TimingData](https://livetiming.formula1.com/static/2025/2025-07-06_British_Grand_Prix/2025-07-06_Race/TimingData.jsonStream)),
+implementation requires compact synthetic fixtures covering snapshots and feed
+patches; every grammar variant; clear, missing, and overflow cases; leader
+confirmation agreement and mismatch; leader suppression; independent field
 freshness; leader and ahead-car identity invalidation; interval
 non-resurrection; same and changed lap-boundary referents; and numeric/lap
-display-domain alternation. The fixture suite MUST include a stable lapped
-driver that temporarily receives numeric seconds.
+display-domain alternation, including a stable lapped driver that temporarily
+receives numeric seconds.
 
 ### Driver Lap And Sector Timing
 
@@ -3833,10 +3817,13 @@ queues; same-visit corrections before and after window close; exact and
 semantic series duplicates; cold and reconnect identity seeding; unavailable
 subscription topics; late finalized-window reports; event ownership; histogram
 bounds, window timestamps, exemplars, and cardinality; and independent
-trace/metric failure. Authenticated live availability of `PitStop` and
-`PitStopSeries` MUST have attributable private-check evidence before enabling
-their projector path; synthetic fixtures MUST cover their received shapes and
-failure boundaries but cannot establish live availability.
+trace/metric failure. Official archive streams (e.g.
+[2025 British Grand Prix race PitLaneTimeCollection](https://livetiming.formula1.com/static/2025/2025-07-06_British_Grand_Prix/2025-07-06_Race/PitLaneTimeCollection.jsonStream)
+and
+[PitStopSeries](https://livetiming.formula1.com/static/2025/2025-07-06_British_Grand_Prix/2025-07-06_Race/PitStopSeries.jsonStream))
+ground the payload shapes; synthetic fixtures cover received shapes, failure
+boundaries, and omitted-topic unavailability without claiming live entitlement
+or live availability.
 
 `PitStopSeries` fallback emission, `PitStop.PitLaneTime` fallback into the lane
 population, historical OpenF1 reconciliation, physical stationary placement,
@@ -5462,13 +5449,11 @@ Session status does not gate this publication log. The corpus included 485 feed
 captures before the first `Started`, 1,443 after the last `Finished`, 554
 strictly after `Finalised`, and 584 at the same static archive prefix as `Ends`;
 no capture had a later static prefix than `Ends`. Equal prefixes in separate
-static topic streams do not establish cross-topic wire order. A prior live-source
-observation recorded a TeamRadio update after `Finalised`, but its attributable
-provenance is not recorded here and remains required before runtime implementation.
-That historical report is not a published executable fixture. The accepted policy
-admits a coherent current-session feed record independently of `Inactive`, `Started`,
-`Aborted`, `Finished`, `Finalised`, or `Ends` and derives no phase from those
-states.
+static topic streams do not establish cross-topic wire order. That official
+archive corpus grounds admitting coherent current-session feed records
+independently of `Inactive`, `Started`, `Aborted`, `Finished`, `Finalised`, or
+`Ends` and deriving no phase from those states, without claiming live
+post-`Finalised` delivery guarantees.
 
 TeamRadio state retains at most 4,096 distinct indexes per session, including
 consumed identities and incomplete entries. Before applying a snapshot, compute
@@ -5504,30 +5489,20 @@ signed URL secrets MUST NOT be emitted.
 
 ## State Reduction
 
-**Status: FORMATION LAP**
+**Status: GREEN**
 
 The receiver has one shared instance across traces, metrics, and logs. That
-instance MUST own one session state machine on its read goroutine.
+instance MUST own one session state machine. The reader waits for a normalized
+batch to finish before it delivers the next record.
 
 The functional core SHOULD expose deterministic transformations with no
 network, Collector consumer, logger, context, or wall-clock dependency.
 
-The current Go aggregate core implements only the SessionInfo-first identity
-gate. One `liveTimingReceiver` owns its aggregate value state on the existing read
-goroutine. Every normalized batch reduces synchronously after input accounting and
-before the post-reduction consumer. Successful state commits survive transport
-reconnects and downstream consumer failures; a newly created shared receiver starts
-from zero state. A reducer invariant error preserves prior state, skips the
-post-reduction consumer for that batch, records the existing bounded consumer
-failure, and continues reading without reconnecting. The aggregate result still
-does not retain ineligible updates or implement another topic, cross-topic
-reconciliation, effects, commands, diagnostics, or projection.
-
-The pure DriverList parser and registry reducer are implemented outside that
-aggregate state. Their returned state, dispositions, and bounded issue occurrences
-are test-only until a separately approved aggregate integration wires DriverList
-after the SessionInfo gate. No current runtime behavior or output follows from
-their existence.
+One owner serializes normalized batches and timer observations. Reduction returns
+new state and racing effects. An invariant error discards both; a consumer error
+leaves the committed state intact. On transient disconnect, topic state becomes
+recovery-only. On graceful exit, the receiver delivers terminal effects with a
+context that remains valid after cancellation.
 
 Reducer requirements:
 
@@ -5695,7 +5670,7 @@ thresholds and timing-based assertions are not valid substitutes.
 
 ## OTLP Projection
 
-**Status: FORMATION LAP**
+**Status: GREEN**
 
 Projection from reduced observations to Collector `pdata` SHOULD be
 deterministic and tested without I/O.
@@ -5819,11 +5794,9 @@ Current implementation seams:
 | Session descriptor parsing and classification | `receiver/f1livetimingreceiver/session_info.go` |
 | Pure SessionInfo descriptor-state reduction | `receiver/f1livetimingreceiver/session_info_reducer.go` |
 | Pure SessionInfo normalized-batch adapter | `receiver/f1livetimingreceiver/session_info_batch.go` |
-| Pure aggregate batch identity gate | `receiver/f1livetimingreceiver/state.go` |
+| Transactional Live Timing reducer | `receiver/f1livetimingreceiver/state.go` |
 | Shared receiver lifecycle and consumer seam | `receiver/f1livetimingreceiver/receiver.go` |
-
-Other suggested future Go files such as `projection.go` are not
-normative until their behavior slice begins.
+| Live Timing OTLP projection | `receiver/f1livetimingreceiver/projection.go` |
 
 ## Security
 

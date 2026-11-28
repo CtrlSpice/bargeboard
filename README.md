@@ -6,7 +6,7 @@ A custom OpenTelemetry Collector distribution for Formula 1 telemetry. Designed 
 
 ## Implementation
 
-The Go Collector distribution accepts OTLP traces, metrics, and logs, batches them, and stores them through the embedded viewer's `desktop` exporter. The F1 Live Timing receiver connects to the live feed, validates updates, and reports input activity and interruptions. **F1 race export is not implemented:** the receiver currently maintains session identity and scheduling information, but produces no racing telemetry. Processing other feed topics and converting them to OTLP remain pending. An OpenF1 receiver does not exist yet.
+The Go Collector distribution accepts OTLP traces, metrics, and logs, batches them, and stores them through the embedded viewer's `desktop` exporter. The F1 Live Timing receiver connects to the live feed, validates updates, and reports input activity and interruptions. It projects driver timing spans, racing metrics, and event logs for synchronized sessions. An OpenF1 receiver does not exist yet.
 
 The canonical design is the evolving [Bargeboard architecture](docs/architecture.md). It records accepted decisions, source limitations, pending candidates, implementation seams, and the required checks for future human and agent contributors.
 
@@ -35,7 +35,7 @@ Open [the embedded viewer](http://127.0.0.1:8000) after startup. The `duckdb`
 extension stores telemetry in `./bargeboard.duckdb`, relative to the process
 working directory. Data survives shutdown and restart. `db_max_size: "0"`
 disables automatic pruning.
-The viewer displays incoming OTLP; the F1 receiver does not yet emit racing telemetry.
+The viewer displays racing telemetry and data from other OTLP clients.
 The incoming OTLP ports and the viewer belong to the same Bargeboard process.
 
 `make check` uses synthetic F1 inputs and local test servers. `make run` starts
@@ -151,8 +151,7 @@ requested release tag is validated as data inside that trusted workflow.
 Bargeboard owns the F1 credentials and connection. Its local Collector pipelines
 deliver telemetry to the embedded `otel-desktop-viewer v0.8.1` exporter and
 DuckDB store. Viewer components receive telemetry only and have no F1 credential
-handling. Racing OTLP projection remains unimplemented; the incoming OTLP ports
-already accept telemetry from other local clients.
+handling. The incoming OTLP ports also accept telemetry from other local clients.
 
 The Collector reads each user's own F1 TV `subscriptionToken` from
 `$HOME/.config/bargeboard/f1tv-token`. The repository configuration contains
@@ -229,8 +228,7 @@ The `otelcol_f1livetiming_` metrics describe connection and subscription state,
 outages, retries, recoveries, normalized input envelopes, and consumer failures.
 `last_update_age` is seconds since the last locally accepted nonempty batch; it
 is absent before that first batch and does not measure source freshness.
-Internal input activity can be visible even though F1 race export is still
-unimplemented. See the [operational contract](docs/architecture.md#live-timing-operational-visibility)
+Input activity alone does not confirm racing export. See the [operational contract](docs/architecture.md#live-timing-operational-visibility)
 for names, units, and lifecycle semantics. Setting
 `service.telemetry.metrics.level` to `none` disables these metrics; terminal
 notices and per-run summary totals remain available.
@@ -247,9 +245,6 @@ notepad (Join-Path $tokenDirectory "f1tv-token")
 $env:HOME = $HOME
 .\bargeboard.exe --config config.yaml
 ```
-
-The current receiver connects, subscribes, validates, and normalizes the feed;
-F1 state reduction and OTLP emission remain under development.
 
 The client consumes an existing token; it does not implement account login,
 token refresh, or explicit device registration. A successful connection does not

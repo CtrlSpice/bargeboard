@@ -81,6 +81,9 @@ func subscriptionTopics() []string {
 		"TopThree",
 		"RcmSeries",
 		"LapCount",
+		"PitLaneTimeCollection",
+		"PitStop",
+		"PitStopSeries",
 	}
 }
 

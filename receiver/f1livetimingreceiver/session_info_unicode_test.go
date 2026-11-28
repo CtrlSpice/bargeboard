@@ -303,8 +303,8 @@ func TestSessionInfoUnicodeResultShapesStayBounded(t *testing.T) {
 		{sessionInfoRetiredTuples{}, "tuples start count"},
 		{sessionInfoLogicalTuple{}, "season meetingKey sessionName"},
 		{sessionInfoReduction{}, "state disposition routeTransition issues"},
-		{liveTimingState{}, "sessionInfo"},
-		{liveTimingReduction{}, "state sessionInfoDisposition sessionInfoAuthoritative sessionInfoRouteTransition sessionInfoIssues sessionScopedUpdatesAllowed"},
+		{liveTimingState{}, "sessionInfo drivers series status track laps clock weather radio timing roots origin spanIDs idCollision display"},
+		{liveTimingReduction{}, "retiredDiagnostics state effects sessionInfoDisposition sessionInfoAuthoritative sessionInfoRouteTransition sessionInfoIssues sessionScopedUpdatesAllowed"},
 	} {
 		typeOf := reflect.TypeOf(test.value)
 		var names []string

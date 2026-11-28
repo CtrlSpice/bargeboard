@@ -63,7 +63,7 @@ const (
 )
 
 func reduceOperational(s operationalState, in operationalInput) (operationalState, operationalNotice) {
-	if s.stopped && in.event != opTick && in.event != opPeriodicTick && in.event != opFinish {
+	if s.stopped && in.event != opTick && in.event != opPeriodicTick && in.event != opFinish && (in.event != opConsumerFailure || s.summarized) {
 		return s, noticeNone
 	}
 	notice := noticeNone
