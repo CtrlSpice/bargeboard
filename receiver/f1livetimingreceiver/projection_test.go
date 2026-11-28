@@ -22,7 +22,7 @@ func TestProjectionWaterfall(t *testing.T) {
 	if projectTraces("", e).ResourceSpans().Len() != 0 || projectMetrics("", e).ResourceMetrics().Len() != 0 || projectLogs("", e).ResourceLogs().Len() != 0 {
 		t.Fatal("empty resource")
 	}
-	id := sessionFixture().identity
+	id := sessionInfoIdentity{2026, 42, canonicalSessionTypeQualifying, canonicalSessionNameQualifying}
 	for _, k := range []spanKindType{spanDriverSession, spanQualifyingPhase, spanStint, spanLap, spanSector} {
 		s := spanEffect{identity: id, kind: k, driverNumber: 7, driverAcronym: "XYZ", startTime: fieldTime(10), endTime: fieldTime(20), timeQuality: "observed", status: spanStatusEffect{spanStatusError, "retired"}, attrs: []keyValue{boolAttr("test", true)}, events: []spanEventEffect{eventAt("example", fieldTime(12), floatAttr("value", 2.5))}}
 		if k != spanDriverSession {
@@ -63,10 +63,13 @@ func TestProjectionWaterfall(t *testing.T) {
 	if _, _, _, ok := spanPath(e.spans[4], seen); ok {
 		t.Fatal("accepted descendant of colliding entity")
 	}
+	if _, _, _, ok := spanPath(spanEffect{identity: id, kind: spanQualifyingPhase, driverNumber: 7, driverAcronym: "XYZ"}, map[pcommon.SpanID]spanEntity{}); ok {
+		t.Fatal("accepted unresolved qualifying phase")
+	}
 }
 
 func TestProjectionMetricKinds(t *testing.T) {
-	id := sessionFixture().identity
+	id := sessionInfoIdentity{2026, 42, canonicalSessionTypeQualifying, canonicalSessionNameQualifying}
 	var e liveTimingEffects
 	for _, k := range []metricKind{metricIntGauge, metricDoubleGauge, metricIntSumCumulative, metricIntSumDelta, metricExplicitHistogramDelta, metricExpHistogramDelta, metricIntGauge} {
 		e.metrics = append(e.metrics, metricEffect{kind: k, name: "measurement", description: "description", unit: "s", monotonic: true, identity: id, attrs: []keyValue{strAttr("extra", "ok")}, startTime: fieldTime(1), timestamp: fieldTime(2), intVal: 8, floatVal: 2.5, bounds: []float64{2}, bucketCounts: []uint64{1, 2}, count: 3, sum: 6, hasMinMax: true, min: 0, max: 4, expZeroCount: 1, expPositiveOffset: -2, expPositiveBuckets: []uint64{0, 2}, exemplars: []exemplarEffect{{timestamp: fieldTime(2), isInt: true, intVal: 4, spanID: pcommon.SpanID{9}, traceID: pcommon.TraceID{7}, filteredAttrs: []keyValue{strAttr("key", "value")}}}})
@@ -124,7 +127,7 @@ func TestProjectionMetricKinds(t *testing.T) {
 }
 
 func TestProjectionLogs(t *testing.T) {
-	id := sessionFixture().identity
+	id := sessionInfoIdentity{2026, 42, canonicalSessionTypeQualifying, canonicalSessionNameQualifying}
 	l := logEffect{identity: id, body: "yellow", timeQuality: "observed", timestamp: fieldTime(1), observedTimestamp: fieldTime(5), traceID: pcommon.TraceID{1}, spanID: pcommon.SpanID{2}, attrs: []keyValue{intAttr("index", 3)}}
 	e := liveTimingEffects{logs: []logEffect{l, l}}
 	e.logs[1].hasTrace = true

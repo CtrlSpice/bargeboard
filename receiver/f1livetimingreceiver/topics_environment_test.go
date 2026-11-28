@@ -237,6 +237,7 @@ func TestControlEventsAndTerminalFold(t *testing.T) {
 }
 func TestControlRepairCorrelation(t *testing.T) {
 	o := sessionFixture()
+	o.identity = sessionInfoIdentity{2026, 42, canonicalSessionTypeQualifying, canonicalSessionNameQualifying}
 	s := retainLapRepairSummary(raceControlState{}, lapRepairSummary{1, 4, 5, 60001, "q1", true, true})
 	s = retainLapRepairSummary(s, lapRepairSummary{driver: 1, lap: 4, boundary: 5, phase: "q1"})
 	const del = "CAR 1 (ABC) TIME 1:00.001 DELETED - TRACK LIMITS AT TURN 3 LAP 5 1:09:03"
@@ -258,6 +259,7 @@ func TestControlRepairCorrelation(t *testing.T) {
 		var timing timingState
 		if open {
 			timing = timingStart(o)
+			timing.phase = "q1"
 			timing, _ = timingPatch(t, timing, o, 10, `"1":{"NumberOfLaps":1}`)
 		}
 		attachRaceControlEvents(timing, r.events, logs, roots)
@@ -266,7 +268,7 @@ func TestControlRepairCorrelation(t *testing.T) {
 			if i == 1 {
 				want = deterministicRootSpanID(o.identity, 1)
 			} else if open {
-				want = deterministicLapSpanID(o.identity, 1, "", 1)
+				want = deterministicLapSpanID(o.identity, 1, "q1", 1)
 			}
 			if !l.hasTrace || l.traceID != deterministicTraceID(o.identity, 1) || l.spanID != want {
 				t.Fatal(i, open, l)

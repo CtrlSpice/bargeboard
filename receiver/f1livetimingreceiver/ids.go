@@ -1,84 +1,64 @@
 package f1livetimingreceiver
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/binary"
 	"strconv"
 
+	"github.com/CtrlSpice/bargeboard/internal/f1id"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 )
 
 func decimal(n int64) string { return strconv.FormatInt(n, 10) }
 
-func canonicalQualifyingPhase(sessionType canonicalSessionType, sessionPart int64) (string, bool) {
-	if sessionPart >= 1 && sessionPart <= 3 {
-		switch sessionType {
-		case canonicalSessionTypeQualifying:
-			return "q" + decimal(sessionPart), true
-		case canonicalSessionTypeSprintQualifying:
-			return "sq" + decimal(sessionPart), true
-		}
+func (e sessionInfoIdentity) shared() f1id.SessionIdentity {
+	return f1id.SessionIdentity{
+		Season:      e.season,
+		MeetingKey:  e.meetingKey,
+		SessionType: f1id.SessionType(e.sessionType),
+		SessionName: f1id.SessionName(e.sessionName),
 	}
-	return "", false
+}
+
+func canonicalQualifyingPhase(sessionType canonicalSessionType, sessionPart int64) (string, bool) {
+	if sessionPart == 0 {
+		return "", false
+	}
+	phase, ok := f1id.ResolveQualifyingPhase(f1id.SessionType(sessionType), sessionPart)
+	return string(phase), ok
 }
 
 func phaseOrNone(phase string) string {
 	if phase == "" {
-		return "none"
+		return string(f1id.PhaseNone)
 	}
 	return phase
 }
 
-func appendIDParts(b []byte, parts ...string) []byte {
-	for _, part := range parts {
-		b = binary.BigEndian.AppendUint32(b, uint32(len(part)))
-		b = append(b, part...)
-	}
-	return b
-}
-
-func nonzeroDigest(input []byte, width int, hash func([]byte) [32]byte) [32]byte {
-	sum := hash(input)
-	for n := int64(1); bytes.Equal(sum[:width], make([]byte, width)); n++ {
-		sum = hash(appendIDParts(input[:len(input):len(input)], "retry", decimal(n)))
-	}
-	return sum
-}
-
-func entityDigest(e sessionInfoIdentity, marker string, width int, driver int64, path ...string) [32]byte {
-	b := appendIDParts(nil, "bargeboard.otlp.id/v1", marker, "season", decimal(e.season),
-		"meeting", decimal(e.meetingKey), "session.type", string(e.sessionType),
-		"session.name", string(e.sessionName), "driver", decimal(driver))
-	return nonzeroDigest(appendIDParts(b, path...), width, sha256.Sum256)
-}
-
 func deterministicTraceID(e sessionInfoIdentity, driverNumber int64) pcommon.TraceID {
-	sum := entityDigest(e, "trace", 16, driverNumber)
-	return pcommon.TraceID(sum[:16])
-}
-
-func entitySpanID(e sessionInfoIdentity, driverNumber int64, parts ...string) pcommon.SpanID {
-	sum := entityDigest(e, "span", 8, driverNumber, parts...)
-	return pcommon.SpanID(sum[:8])
+	id, _ := f1id.DriverTraceID(e.shared(), driverNumber)
+	return id
 }
 
 func deterministicRootSpanID(e sessionInfoIdentity, driverNumber int64) pcommon.SpanID {
-	return entitySpanID(e, driverNumber, "driver.session", "root")
+	id, _ := f1id.DriverSessionRootSpanID(e.shared(), driverNumber)
+	return id
 }
 
 func deterministicPhaseSpanID(e sessionInfoIdentity, driverNumber int64, phase string) pcommon.SpanID {
-	return entitySpanID(e, driverNumber, "qualifying.phase", phase)
+	id, _ := f1id.QualifyingPhaseSpanID(e.shared(), driverNumber, f1id.QualifyingPhase(phase))
+	return id
 }
 
 func deterministicStintSpanID(e sessionInfoIdentity, driverNumber int64, phase string, stintOrdinal int64) pcommon.SpanID {
-	return entitySpanID(e, driverNumber, "phase", phaseOrNone(phase), "stint", decimal(stintOrdinal))
+	id, _ := f1id.StintSpanID(e.shared(), driverNumber, f1id.QualifyingPhase(phaseOrNone(phase)), stintOrdinal)
+	return id
 }
 
 func deterministicLapSpanID(e sessionInfoIdentity, driverNumber int64, phase string, lapNumber int64) pcommon.SpanID {
-	return entitySpanID(e, driverNumber, "phase", phaseOrNone(phase), "lap", decimal(lapNumber))
+	id, _ := f1id.LapSpanID(e.shared(), driverNumber, f1id.QualifyingPhase(phaseOrNone(phase)), lapNumber)
+	return id
 }
 
 func deterministicSectorSpanID(e sessionInfoIdentity, driverNumber int64, phase string, lapNumber, sectorNumber int64) pcommon.SpanID {
-	return entitySpanID(e, driverNumber, "phase", phaseOrNone(phase), "lap", decimal(lapNumber), "sector", decimal(sectorNumber))
+	id, _ := f1id.SectorSpanID(e.shared(), driverNumber, f1id.QualifyingPhase(phaseOrNone(phase)), lapNumber, sectorNumber)
+	return id
 }

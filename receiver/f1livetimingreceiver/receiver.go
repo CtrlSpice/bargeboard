@@ -2,6 +2,7 @@ package f1livetimingreceiver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/CtrlSpice/bargeboard/internal/circuitmap"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componentstatus"
 	"go.opentelemetry.io/collector/consumer"
@@ -18,21 +20,42 @@ import (
 var errPermanentLiveTimingFailure = errors.New("F1 live timing receiver stopped after receiving invalid server data; Collector can still run")
 var errReceiverStopping = errors.New("F1 live timing receiver is stopping")
 
+type circuitLoadResult struct {
+	gen      sessionInfoGeneration
+	key      int64
+	circuit  circuitmap.Map
+	err      error
+	canceled bool
+}
+
 type liveTimingReceiver struct {
 	config   *Config
 	settings receiver.Settings
 	client   *http.Client
 
-	cancel          context.CancelFunc
-	done            chan struct{}
-	state           liveTimingState
-	reduce          func(liveTimingState, normalizedLiveTimingBatch) (liveTimingReduction, error)
-	consume         func(context.Context, normalizedLiveTimingBatch) error
-	now             func() time.Time
-	retryDelay      func(int) time.Duration
-	operational     *operationalReporter
-	newRacingTicker func() (<-chan time.Time, func())
-	reported        [3]bool
+	cancel           context.CancelFunc
+	done             chan struct{}
+	state            liveTimingState
+	reduce           func(liveTimingState, normalizedLiveTimingBatch) (liveTimingReduction, error)
+	consume          func(context.Context, normalizedLiveTimingBatch) error
+	now              func() time.Time
+	retryDelay       func(int) time.Duration
+	operational      *operationalReporter
+	newRacingTicker  func() (<-chan time.Time, func())
+	reported         [3]bool
+	circuitClient    *circuitmap.Client
+	circuitResults   chan circuitLoadResult
+	circuitCancel    context.CancelFunc
+	circuitWG        sync.WaitGroup
+	circuitGen       sessionInfoGeneration
+	circuitKey       int64
+	circuitFetches   int
+	circuitRequested bool
+	circuitWarned    bool
+	circuitCurr      circuitmap.Map
+	circuitPrevID    sessionInfoIdentity
+	circuitPrev      circuitmap.Map
+	onCircuitSettled func()
 
 	consumersMu sync.Mutex
 	traces      consumer.Traces
@@ -50,9 +73,10 @@ func newLiveTimingReceiver(config *Config, settings receiver.Settings) *liveTimi
 				return http.ErrUseLastResponse
 			},
 		},
-		reduce:     reduceLiveTimingBatch,
-		now:        time.Now,
-		retryDelay: reconnectDelay,
+		reduce:         reduceLiveTimingBatch,
+		now:            time.Now,
+		retryDelay:     reconnectDelay,
+		circuitResults: make(chan circuitLoadResult, 1),
 		newRacingTicker: func() (<-chan time.Time, func()) {
 			t := time.NewTicker(time.Second)
 			return t.C, t.Stop
@@ -79,6 +103,13 @@ func (r *liveTimingReceiver) registerLogs(next consumer.Logs) {
 }
 
 func (r *liveTimingReceiver) Start(ctx context.Context, host component.Host) error {
+	if r.config != nil && r.config.CircuitEnrichment.Enabled {
+		client, err := circuitmap.NewClient(r.config.CircuitEnrichment.Endpoint)
+		if err != nil {
+			return err
+		}
+		r.circuitClient = client
+	}
 	if r.operational == nil {
 		var err error
 		r.operational, err = newOperationalReporter(ctx, r.settings)
@@ -141,13 +172,176 @@ func (r *liveTimingReceiver) reportDiagnostics(active racingDiagnostics) {
 		}
 	}
 }
+func uniqueSessionField(raw json.RawMessage, target string) (json.RawMessage, bool, bool) {
+	var out json.RawMessage
+	count := 0
+	var issues sessionInfoIssueSet
+	ok, err := visitSessionInfoObject(raw, &issues, func(name string, val json.RawMessage) {
+		if name == target {
+			out = val
+			count++
+		}
+	})
+	if err != nil || !ok {
+		return nil, true, false
+	}
+	if count == 0 {
+		return nil, false, true
+	}
+	return out, true, count == 1
+}
+
+func sessionCircuitKey(batch normalizedLiveTimingBatch) (int64, bool) {
+	snap := batch.source == liveTimingUpdateSourceSnapshot
+	for _, u := range batch.updates {
+		if u.topic != "SessionInfo" {
+			continue
+		}
+		meeting, hasMeeting, ok := uniqueSessionField(u.payload, "Meeting")
+		if !ok {
+			return 0, true
+		}
+		if !hasMeeting {
+			return 0, snap
+		}
+		circuit, hasCircuit, ok := uniqueSessionField(meeting, "Circuit")
+		if !ok {
+			return 0, true
+		}
+		if !hasCircuit {
+			return 0, snap
+		}
+		rawKey, hasKey, ok := uniqueSessionField(circuit, "Key")
+		if !ok {
+			return 0, true
+		}
+		if !hasKey {
+			return 0, snap
+		}
+		key, ok := parsePositiveCanonicalInt64(rawKey)
+		if !ok {
+			return 0, true
+		}
+		return key, true
+	}
+	return 0, false
+}
+
+func (r *liveTimingReceiver) cancelCircuitFetch() {
+	if r.circuitCancel != nil {
+		r.circuitCancel()
+		r.circuitCancel = nil
+	}
+}
+
+func (r *liveTimingReceiver) drainCircuitResults() {
+	for {
+		select {
+		case res := <-r.circuitResults:
+			r.applyCircuitResult(res)
+		default:
+			return
+		}
+	}
+}
+
+func (r *liveTimingReceiver) applyCircuitResult(res circuitLoadResult) {
+	if res.gen != r.state.sessionInfo.generation || res.key != r.circuitKey || !r.state.sessionInfo.identityAvailable {
+		return
+	}
+	if res.err != nil {
+		if res.canceled {
+			r.circuitRequested = false
+			return
+		}
+		if !r.circuitWarned {
+			logger := r.settings.Logger
+			if r.operational != nil && r.operational.logger != nil {
+				logger = r.operational.logger
+			}
+			if logger != nil {
+				logger.Warn("F1 circuit geometry unavailable; event enrichment skipped")
+				r.circuitWarned = true
+			}
+		}
+	} else {
+		r.circuitCurr = res.circuit
+	}
+	if r.onCircuitSettled != nil {
+		r.onCircuitSettled()
+	}
+}
+
+func (r *liveTimingReceiver) circuitFor(id sessionInfoIdentity) circuitmap.Map {
+	if r.state.sessionInfo.identityAvailable && id == r.state.sessionInfo.identity {
+		return r.circuitCurr
+	}
+	if r.circuitPrevID != (sessionInfoIdentity{}) && id == r.circuitPrevID {
+		return r.circuitPrev
+	}
+	return circuitmap.Map{}
+}
+
+func (r *liveTimingReceiver) updateCircuit(ctx context.Context, prevID sessionInfoIdentity, prevMap circuitmap.Map, batch normalizedLiveTimingBatch, reduction liveTimingReduction) {
+	if r.circuitClient == nil {
+		return
+	}
+	if reduction.sessionInfoDisposition == sessionInfoDispositionReplaced {
+		r.circuitPrevID = prevID
+		r.circuitPrev = prevMap
+	}
+	if r.state.sessionInfo.generation != r.circuitGen {
+		r.cancelCircuitFetch()
+		r.circuitGen = r.state.sessionInfo.generation
+		r.circuitKey = 0
+		r.circuitFetches = 0
+		r.circuitRequested = false
+		r.circuitWarned = false
+		r.circuitCurr = circuitmap.Map{}
+	}
+	if !r.state.sessionInfo.synchronized {
+		return
+	}
+	switch reduction.sessionInfoDisposition {
+	case sessionInfoDispositionInstalled, sessionInfoDispositionRefreshed, sessionInfoDispositionReplaced:
+		if key, present := sessionCircuitKey(batch); present && key != r.circuitKey {
+			r.cancelCircuitFetch()
+			r.circuitKey = key
+			r.circuitRequested = false
+			r.circuitCurr = circuitmap.Map{}
+		}
+	}
+	if !r.circuitRequested && r.circuitKey > 0 && r.circuitFetches < 4 {
+		r.circuitRequested = true
+		r.circuitFetches++
+		fetchCtx, cancel := context.WithCancel(ctx)
+		r.circuitCancel = cancel
+		client := r.circuitClient
+		gen, key, season := r.circuitGen, r.circuitKey, r.state.sessionInfo.identity.season
+		r.circuitWG.Add(1)
+		go func() {
+			defer r.circuitWG.Done()
+			m, err := client.Load(fetchCtx, key, season)
+			res := circuitLoadResult{gen: gen, key: key, circuit: m, err: err, canceled: fetchCtx.Err() != nil}
+			select {
+			case r.circuitResults <- res:
+			case <-fetchCtx.Done():
+			}
+		}()
+	}
+}
+
 func (r *liveTimingReceiver) deliver(ctx context.Context, e liveTimingEffects) bool {
 	r.reportDiagnostics(r.state.diagnostics())
 	traces, metrics, logs := r.consumers()
 	version := r.settings.BuildInfo.Version
 	failed := false
 	if traces != nil && len(e.spans) > 0 {
-		if p := projectTraces(version, e); p.SpanCount() > 0 && traces.ConsumeTraces(ctx, p) != nil {
+		var lookup func(sessionInfoIdentity) circuitmap.Map
+		if r.circuitClient != nil {
+			lookup = r.circuitFor
+		}
+		if p := projectTracesWithCircuit(version, e, lookup); p.SpanCount() > 0 && traces.ConsumeTraces(ctx, p) != nil {
 			failed = true
 		}
 	}
@@ -192,7 +386,10 @@ func (r *liveTimingReceiver) read(ctx context.Context, c *signalRConnection, con
 	for {
 		select {
 		case err := <-done:
+			r.drainCircuitResults()
 			return err
+		case res := <-r.circuitResults:
+			r.applyCircuitResult(res)
 		case in := <-inputs:
 			ack <- consume(in.ctx, in.batch)
 		case <-ticks:
@@ -229,12 +426,14 @@ func (r *liveTimingReceiver) run(
 	defer close(done)
 	defer r.operational.apply(operationalInput{event: opFinish})
 	defer r.flushTerminal(ctx)
+	defer r.circuitWG.Wait()
+	defer r.cancelCircuitFetch()
 	attempt := 0
 
 	for {
 		r.operational.apply(operationalInput{event: opConnected})
 		receivedBatch := false
-		err := r.read(ctx, connection, func(ctx context.Context, batch liveTimingBatch) error {
+		err := r.read(ctx, connection, func(cbCtx context.Context, batch liveTimingBatch) error {
 			normalized, err := normalizeLiveTimingBatch(batch, r.now())
 			if err != nil {
 				return err
@@ -247,13 +446,16 @@ func (r *liveTimingReceiver) run(
 				r.operational.apply(operationalInput{event: opConsumerFailure})
 				return nil
 			}
+			prevID, prevMap := r.state.sessionInfo.identity, r.circuitCurr
 			r.state = reduction.state
+			r.drainCircuitResults()
+			r.updateCircuit(ctx, prevID, prevMap, normalized, reduction)
 			if reduction.sessionInfoDisposition == sessionInfoDispositionReplaced {
 				r.reportDiagnostics(reduction.retiredDiagnostics)
 				r.reported = [3]bool{}
 			}
-			failed := r.deliver(ctx, reduction.effects)
-			if r.consume != nil && r.consume(ctx, normalized) != nil {
+			failed := r.deliver(cbCtx, reduction.effects)
+			if r.consume != nil && r.consume(cbCtx, normalized) != nil {
 				failed = true
 			}
 			if failed {

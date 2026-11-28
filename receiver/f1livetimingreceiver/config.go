@@ -5,6 +5,8 @@ import (
 	"net"
 	"net/url"
 	"strings"
+
+	"github.com/CtrlSpice/bargeboard/internal/f1id"
 )
 
 const (
@@ -13,13 +15,19 @@ const (
 )
 
 type Config struct {
-	Endpoint          string     `mapstructure:"endpoint"`
-	NegotiateEndpoint string     `mapstructure:"negotiate_endpoint"`
-	Auth              AuthConfig `mapstructure:"auth"`
+	Endpoint          string                  `mapstructure:"endpoint"`
+	NegotiateEndpoint string                  `mapstructure:"negotiate_endpoint"`
+	Auth              AuthConfig              `mapstructure:"auth"`
+	CircuitEnrichment CircuitEnrichmentConfig `mapstructure:"circuit_enrichment"`
 }
 
 type AuthConfig struct {
 	TokenFile string `mapstructure:"token_file"`
+}
+
+type CircuitEnrichmentConfig struct {
+	Enabled  bool   `mapstructure:"enabled"`
+	Endpoint string `mapstructure:"endpoint"`
 }
 
 func (cfg *Config) Validate() error {
@@ -34,6 +42,11 @@ func (cfg *Config) Validate() error {
 	}
 	if strings.TrimSpace(cfg.Auth.TokenFile) == "" {
 		return fmt.Errorf("auth.token_file must not be empty")
+	}
+	if cfg.CircuitEnrichment.Enabled {
+		if err := f1id.ValidateHTTPSOrLoopbackEndpoint("circuit_enrichment.endpoint", cfg.CircuitEnrichment.Endpoint); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -555,8 +555,9 @@ diff, CI, and independent-review gates.
 
 ## Local Runtime and Verification Boundaries
 
-**Decision status: GREEN (approved). Embedded OTLP storage, native packaging, and
-Live Timing racing projection are implemented.**
+**Decision status: GREEN (approved). Embedded OTLP storage, native packaging,
+Live Timing racing projection, and opt-in historical/companion receivers are
+implemented.**
 
 Bargeboard is the credential-owning local F1 client. Each user supplies their own
 F1 TV `subscriptionToken` through `f1livetiming.token_file`, configured as
@@ -567,11 +568,12 @@ The local viewer arrangement is:
 ```text
 local token file -> f1livetiming receiver <-> F1 service
                            |
-                      session state -> OTLP projection
-                                             |
-OTLP receiver -----------------------> Collector pipelines -> desktop exporter
-                                                                    |
-                                                          DuckDB store + UI
+                      session state -> OTLP projection -+
+                                                        |
+f1static / openf1 / jolpica (opt-in, disabled by default) -+
+                                                        v
+OTLP receiver -> Collector pipelines -> desktop exporter -> duckdb extension
+                                                            persistent store + UI
 ```
 
 The embedded viewer MUST remain a generic telemetry store and dashboard. It MUST NOT accept,
@@ -632,8 +634,10 @@ metadata. The complete archive verifier compares each packaged binary with that
 target's transferred reference. It MUST NOT substitute a cross-compiled or
 CGO-disabled reference.
 
-The Live Timing receiver exports racing signals. Pending source mappings
-remain non-binding. Normal OTLP ingress already reaches persistent viewer storage.
+The Live Timing receiver exports accepted racing signals, and `f1static`,
+`openf1`, and `jolpica` project their accepted domains when explicitly enabled.
+Pending source mappings remain non-binding. Normal OTLP ingress already reaches
+persistent viewer storage.
 
 Verification MUST check the complete shipped extension configuration and all
 three pipeline routes. A local integration test MUST send independently authored
@@ -641,8 +645,15 @@ OTLP through the real receiver, batch processor and desktop exporter, stop the
 Collector, reopen the same database, and compare complete viewer exports with
 the original signals. It MUST verify stored row counts, nanosecond timestamps,
 integer precision, resource/scope association, typed bodies and attributes, and
-disabled pruning. Test-only readiness notifications and shutdown provide the
-synchronization; elapsed sleeps are not evidence of completed writes.
+disabled pruning. Synthetic `f1livetiming` and `f1static` integration tests MUST
+also run the full Collector with `batch`, `desktop`, and `duckdb` against local
+synthetic SignalR, archive, and circuit servers, synchronize on deterministic
+delivery or `StatusOK` replay completion without sleeps, reopen the database
+after shutdown, and verify the persisted `driver.session -> stint -> lap -> sector`
+waterfall (including corner and marshal-sector enrichment where enabled), racing
+metrics, and race-control logs. Test-only readiness and status notifications plus
+shutdown provide the synchronization; elapsed sleeps are not evidence of
+completed writes.
 Tests MUST also verify that unusable database paths fail startup and that an
 existing invalid database file remains unchanged.
 
@@ -692,9 +703,10 @@ published-history disposition, including the prior PR #47 branch ancestor.
 
 Public CI MUST exercise pure transformations and the real HTTP/WebSocket stack
 against local synthetic servers with invented credentials. F1 account secrets,
-authenticated or public F1 service requests, and downloaded F1 payload artifacts
-MUST NOT be inputs to these jobs. Toolchain and dependency downloads are separate
-build operations; this is not an air-gapped-build claim.
+authenticated or public F1, OpenF1, Jolpica, or MultiViewer service requests,
+and downloaded F1 payload artifacts MUST NOT be inputs to these jobs. Toolchain
+and dependency downloads are separate build operations; this is not an
+air-gapped-build claim.
 
 The existing setup, cookie, subscription, framing, normalization, HTTP failure,
 retry, liveness, redaction, and Collector-process tests remain required.
@@ -727,13 +739,18 @@ synthetic regression or this documentation.
 The Go distribution currently compiles:
 
 - The `f1livetiming` traces, metrics, and logs receiver factory.
+- The `f1static` historical static archive replay traces, metrics, and logs receiver factory (`enabled: false` by default).
+- The `openf1` Race/Sprint result-observation logs receiver factory (`enabled: false` by default).
+- The `jolpica` official FIA classifications and standings metrics and logs receiver factory (`enabled: false` by default).
 - The standard OTLP receiver.
 - The batch processor.
 - The debug exporter.
 - The viewer's `desktop` exporter and `duckdb` extension.
 
 The shipped `config.yaml` runs both the F1 Live Timing and standard OTLP
-receivers. It contains no credentials: the F1 receiver resolves each user's
+receivers while leaving `f1static`, `openf1`, and `jolpica` opt-in so default
+startup requires neither a static archive URL nor third-party HTTP egress. It
+contains no credentials: the F1 receiver resolves each user's
 token file through `${env:HOME}/.config/bargeboard/f1tv-token`.
 
 The F1 Live Timing receiver currently authenticates, negotiates SignalR,
@@ -753,7 +770,11 @@ scalar escapes in fully normalized payloads, with bounded warnings and affected
 envelope totals. These input findings do not claim semantic quarantine or
 racing-signal delivery.
 
-No Go OpenF1 receiver exists yet.
+The companion packages (`internal/f1id`, `internal/circuitmap`,
+`receiver/f1staticreceiver`, `receiver/openf1receiver`, and
+`receiver/jolpicareceiver`) are registered in `components.go` and verified
+end-to-end against the persistent DuckDB desktop viewer using local synthetic
+servers.
 
 ### Live Timing Setup Boundaries
 
@@ -1428,13 +1449,26 @@ F1 Live Timing owns provisional, low-latency live data:
 Its protocol is unsupported and season-dependent. Schema changes MUST have
 attributable source evidence and synthetic fixtures before semantic promotion.
 
+### F1 Static Archive Replay
+
+Formula 1's post-session static archive (`https://livetiming.formula1.com/static/`)
+is the mutually exclusive historical replay counterpart to live `f1livetiming`:
+
+- Finished-session replay of `SessionInfo.json`, `DriverList.json`, and
+  `<Topic>.jsonStream` / `<Topic>.z.jsonStream` streams using original
+  historical UTC timestamps.
+- Disabled by default (`enabled: false`) so it never runs alongside live
+  `f1livetiming` for the same session.
+- Emits `f1.data.source=livetiming` and canonical `bargeboard.otlp.id/v1`
+  deterministic IDs so companion post-session observations correlate identically
+  to live sessions.
+
 ### OpenF1
 
 OpenF1 owns normalized and post-session domains:
 
 - Historical backfill when no live projection for that session is active.
 - Correction-aware observed race and sprint results under the contract below.
-- Starting grids, championship standings, and points after separate review.
 - Final or historical normalized pit-lane and stationary-stop durations where
   documented.
 - Post-session facts unavailable from the subscribed Live Timing topics.
@@ -1442,19 +1476,47 @@ OpenF1 owns normalized and post-session domains:
 Historical OpenF1 access is public. Live OpenF1 access requires sponsor
 authentication and MUST remain optional.
 
+### Jolpica-F1
+
+Jolpica-F1 (`https://api.jolpi.ca/ergast/f1`) owns official FIA post-round
+classifications and championship standings:
+
+- Official FIA final Race and Sprint classification status causes (`status`,
+  such as mechanical failure, collision, lapped finish, or disqualification),
+  starting `grid` slots, and official FIA `points` awarded.
+- Official post-round World Drivers' Championship (WDC) and World Constructors'
+  Championship (WCC) standings (`points`, `position`, and `wins`).
+
+Jolpica-F1 emits `f1.data.source=jolpica`, defaults to disabled
+(`enabled: false`), and MUST NOT emit trace spans, laps, stints, pit stops,
+weather, or car telemetry.
+
+### MultiViewer Circuit Geometry
+
+MultiViewer's circuit layout API (`https://api.multiviewer.app/api/v1/circuits`)
+owns opt-in static spatial corner and marshal-sector lookup metadata for
+track-local `(X, Y)` coordinates already accepted from `Position.z`. It emits
+zero standalone spans, metrics, or logs.
+
 ### Overlap
 
 Source authority MUST be selected before a pipeline starts. Running both
 sources for the same semantic domain MAY be supported as an explicit audit
-mode later, but MUST NOT be the default.
+mode later, but MUST NOT be the default. In particular, `f1static` and
+`f1livetiming` are mutually exclusive operating modes and MUST NOT run together
+for the same session by default.
 
 The accepted OpenF1 result handoff is a one-way enrichment seam, not duplicate
 authority: Live Timing retains root chronology and identity while OpenF1 owns
 only observed result outcome and published position. A standalone OpenF1
 projector cannot mutate or re-emit an already exported Live Timing root.
+Jolpica-F1 remains distinct from OpenF1: OpenF1 records scraped current
+`session_result` outcomes and revisions, while Jolpica-F1 records official FIA
+post-round classification causes, grid slots, points, and championship
+standings.
 
-Every projected signal SHOULD identify its source using a bounded source value
-such as `livetiming` or `openf1`. Source identity MUST NOT include endpoint,
+Every projected signal SHOULD identify its source using a bounded source value:
+`livetiming`, `openf1`, or `jolpica`. Source identity MUST NOT include endpoint,
 token, cookie, or connection values.
 
 ## Session Coverage
@@ -1972,11 +2034,91 @@ tick. Shifted or speed-compressed "live now" timestamps are **YELLOW** and
 non-binding. Any such mode requires a separately named time, identity, and
 deduplication contract and MUST never be inferred from playback speed.
 
-Cross-run delivery semantics remain **YELLOW**. Before a Go historical replay
-can enable network export, the architecture MUST accept an explicit policy for
-repeating a session into the same destination. An unbounded replay-run value
-MUST NOT be added to metric attributes as an idempotency workaround. Dry-run and
-pure projection work may proceed without that policy.
+Cross-run delivery semantics for repeated export into one destination remain
+**YELLOW** outside the explicit single-run static archive receiver contract
+below. An unbounded replay-run value MUST NOT be added to metric attributes as
+an idempotency workaround.
+
+#### Static Archive Replay Receiver (`f1static`)
+
+**Status: GREEN**
+
+`receiver/f1staticreceiver` (`f1static`) implements single-run original-time
+replay of Formula 1's post-session `/static/<session_path>/` archive. It is NOT
+captured SignalR transport replay (which remains **YELLOW** above) because
+static per-topic `.jsonStream` files expose no global SignalR callback ordinal.
+
+`f1static` defaults to `enabled: false` and MUST be explicitly configured with a
+safe relative `session_path` (slash-separated `[A-Za-z0-9._-]+` segments, no
+leading/trailing `/`, empty segment, `.`, or `..`) and `pace` (`instant` by
+default, or canonical `<N>x` for integer `1..1000`). Endpoints MUST use HTTPS
+or loopback HTTP without trailing `/`, user-info, query, or fragment; redirects
+are disabled. Optional `auth.token_file` attaches a Bearer token only to that
+validated endpoint and MUST never leak through errors or logs. Active `f1static`
+instances within one factory MUST reject both duplicate configured
+`session_path` values at creation and duplicate canonical `SessionIdentity`
+values after materialization before emitting replay signals.
+
+Before replay begins, `f1static` materializes and freezes the complete session
+input:
+
+1. `SessionInfo.json` and `DriverList.json` (stripping at most one leading UTF-8
+   BOM) form ordinal `0`, an atomic bootstrap `snapshot` batch establishing
+   canonical `SessionIdentity` (`E`), `K_route`, schedule, optional
+   `Meeting.Circuit.Key`, and the frozen 1-to-32-driver roster. End-of-session
+   stateful `.json` topic snapshots MUST NOT be loaded at `t=0` because they
+   contain final session state rather than initial state.
+2. Each available `<Topic>.jsonStream` and `<Topic>.z.jsonStream` file is parsed
+   completely before replay starts (HTTP 404 on an optional topic stream, or
+   HTTP 403 specifically on `TeamRadio.jsonStream`, means absent topic rather
+   than transport failure; each stream file is bounded to 64 MiB). After
+   optional single leading UTF-8 BOM removal, each CRLF- or LF-delimited record
+   starts with an exact 12-byte ASCII offset `HH:MM:SS.mmm` (`00..99` hours,
+   `00..59` minutes/seconds, `000..999` milliseconds) parsed via integer
+   arithmetic, followed immediately by UTF-8 JSON (`.jsonStream`) or a lossless
+   JSON string containing canonical standard base64 raw-DEFLATE JSON
+   (`.z.jsonStream`, 64 KiB encoded / 1 MiB inflated bounds). Because static
+   `TeamRadio.jsonStream` streams begin with an initial `Captures` array,
+   `f1static` accepts that initial stream array at index 0..N-1 in ascending
+   order (emitting coherent unseen captures and marking all present indexes
+   consumed) while quarantining any non-initial feed array.
+3. Stream zero UTC (`t0`) MUST be derived from an evidence-backed source UTC
+   anchor (`record.Utc - record.Offset`) using the first coherent anchor in
+   `Heartbeat.jsonStream`, or else the first coherent `StatusSeries` record
+   `Utc` in `SessionData.jsonStream`, and every derived publication and
+   observation timestamp MUST be a positive Unix-nanosecond instant (`>= 1970`
+   UTC) without `int64`/`uint64` overflow. If no such anchor exists, `f1static`
+   MUST fail closed before replay rather than guessing UTC from local
+   `StartDate`.
+4. Within each topic stream, line order is strictly preserved using monotonic
+   in-topic effective offset `max(prevEffectiveOffset, lineOffset)` while
+   retaining `t0 + lineOffset` as the historical feed-envelope publication UTC.
+   Across topics sharing an effective offset, a fixed deterministic topic
+   precedence orders identity, roster, and position context before dependent
+   timing and race-control updates.
+5. `f1static` replays the frozen batches at most once per Collector run,
+   emitting `f1.data.source=livetiming` and canonical `bargeboard.otlp.id/v1`
+   IDs across GREEN traces, metrics, and logs (excluding high-volume `CarData.z`
+   archive streams). For `f1static` Delta histograms (`f1.driver.lap_time` with the 74
+   canonical bounds and `f1.driver.sector_time` with the 78 canonical bounds),
+   the session window opens at the first authoritative indexed `Started` UTC and
+   clips any final partial window to `Ends` UTC, falling back to `Finalised` UTC
+   and then that stream's greatest accepted source watermark. Periodic
+   Collector-timer heartbeats and `ExtrapolatedClock` second ticks remain
+   omitted in static replay until equal-coordinate timer tie-breaking is
+   promoted; complete `ExtrapolatedClock` source anchors and source-driven Gauge
+   changes still emit, and Race/Sprint roots close at accepted `Ends` UTC (or at
+   archive completion using `Finalised` UTC and then greatest-owned fallback
+   when `Ends` is absent) rather than racing a virtual `Finalised` grace timer.
+   Playback `pace` changes host sleeps between ordinals
+   only; reducer outcomes, deterministic IDs, metric windows, and OTLP racing
+   timestamps are invariant across `instant` and `1x..1000x`, while racing log
+   `ObservedTimestamp` uses actual process wall time. Enabled `f1static`
+   instances report `StatusRecoverableError` across attached signal hosts while
+   materialization and replay are in progress, `StatusOK` once all frozen
+   batches have been accepted by the attached pipeline consumers, and
+   `StatusPermanentError` if materialization, replay, or immediate consumer
+   acceptance fails without caller cancellation.
 
 A deleted pre-completion replay prototype was not conforming: it grouped events
 by endpoint and globally sorted them by relative event time; a coarse tick could
@@ -2249,9 +2391,10 @@ merge resolution and tests.
 
 ### Series Cardinality
 
-The common OTLP session identity is exactly these attributes and types. Every
-racing metric datapoint, span, and standalone racing log MUST carry all five;
-domain contracts may add only their declared local attributes.
+The common OTLP session identity is these five attributes and types. Every
+Live Timing, Static Replay, and OpenF1 racing metric datapoint, span, and
+standalone racing log MUST carry all five; domain contracts may add only their
+declared local attributes.
 
 | Attribute | Type | Contract |
 |---|---|---|
@@ -2259,9 +2402,23 @@ domain contracts may add only their declared local attributes.
 | `f1.meeting.key` | Int64 | Positive Live Timing `Meeting.Key` from immutable identity `E`. |
 | `f1.session.type` | String | Canonical broad type from Session Coverage. |
 | `f1.session.name` | String | Canonical specific name from Session Coverage. |
-| `f1.data.source` | String | `livetiming` or `openf1`. |
+| `f1.data.source` | String | `livetiming`, `openf1`, or `jolpica`. |
 
-For metric datapoints these are exactly the common identity attributes. A metric
+Jolpica-F1 Ergast endpoints key rounds by `(season, round)` rather than Live
+Timing `Meeting.Key`:
+
+- Jolpica Race and Sprint classification signals carry `f1.season.year` (Int64),
+  `f1.round.number` (Int64), `f1.session.type` (`race` or `sprint`),
+  `f1.session.name` (`race` or `sprint`), `f1.data.source="jolpica"`, and
+  optional `f1.meeting.key` (Int64, present only when a positive `meeting_key`
+  is configured; never synthesized as zero).
+- Jolpica post-round WDC and WCC championship standings describe cumulative
+  after-round championship state rather than a single session: they carry
+  `f1.season.year` (Int64), `f1.round.number` (Int64), optional
+  `f1.meeting.key` (Int64 when positive), and `f1.data.source="jolpica"`,
+  omitting `f1.session.type` and `f1.session.name`.
+
+For metric datapoints these are the exact common identity attributes. A metric
 instrument adds only the conditional attributes declared below.
 
 Before an OpenF1 identity bundle freezes, source rows MUST validate against the
@@ -2279,7 +2436,9 @@ Instruments add only their declared conditional attributes:
 | Sector timing | `f1.sector.number` Int64 |
 | Speed-trap timing | `f1.speed_trap.location` String |
 | Lap-time histogram | `f1.tyre.compound` String |
-| Constructor standings | `f1.constructor.name` String |
+| Jolpica classification | `f1.driver.id` String, `f1.driver.number` Int64, optional `f1.driver.acronym` String |
+| Driver standings | `f1.driver.id` String, optional `f1.driver.acronym` String, optional `f1.driver.number` Int64 |
+| Constructor standings | `f1.constructor.id` String, `f1.constructor.name` String |
 
 Driver acronym and constructor name MUST be normalized and frozen before their
 first metric datapoint for the session. A driver acronym is the validated
@@ -4455,6 +4614,53 @@ Raw decimetres, sample timestamp, source status, coordinate-system labels, and
 Position entry keys are not exported. The attributes never enter resources,
 metric series, trace/span IDs, event identity, or links.
 
+#### Circuit Corner And Marshal-Sector Enrichment
+
+**Status: GREEN for opt-in event enrichment; RED for standalone signals**
+
+`internal/circuitmap` provides pure spatial lookup over MultiViewer circuit
+geometry (`https://api.multiviewer.app/api/v1/circuits/{circuitKey}/{year}`,
+HTTPS or loopback HTTP without trailing `/`, user-info, query, fragment,
+redirects, or credentials, 10-second timeout, 256 KiB response bound).
+
+A coherent circuit payload matches the requested positive canonical `circuitKey`
+and four-digit `year`, contains 1 through 64 `corners` with unique
+`(number, letter)` pairs (`number` in `1..64`, `letter` omitted, `""`, or a
+single uppercase ASCII letter in `A..Z`; `null` is invalid), and optional 0
+through 64 `marshalSectors` with unique `number` in `1..64`. Optional
+`circuitName` with malformed Unicode scalars becomes unavailable without
+invalidating coherent geometry. Each `trackPosition` supplies finite JSON
+numbers `x` and `y` in track-local decimetres (`1/10 m`,
+`|x/10|, |y/10| <= 100,000 m`), evaluated with exact rational distance comparison
+before converting to metres and without applying display `rotation` because both
+`Position.z` and MultiViewer `trackPosition` use unrotated F1 track-local
+coordinates.
+
+Lookup runs only when an event from the 12-kind allowlist above has already
+resolved valid finite `f1.position.x`, `f1.position.y`, `f1.position.z` (excluding
+the unavailable `(0,0,0)` triplet), and `f1.position.sample_age` in `[0, 1]`
+seconds. For distance comparisons, lookup interprets each finite `float64` x, y,
+and radius as the exact rational value of its shortest round-trip decimal.
+Within configurable
+inclusive Euclidean proximity thresholds (default `75.0 m` for corners and
+`250.0 m` for marshal sectors), deterministic tie-breaking selects the lowest
+`(number, letter)` corner and lowest `number` marshal sector:
+
+| Attribute | OTLP type | Unit | Rule |
+|---|---|---|---|
+| `f1.circuit.corner.number` | Int64 | — | Present when nearest corner is within threshold. |
+| `f1.circuit.corner.label` | String | — | Canonical decimal `number` plus optional `letter` (for example `"1"` or `"2A"`). |
+| `f1.circuit.corner.distance` | Double | m | Euclidean distance in metres to selected corner `trackPosition`. |
+| `f1.circuit.marshal_sector` | Int64 | — | Present when nearest marshal sector is within threshold. |
+
+Circuit enrichment emits zero standalone spans, metrics, or logs and never
+delays, suppresses, or alters event identity or status. Both `f1livetiming` and
+`f1static` expose opt-in `circuit_enrichment` (`enabled: false` by default,
+`endpoint: https://api.multiviewer.app/api/v1/circuits`); in `f1livetiming`, an
+unavailable or malformed circuit payload emits at most one bounded warning per
+session generation and leaves coordinate-bearing events unenriched rather than
+interrupting Live Timing input or export.
+
 #### Snapshot And Lifecycle
 
 A coherent snapshot atomically replaces all prior Position history, processes
@@ -4904,8 +5110,15 @@ accepted race-like outcome and published position. `TimingData.Retired`, any
 `Stopped` or status field, telemetry cessation, last completed lap, pit state,
 result duration, and result gap MUST NOT infer an outcome or retirement time.
 The handoff MUST be implemented beside the Live Timing session reducer because a
-standalone result projector cannot enrich an unexported root safely. No Go
-OpenF1 adapter or handoff is implemented yet.
+standalone result projector cannot enrich an unexported root safely.
+`receiver/openf1receiver` implements the pure cross-source identity, result
+snapshot, and root-outcome reducer, the bounded single-flight HTTP adapter, and
+an opt-in standalone companion `openf1` logs receiver (`enabled: false` by
+default) for post-session result observation logs (`f1.driver.result.observed`
+and `f1.driver.result.revised`, attaching `bargeboard.otlp.id/v1` correlation
+only for driver numbers explicitly listed in `root_drivers`). Standalone `openf1` is registered in `components.go` and never emits or mutates
+`driver.session` spans, metrics, or telemetry; embedding `openf1_results` inside
+`f1livetimingreceiver` remains a separate opt-in slice.
 
 ### Adapter And Fetch Boundary
 
@@ -5278,6 +5491,83 @@ backoff, deadline, budgets, cancellation, stale completion, reconnect, and
 shutdown; independent trace/log failure; and proof of no metric, result event,
 retirement time, points, duration, gap, raw response, or credential output.
 
+## Jolpica FIA Classifications And Championship Standings
+
+**Status: GREEN**
+
+`receiver/jolpicareceiver` (`jolpica`) ingests official FIA post-round Race and
+Sprint classifications and World Drivers'/Constructors' Championship standings
+from Jolpica-F1 (`https://api.jolpi.ca/ergast/f1`). It defaults to
+`enabled: false` so cross-source egress is explicit, registers only `metrics`
+and `logs` (never `traces`), and emits zero lap, stint, pit, weather, or car
+telemetry signals.
+
+### Endpoint, Pagination, And Polling Bounds
+
+Endpoints MUST be absolute HTTPS URLs (or loopback HTTP for tests) without
+trailing `/`, user-info, query, or fragment. Requests append literal paths
+`/{season}/{round}/results.json?limit=100`, optional
+`/{season}/{round}/sprint.json?limit=100` (`include_sprint: true`), and optional
+`/{season}/{round}/driverstandings.json?limit=100` plus
+`/{season}/{round}/constructorstandings.json?limit=100`
+(`include_standings: true`, default `true`), with `Accept: application/json`,
+`Accept-Encoding: identity`, `User-Agent: bargeboard/1.0`, no credentials, no
+redirects, a 10-second timeout, at least one second between requests, and a
+512 KiB response cap.
+
+Every response MUST satisfy lossless UTF-8/JSON validation, `MRData.series="f1"`,
+canonical `offset="0"`, and `total <= limit` so truncated multi-page payloads fail
+closed rather than emitting partial standings or classifications. Constructor
+standings are skipped automatically for `season < 1958` because the FIA
+Constructors' Championship began in 1958. Empty `Races` or `StandingsLists`
+arrays mean FIA data is not yet published (except an empty `sprint.json`
+alongside published `results.json`, which indicates a non-sprint round);
+unpublished rounds retry at `poll_interval` (`30s..30m`, default `5m`) up to
+`max_attempts` (`1..64`, default `16`), honoring HTTP 429 `Retry-After` (30s
+floor). Once all applicable requested tables for `(season, round)` are
+coherently accepted and emitted once, polling stops cleanly.
+
+### Signals And Attributes
+
+Each Race or Sprint classification row emits one `INFO` log with body
+`f1.classification.fia`, `Timestamp == ObservedTimestamp` at Collector
+observation UTC, `f1.time.quality="collector_observation"`, and `f1.data.source="jolpica"`.
+Attributes carry `f1.season.year`, `f1.round.number`, optional `f1.meeting.key`
+(when `meeting_key > 0`), `f1.session.type` and `f1.session.name` (`race` or
+`sprint`), `f1.driver.number`, optional `f1.driver.acronym`, `f1.driver.id`,
+`f1.constructor.name`, `f1.classification.position_text`, optional numeric
+`f1.classification.position` (omitted when absent or `null`), sanitized
+`f1.classification.status` (`<= 128` bytes, credential/URL markers rejected),
+normalized `f1.classification.status_category` (`finished`, `lapped`,
+`mechanical`, `collision_or_incident`, `disqualified`, `did_not_start`,
+`withdrawn`, `not_classified`, or `other`), optional `f1.classification.grid`
+(non-negative integer when present and non-`null`; `0` is preserved without
+inferring a pit-lane start because withdrawn entries also report `0`), optional
+`f1.classification.laps_completed` (non-negative integer when present and
+non-`null`), and `f1.classification.points` (finite non-negative decimal,
+including fractional awards such as `7.5` or `0.14`). Shared drives in historic
+seasons are distinguished by `(f1.driver.id, f1.driver.number)`, and tied
+championship standings may share numeric `position`. When `correlate_traces: true`
+(which requires `meeting_key > 0`), each log carries deterministic
+`bargeboard.otlp.id/v1` `TraceID` and `DriverSessionRootSpanID`.
+
+Metrics are non-monotonic Gauges (`StartTimestamp` unset, `Timestamp` at
+Collector observation UTC):
+
+- `f1.classification.points` (`Double Gauge`, `{point}`) and
+  `f1.classification.grid_position` (`Int64 Gauge`, `{position}`, emitted only
+  when `grid > 0` so `0` or `null` never enters a position series).
+- `f1.championship.driver.points` (`Double Gauge`, `{point}`),
+  `f1.championship.driver.position` (`Int64 Gauge`, `{position}`, numeric
+  positions `> 0`), and `f1.championship.driver.wins` (`Int64 Gauge`, `{win}`).
+- `f1.championship.constructor.points` (`Double Gauge`, `{point}`),
+  `f1.championship.constructor.position` (`Int64 Gauge`, `{position}`, numeric
+  positions `> 0`), and `f1.championship.constructor.wins` (`Int64 Gauge`,
+  `{win}`), keyed by `f1.constructor.id` and `f1.constructor.name`.
+
+Metrics and logs project and deliver independently; failure in one downstream
+consumer MUST NOT suppress the other.
+
 ## Pending Metric Candidates
 
 **Status: YELLOW**
@@ -5288,8 +5578,8 @@ implementation:
 - Tyre-change event settlement.
 - Dedicated pit-topic fallbacks and physical stationary spans.
 - Typed DRS, penalty, and investigation events.
-- Retirement and individual finish-crossing events; result and points metrics;
-  grids; historical reconciliation; and championship facts.
+- Retirement and individual finish-crossing events; live-timing historical
+  reconciliation; and OpenF1 grid/championship parity.
 - Explainable pace, consistency, degradation, and pit-loss analysis.
 - Receiver source lag, payload size, and validation-failure metrics. The bounded
   input-operation metrics accepted under Live Timing Operational Visibility are
@@ -5796,7 +6086,12 @@ Current implementation seams:
 | Pure SessionInfo normalized-batch adapter | `receiver/f1livetimingreceiver/session_info_batch.go` |
 | Transactional Live Timing reducer | `receiver/f1livetimingreceiver/state.go` |
 | Shared receiver lifecycle and consumer seam | `receiver/f1livetimingreceiver/receiver.go` |
-| Live Timing OTLP projection | `receiver/f1livetimingreceiver/projection.go` |
+| Live Timing deterministic IDs and OTLP projection | `receiver/f1livetimingreceiver/ids.go`, `receiver/f1livetimingreceiver/projection.go` |
+| Shared F1 identity, deterministic IDs, lossless JSON, and HTTP safety | `internal/f1id` |
+| Pure MultiViewer circuit corner and marshal-sector lookup | `internal/circuitmap` |
+| Historical static archive replay receiver | `receiver/f1staticreceiver` |
+| OpenF1 result-observation adapter, reducer, and companion receiver | `receiver/openf1receiver` |
+| Jolpica FIA classifications and championship standings receiver | `receiver/jolpicareceiver` |
 
 ## Security
 
@@ -5901,10 +6196,13 @@ Before committing a behavior slice:
 |---|---|---|
 | Go-only greenfield implementation | GREEN | Removed pre-completion interfaces and data formats carry no compatibility or migration contract. |
 | Hybrid signal model led by traces and metrics | GREEN | Logs remain curated and raw capture is opt-in. |
-| Per-domain source authority | GREEN | Live Timing owns live chronology; OpenF1 owns explicit observed post-session domains. |
+| Per-domain source authority | GREEN | Live Timing owns live chronology; `f1static` replays finished archives offline; OpenF1 owns observed Race/Sprint results; Jolpica owns official FIA classifications and standings; MultiViewer geometry enriches event coordinates only. |
 | Logical Live Timing session identity | GREEN | A same-session source-key correction changes routing without replacing the generation or emitted identity. |
 | Source `SessionInfo.Key` as OTLP identity | RED | The corrected-in-place value remains internal routing metadata and cannot split telemetry identity. |
-| OpenF1 Race/Sprint result observations | GREEN | Current outcomes can settle unexported root status but never claim legal finality or own chronology. |
+| OpenF1 Race/Sprint result observations | GREEN | Current outcomes can settle unexported root status and emit observation logs without claiming legal finality or owning chronology. |
+| Jolpica FIA classifications and standings | GREEN | Official post-round status causes, starting grids, points, and WDC/WCC standings emit `jolpica` logs and Gauges without duplicating spans or telemetry. |
+| MultiViewer circuit coordinate lookup | GREEN | Track-local `(X, Y)` coordinates map to corner and marshal-sector attributes on eligible events with zero standalone signals. |
+| Single-run static archive replay (`f1static`) | GREEN | Finished `/static/` sessions replay once per run at original historical timestamps without `replay_run_id` series labels. |
 | One driver-session trace | GREEN | Stints, laps, and sectors form the waterfall hierarchy. |
 | Pit activity as lap events | GREEN | No separate pit trace by default. |
 | DNF, DNS, and DSQ as span errors | GREEN | Failed participation is visible in trace error navigation. |

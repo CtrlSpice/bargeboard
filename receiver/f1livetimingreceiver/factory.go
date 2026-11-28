@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/CtrlSpice/bargeboard/internal/circuitmap"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/receiver"
@@ -26,6 +27,7 @@ func createDefaultConfig() component.Config {
 	return &Config{
 		Endpoint:          defaultEndpoint,
 		NegotiateEndpoint: defaultNegotiateEndpoint,
+		CircuitEnrichment: CircuitEnrichmentConfig{Endpoint: circuitmap.DefaultEndpoint},
 	}
 }
 

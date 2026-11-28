@@ -4,6 +4,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/CtrlSpice/bargeboard/internal/circuitmap"
+	"github.com/CtrlSpice/bargeboard/internal/f1id"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
@@ -11,24 +13,15 @@ import (
 )
 
 func resource(r pcommon.Resource, s pcommon.InstrumentationScope, version string) {
-	r.Attributes().PutStr("service.namespace", "github.com/CtrlSpice")
-	r.Attributes().PutStr("service.name", "bargeboard")
-	if version != "" {
-		r.Attributes().PutStr("service.version", version)
-	}
-	s.SetName("github.com/CtrlSpice/bargeboard/f1")
-	s.SetVersion("1.0.0")
+	f1id.InitResource(r, version)
+	f1id.InitScope(s)
 }
 
 func sessionAttributes(a pcommon.Map, id sessionInfoIdentity, dataSource string) {
-	a.PutInt("f1.season.year", id.season)
-	a.PutInt("f1.meeting.key", id.meetingKey)
-	a.PutStr("f1.session.type", string(id.sessionType))
-	a.PutStr("f1.session.name", string(id.sessionName))
 	if dataSource == "" {
 		dataSource = "livetiming"
 	}
-	a.PutStr("f1.data.source", dataSource)
+	f1id.PutCommonSessionAttributes(a, id.shared(), dataSource)
 }
 
 func attributes(a pcommon.Map, attrs []keyValue) {
@@ -67,6 +60,9 @@ func spanPath(s spanEffect, seen map[pcommon.SpanID]spanEntity) (id, parent pcom
 	e, n := s.identity, s.driverNumber
 	entity := spanEntity{session: e, driver: n}
 	add := func(next pcommon.SpanID, kind spanKindType, labelValue string) bool {
+		if next.IsEmpty() {
+			return false
+		}
 		entity.kind = kind
 		if previous, exists := seen[next]; exists && previous != entity {
 			return false
@@ -80,7 +76,7 @@ func spanPath(s spanEffect, seen map[pcommon.SpanID]spanEntity) (id, parent pcom
 		return
 	}
 	entity.phase = phaseOrNone(s.phase)
-	if s.phase != "" {
+	if s.phase != "" || s.kind == spanQualifyingPhase {
 		ok = add(deterministicPhaseSpanID(e, n, s.phase), spanQualifyingPhase, strings.ToUpper(s.phase))
 	}
 	if !ok || s.kind == spanQualifyingPhase {
@@ -102,6 +98,10 @@ func spanPath(s spanEffect, seen map[pcommon.SpanID]spanEntity) (id, parent pcom
 }
 
 func projectTraces(buildVersion string, effects liveTimingEffects) ptrace.Traces {
+	return projectTracesWithCircuit(buildVersion, effects, nil)
+}
+
+func projectTracesWithCircuit(buildVersion string, effects liveTimingEffects, circuitFor func(sessionInfoIdentity) circuitmap.Map) ptrace.Traces {
 	out := ptrace.NewTraces()
 	if len(effects.spans) == 0 {
 		return out
@@ -143,12 +143,17 @@ func projectTraces(buildVersion string, effects liveTimingEffects) ptrace.Traces
 			a.PutInt("f1.sector.number", s.sectorNumber)
 		}
 		attributes(a, s.attrs)
+		var circuit circuitmap.Map
+		if circuitFor != nil {
+			circuit = circuitFor(s.identity)
+		}
 		for _, ev := range s.events {
 			p := p.Events().AppendEmpty()
 			p.SetName(ev.name)
 			p.SetTimestamp(timestamp(ev.timestamp))
 			p.Attributes().PutStr("f1.time.quality", ev.timeQuality)
 			attributes(p.Attributes(), ev.attrs)
+			circuit.EnrichEvent(ev.name, p.Attributes(), circuitmap.DefaultLookupOptions())
 		}
 	}
 	return out

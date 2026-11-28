@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -466,5 +469,143 @@ func TestCancellationDeliversOwnedRoot(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatal("shutdown trace deliveries", calls)
+	}
+}
+
+func TestProjectionRuntimeCircuitEnrichment(t *testing.T) {
+	sessionWithCircuit := strings.Replace(identityGateDescriptorB, `"Meeting":{"Key":1200,`, `"Meeting":{"Key":1200,"Circuit":{"Key":77,"ShortName":"Synthetic Ring"},`, 1)
+	fullWire := strings.Replace(projectionSession(t), identityGateDescriptorB, sessionWithCircuit, 1)
+	snapshotWire, feedWire, ok := strings.Cut(fullWire, "\x1e")
+	if !ok {
+		t.Fatal("missing snapshot separator")
+	}
+
+	for _, mode := range []string{"enriched", "unavailable fallback", "stalled nonblocking", "duplicate circuit key"} {
+		t.Run(mode, func(t *testing.T) {
+			var circuitHits atomic.Int32
+			handlerEntered := make(chan struct{})
+			var enteredOnce sync.Once
+			releaseStall := make(chan struct{})
+			defer func() {
+				select {
+				case <-releaseStall:
+				default:
+					close(releaseStall)
+				}
+			}()
+			circuitServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				circuitHits.Add(1)
+				enteredOnce.Do(func() { close(handlerEntered) })
+				if req.URL.Path != "/77/2022" || req.Header.Get("Authorization") != "" {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				switch mode {
+				case "unavailable fallback":
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				case "stalled nonblocking":
+					<-releaseStall
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"circuitKey":77,"year":2022,"corners":[{"number":4,"letter":"A","trackPosition":{"x":10,"y":20}}],"marshalSectors":[{"number":8,"trackPosition":{"x":10,"y":20}}]}`))
+			}))
+			t.Cleanup(circuitServer.Close)
+
+			snap := snapshotWire
+			if mode == "duplicate circuit key" {
+				snap = strings.Replace(snapshotWire, `"Key":77`, `"Key":77,"Key":78`, 1)
+			}
+			settled := make(chan struct{})
+			server := newConnectionTestServer(t, func(socket *websocket.Conn) {
+				_, _, _ = socket.Read(t.Context())
+				_ = socket.Write(t.Context(), websocket.MessageText, []byte("{}\x1e"))
+				_, _, _ = socket.Read(t.Context())
+				_ = socket.Write(t.Context(), websocket.MessageText, []byte(snap+"\x1e"))
+				switch mode {
+				case "enriched", "unavailable fallback":
+					select {
+					case <-settled:
+					case <-t.Context().Done():
+						return
+					}
+				case "stalled nonblocking":
+					select {
+					case <-handlerEntered:
+					case <-t.Context().Done():
+						return
+					}
+				}
+				_ = socket.Write(t.Context(), websocket.MessageText, []byte(feedWire))
+			})
+			f := NewFactory()
+			cfg := connectionTestConfig(t, server.URL)
+			cfg.CircuitEnrichment = CircuitEnrichmentConfig{Enabled: true, Endpoint: circuitServer.URL}
+			core, recorded := observer.New(zap.WarnLevel)
+			settings := receivertest.NewNopSettings(Type)
+			settings.Logger = zap.New(core)
+			ts := &consumertest.TracesSink{}
+			c, err := f.CreateTraces(t.Context(), settings, cfg, ts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var settleOnce sync.Once
+			c.(*sharedReceiver).receiver.onCircuitSettled = func() {
+				settleOnce.Do(func() { close(settled) })
+			}
+			if err := c.Start(t.Context(), nil); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = c.Shutdown(context.Background()) })
+			select {
+			case <-c.(*sharedReceiver).receiver.done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("source did not close")
+			}
+			wantHits := int32(1)
+			if mode == "duplicate circuit key" {
+				wantHits = 0
+			}
+			if circuitHits.Load() != wantHits {
+				t.Fatalf("circuit requests = %d, want %d", circuitHits.Load(), wantHits)
+			}
+			foundBlue := false
+			wantEnriched := mode == "enriched"
+			for _, batch := range ts.AllTraces() {
+				raw, err := (&ptrace.JSONMarshaler{}).MarshalTraces(batch)
+				if err != nil || strings.Contains(string(raw), circuitServer.URL) {
+					t.Fatal("marshal error or URL leak", err)
+				}
+				for _, s := range batch.ResourceSpans().At(0).ScopeSpans().At(0).Spans().All() {
+					for _, ev := range s.Events().All() {
+						if ev.Name() != "f1.blue_flag.shown" {
+							continue
+						}
+						foundBlue = true
+						corner, hasCorner := ev.Attributes().Get("f1.circuit.corner.label")
+						sector, hasSector := ev.Attributes().Get("f1.circuit.marshal_sector")
+						if wantEnriched && (!hasCorner || corner.Str() != "4A" || !hasSector || sector.Int() != 8) {
+							t.Fatalf("missing enrichment: %v", ev.Attributes().AsRaw())
+						}
+						if !wantEnriched && (hasCorner || hasSector) {
+							t.Fatalf("unexpected enrichment: %v", ev.Attributes().AsRaw())
+						}
+					}
+				}
+			}
+			if !foundBlue {
+				t.Fatal("missing f1.blue_flag.shown event")
+			}
+			warns := recorded.FilterMessage("F1 circuit geometry unavailable; event enrichment skipped").All()
+			wantWarns := 0
+			if mode == "unavailable fallback" {
+				wantWarns = 1
+			}
+			if len(warns) != wantWarns {
+				t.Fatalf("circuit warnings = %d, want %d", len(warns), wantWarns)
+			}
+		})
 	}
 }
