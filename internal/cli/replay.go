@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/CtrlSpice/bargeboard/internal/archiveauth"
 	"github.com/CtrlSpice/bargeboard/internal/f1index"
 	static "github.com/CtrlSpice/bargeboard/receiver/f1staticreceiver"
 	"github.com/spf13/cobra"
@@ -15,7 +16,7 @@ import (
 )
 
 func replay(settings otelcol.CollectorSettings) *cobra.Command {
-	var db, listen, pace, endpoint string
+	var db, listen, pace, endpoint, tokenFile string
 	var once, noCircuit, anyType bool
 	cmd := &cobra.Command{Use: "replay [selector]", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		selector := "latest"
@@ -43,7 +44,11 @@ func replay(settings otelcol.CollectorSettings) *cobra.Command {
 		if err := c.Validate(); err != nil {
 			return err
 		}
-		match, err := f1index.Resolve(cmd.Context(), endpoint, q, time.Now())
+		file, token, err := archiveauth.ResolveFile(tokenFile, cmd.Flags().Changed("token-file"))
+		if err != nil {
+			return err
+		}
+		match, err := f1index.Resolve(cmd.Context(), endpoint, q, time.Now(), token)
 		if err != nil {
 			return err
 		}
@@ -56,11 +61,15 @@ func replay(settings otelcol.CollectorSettings) *cobra.Command {
 		}
 		type config = map[string]any
 		pipe := config{"receivers": []string{"f1static"}, "processors": []string{"batch"}, "exporters": []string{"desktop"}}
+		receiver := config{
+			"enabled": true, "endpoint": endpoint, "session_path": c.SessionPath, "pace": pace,
+			"circuit_enrichment": config{"enabled": !noCircuit},
+		}
+		if file != "" {
+			receiver["auth"] = config{"token_file": file}
+		}
 		raw, err := json.Marshal(config{
-			"receivers": config{"f1static": config{
-				"enabled": true, "endpoint": endpoint, "session_path": c.SessionPath, "pace": pace,
-				"circuit_enrichment": config{"enabled": !noCircuit},
-			}},
+			"receivers":  config{"f1static": receiver},
 			"extensions": config{"duckdb": config{"db": db, "endpoint": listen, "db_max_size": "0"}},
 			"exporters":  config{"desktop": config{}},
 			"processors": config{"batch": config{}},
@@ -116,6 +125,7 @@ func replay(settings otelcol.CollectorSettings) *cobra.Command {
 		}
 	}}
 	f := cmd.Flags()
+	f.StringVar(&tokenFile, "token-file", "", "F1 TV archive token file (default ~/.config/bargeboard/f1tv-token if present)")
 	f.StringVar(&db, "db", "./bargeboard.duckdb", "DuckDB file")
 	f.StringVar(&listen, "listen", "127.0.0.1:8000", "Viewer address")
 	f.StringVar(&pace, "pace", "instant", "Replay speed: instant or 1x to 1000x")

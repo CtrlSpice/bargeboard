@@ -10,6 +10,12 @@ List meetings and sessions for the current UTC season with
 specific season. Select a completed session with `year/meeting/session`.
 Replace spaces in names with hyphens, as in `2025/las-vegas/race`.
 
+`sessions` and `replay` use `~/.config/bargeboard/f1tv-token` for the season
+index and archive files. Use `--token-file PATH` to select a different file.
+If the default file is missing, both commands try the archive without a token.
+On HTTP 401 or 403, refresh the single-line F1 TV subscription token in the
+selected file.
+
 Run `bargeboard replay 2025/last/race --once --db ./bargeboard.duckdb` to
 save the last completed Race of 2025.
 Wait for a successful exit before opening the database. The JSON summary names

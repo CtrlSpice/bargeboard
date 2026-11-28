@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/CtrlSpice/bargeboard/internal/archiveauth"
 	"github.com/CtrlSpice/bargeboard/internal/circuitmap"
 	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 	"github.com/CtrlSpice/bargeboard/internal/f1id"
@@ -151,9 +152,17 @@ func openPlan(ctx context.Context, c Config) (*streamPlan, error) {
 	if !c.Enabled {
 		return nil, errors.New("static replay disabled")
 	}
+	var token string
+	if c.Auth.TokenFile != "" {
+		var err error
+		token, err = archiveauth.Read(c.Auth.TokenFile)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if c.SessionPath == "" {
 		q, _ := f1index.ParseSelector(c.Session)
-		match, err := f1index.Resolve(ctx, c.Endpoint, q, time.Now())
+		match, err := f1index.Resolve(ctx, c.Endpoint, q, time.Now(), token)
 		if err != nil {
 			return nil, err
 		}
@@ -163,17 +172,6 @@ func openPlan(ctx context.Context, c Config) (*streamPlan, error) {
 		}
 		if err := c.Validate(); err != nil {
 			return nil, err
-		}
-	}
-	var token string
-	if c.Auth.TokenFile != "" {
-		b, err := os.ReadFile(c.Auth.TokenFile)
-		if err != nil {
-			return nil, errors.New("cannot read archive token")
-		}
-		token = strings.TrimSpace(string(b))
-		if token == "" || strings.ContainsAny(token, "\r\n") {
-			return nil, errors.New("invalid archive token")
 		}
 	}
 	client := f1id.NewRestrictedHTTPClient(60 * time.Second)
@@ -194,7 +192,7 @@ func openPlan(ctx context.Context, c Config) (*streamPlan, error) {
 			return false, nil
 		}
 		if resp.StatusCode != http.StatusOK {
-			return false, fmt.Errorf("archive %s: HTTP %d", file, resp.StatusCode)
+			return false, archiveauth.StatusError("archive "+file, resp.StatusCode)
 		}
 		var limit int64 = 4 << 20
 		if optional {
