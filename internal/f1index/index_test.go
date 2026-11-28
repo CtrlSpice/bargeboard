@@ -39,7 +39,7 @@ func TestResolveOffsetAndFallback(t *testing.T) {
 		if test.any {
 			q.Type = ""
 		}
-		got, err := Resolve(t.Context(), server.URL, q, now)
+		got, err := Resolve(t.Context(), server.URL, q, now, "")
 		if err != nil || got.Session.Path != test.path || got.Meeting != "Frozen Lake" || !slices.Equal(paths, test.years) {
 			t.Fatal(got, paths, err)
 		}
@@ -51,9 +51,31 @@ func TestIndexErrorsHideSource(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/"+secret, http.StatusFound) }))
 	defer srv.Close()
 	for _, endpoint := range []string{srv.URL, srv.URL + "?" + secret} {
-		_, err := Fetch(t.Context(), endpoint, 2025)
+		_, err := Fetch(t.Context(), endpoint, 2025, "")
 		if err == nil || strings.Contains(err.Error(), secret) {
 			t.Fatal("unsanitized index error")
+		}
+	}
+}
+
+func TestFetchAuthorization(t *testing.T) {
+	for _, token := range []string{"", "invented-index"} {
+		for _, status := range []int{401, 403} {
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var want []string
+				if token != "" {
+					want = []string{"Bearer " + token}
+				}
+				if !slices.Equal(r.Header.Values("Authorization"), want) {
+					t.Error("incorrect index authorization")
+				}
+				http.Error(w, "invented-index", status)
+			}))
+			_, err := Fetch(t.Context(), s.URL, 2025, token)
+			s.Close()
+			if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("season index: HTTP %d", status)) || !strings.Contains(err.Error(), "--token-file") || strings.Contains(err.Error(), "invented-index") {
+				t.Fatal("expected a sanitized index authorization hint")
+			}
 		}
 	}
 }

@@ -2055,16 +2055,28 @@ static per-topic `.jsonStream` files expose no global SignalR callback ordinal.
 safe relative `session_path` (slash-separated `[A-Za-z0-9._-]+` segments, no
 leading/trailing `/`, empty segment, `.`, or `..`). An explicit path takes
 precedence over `session`. Without a path, the receiver resolves `session`
-from the public `/{year}/Index.json`. `latest` (the default) selects the
+from `/{year}/Index.json`. `latest` (the default) selects the
 most recently ended Race this UTC year, then tries the previous year.
 `year/last/type` and `year/meeting/session` compare the local end date minus
 the GMT offset to current UTC. Matching ignores case and treats hyphens,
 underscores and runs of whitespace as a single space.
-The default `pace` is
-`instant`; canonical `<N>x` is also accepted for integers `1..1000`. Endpoints
-MUST use HTTPS or loopback HTTP without trailing `/`, user-info, query, or fragment; redirects
-are disabled. Optional `auth.token_file` attaches a Bearer token only to that
-validated endpoint and MUST never leak through errors or logs. Active `f1static`
+The default `pace` is `instant`. Canonical `<N>x` is also accepted for integers
+`1..1000`. Endpoints MUST use HTTPS or loopback HTTP without trailing `/`,
+user-info, query, or fragment. Redirects are disabled.
+
+When `auth.token_file` is set, `f1static` reads it before session lookup and
+sends the Bearer token only to the validated archive endpoint for both the
+season index and session files. The file must contain one nonempty line after
+trimming outer whitespace. The token MUST never appear in errors or telemetry.
+An HTTP 401 or 403 error names the status and tells the user how to refresh
+the token. The optional TeamRadio stream keeps its 403 exception below.
+
+`sessions` and `replay` require a valid file when `--token-file` is supplied.
+Otherwise they read `~/.config/bargeboard/f1tv-token` if present and continue
+without a token if the default file is absent. Replay passes the resolved file
+path to `f1static.auth.token_file` in the Collector configuration.
+
+Active `f1static`
 instances within one factory MUST reject both duplicate configured
 `session_path` values at creation and duplicate canonical `SessionIdentity`
 values after materialization before emitting replay signals.

@@ -8,11 +8,45 @@ import (
 	"net/http/httptest"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/CtrlSpice/bargeboard/internal/f1id"
 )
+
+func TestSelectorUsesTokenForIndexAndArchive(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer invented-static" {
+			t.Error("missing archive authorization")
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/2025/Index.json":
+			fmt.Fprint(w, `{"Meetings":[{"Sessions":[{"Type":"Race","EndDate":"2025-01-01T12:00:00","GmtOffset":"00:00:00","Path":"selected/"}]}]}`)
+		case "/selected/SessionInfo.json":
+			fmt.Fprint(w, info)
+		case "/selected/DriverList.json":
+			fmt.Fprint(w, drivers)
+		case "/selected/Heartbeat.jsonStream":
+			fmt.Fprint(w, `00:00:00.000{"Utc":"2025-01-01T00:00:00Z"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer s.Close()
+	c := DefaultConfig()
+	c.Enabled, c.CircuitEnrichment.Enabled = true, false
+	c.Endpoint, c.Session = s.URL, "2025/last/race"
+	c.Auth.TokenFile = filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(c.Auth.TokenFile, []byte("invented-static\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Materialize(t.Context(), c); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestArchiveDownloadPolicy(t *testing.T) {
 	for _, tc := range []struct {
@@ -22,6 +56,7 @@ func TestArchiveDownloadPolicy(t *testing.T) {
 	}{
 		{"TeamRadio.jsonStream", 403, 0}, {"TimingData.jsonStream", 403, 0},
 		{"DriverList.json", 403, 0}, {"SessionInfo.json", 403, 0},
+		{"SessionInfo.json", 401, 0},
 		{"SessionInfo.json", 200, 4<<20 + 1}, {"Position.z.jsonStream", 200, 64<<20 + 1},
 	} {
 		t.Run(fmt.Sprintf("%s/%d", tc.file, tc.status), func(t *testing.T) {
@@ -65,7 +100,7 @@ func TestArchiveDownloadPolicy(t *testing.T) {
 					t.Fatal(err, p.batches)
 				}
 			default:
-				if err == nil || !strings.Contains(err.Error(), "HTTP 403") {
+				if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("HTTP %d", tc.status)) || !strings.Contains(err.Error(), "auth.token_file") {
 					t.Fatal(err)
 				}
 			}

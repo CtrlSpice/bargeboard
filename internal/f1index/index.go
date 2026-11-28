@@ -1,4 +1,4 @@
-// Package f1index discovers archived sessions in the public season index.
+// Package f1index discovers archived sessions in the season index.
 package f1index
 
 import (
@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/CtrlSpice/bargeboard/internal/archiveauth"
 	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 	"github.com/CtrlSpice/bargeboard/internal/f1id"
 )
@@ -45,13 +46,16 @@ func Parse(raw []byte) ([]Meeting, error) {
 
 var ErrAbsent = errors.New("season index unavailable")
 
-func Fetch(ctx context.Context, endpoint string, year int) ([]Meeting, error) {
+func Fetch(ctx context.Context, endpoint string, year int, token string) ([]Meeting, error) {
 	if err := f1id.ValidateHTTPSOrLoopbackEndpoint("endpoint", endpoint); err != nil {
 		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/%d/Index.json", endpoint, year), nil)
 	if err != nil {
 		return nil, errors.New("invalid index request")
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := f1id.NewRestrictedHTTPClient(30 * time.Second).Do(req)
 	if err != nil {
@@ -62,7 +66,7 @@ func Fetch(ctx context.Context, endpoint string, year int) ([]Meeting, error) {
 		return nil, ErrAbsent
 	}
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("season index: HTTP %d", resp.StatusCode)
+		return nil, archiveauth.StatusError("season index", resp.StatusCode)
 	}
 	const limit = 4 << 20
 	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
@@ -132,14 +136,14 @@ func selectSession(ms []Meeting, q Selector, now time.Time) (Match, bool) {
 	return result, !latest.IsZero()
 }
 
-func Resolve(ctx context.Context, endpoint string, q Selector, now time.Time) (Match, error) {
+func Resolve(ctx context.Context, endpoint string, q Selector, now time.Time, token string) (Match, error) {
 	years := []int{q.Year}
 	if q.Year == 0 {
 		year := now.UTC().Year()
 		years = []int{year, year - 1}
 	}
 	for _, y := range years {
-		ms, err := Fetch(ctx, endpoint, y)
+		ms, err := Fetch(ctx, endpoint, y, token)
 		if errors.Is(err, ErrAbsent) && q.Year == 0 {
 			continue
 		}

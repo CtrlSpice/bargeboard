@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -17,6 +18,33 @@ import (
 )
 
 func TestReplayOncePersistsLinkedHistograms(t *testing.T) {
+	for _, mode := range []string{"absent", "default", "explicit"} {
+		t.Run(mode, func(t *testing.T) { replayOnce(t, mode) })
+	}
+}
+
+func replayOnce(t *testing.T, mode string) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var flags []string
+	var header string
+	if mode != "absent" {
+		file := filepath.Join(home, ".config", "bargeboard", "f1tv-token")
+		if err := os.MkdirAll(filepath.Dir(file), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if mode == "explicit" {
+			if err := os.WriteFile(file, []byte("different-default"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			file = filepath.Join(home, "explicit")
+			flags = []string{"--token-file", file}
+		}
+		if err := os.WriteFile(file, []byte("invented-replay\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		header = "Bearer invented-replay"
+	}
 	files := map[string]string{
 		"/2025/Index.json":                           `{"Meetings":[{"Name":"Invented Grand Prix","Sessions":[{"Type":"Race","Name":"Race","EndDate":"2025-03-01T10:30:00","GmtOffset":"00:00:00","Path":"2025/invented/race/"}]}]}`,
 		"/2025/invented/race/SessionInfo.json":       `{"Key":23,"Meeting":{"Key":15,"Name":"Invented Grand Prix"},"Type":"Race","Name":"Race","StartDate":"2025-03-01T10:00:00","EndDate":"2025-03-01T10:30:00","GmtOffset":"00:00:00"}`,
@@ -26,6 +54,10 @@ func TestReplayOncePersistsLinkedHistograms(t *testing.T) {
 		"/2025/invented/race/CarData.z.jsonStream":   deflateBase64JSONLine(t, "00:00:03.000", `{"Entries":[{"Utc":"2025-03-01T10:00:03Z","Cars":{"13":{"Channels":{"0":10000,"2":200}}}}]}`),
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != header || (header == "" && r.Header.Values("Authorization") != nil) {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 		if data, ok := files[r.URL.Path]; ok {
 			io.WriteString(w, data)
 			return
@@ -37,7 +69,7 @@ func TestReplayOncePersistsLinkedHistograms(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	var out bytes.Buffer
-	err := cli.Run(ctx, otelcol.CollectorSettings{Factories: components, SkipSettingGRPCLogger: true}, []string{"replay", "2025/last/race", "--endpoint", srv.URL, "--once", "--no-circuit", "--db", path, "--listen", "127.0.0.1:0"}, &out)
+	err := cli.Run(ctx, otelcol.CollectorSettings{Factories: components, SkipSettingGRPCLogger: true}, append([]string{"replay", "2025/last/race", "--endpoint", srv.URL, "--once", "--no-circuit", "--db", path, "--listen", "127.0.0.1:0"}, flags...), &out)
 	if err != nil {
 		t.Fatal(err)
 	}

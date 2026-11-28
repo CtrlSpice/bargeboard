@@ -14,6 +14,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/CtrlSpice/bargeboard/internal/archiveauth"
 	"github.com/CtrlSpice/bargeboard/internal/f1index"
 	static "github.com/CtrlSpice/bargeboard/receiver/f1staticreceiver"
 	skill "github.com/CtrlSpice/bargeboard/skills/bargeboard"
@@ -44,7 +45,7 @@ func Run(ctx context.Context, settings otelcol.CollectorSettings, args []string,
 }
 
 func sessions() *cobra.Command {
-	var endpoint string
+	var endpoint, tokenFile string
 	var asJSON bool
 	cmd := &cobra.Command{Use: "sessions [year|latest]", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		now := time.Now().UTC()
@@ -56,9 +57,13 @@ func sessions() *cobra.Command {
 			}
 			year = n
 		}
-		ms, err := f1index.Fetch(cmd.Context(), endpoint, year)
+		_, token, err := archiveauth.ResolveFile(tokenFile, cmd.Flags().Changed("token-file"))
+		if err != nil {
+			return err
+		}
+		ms, err := f1index.Fetch(cmd.Context(), endpoint, year, token)
 		if len(args) > 0 && strings.EqualFold(args[0], "latest") && (errors.Is(err, f1index.ErrAbsent) || err == nil && len(ms) == 0) {
-			ms, err = f1index.Fetch(cmd.Context(), endpoint, year-1)
+			ms, err = f1index.Fetch(cmd.Context(), endpoint, year-1, token)
 		}
 		if err != nil {
 			return err
@@ -75,6 +80,7 @@ func sessions() *cobra.Command {
 		}
 		return w.Flush()
 	}}
+	cmd.Flags().StringVar(&tokenFile, "token-file", "", "F1 TV archive token file (default ~/.config/bargeboard/f1tv-token if present)")
 	cmd.Flags().StringVar(&endpoint, "endpoint", static.DefaultEndpoint, "Archive endpoint")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Print meetings as JSON")
 	return cmd

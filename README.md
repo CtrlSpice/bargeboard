@@ -257,6 +257,14 @@ establish provider permission for third-party clients or device-limit treatment.
 
 ## Historical replay and companion receivers
 
+`bargeboard sessions` and `bargeboard replay` read your F1 TV subscription token
+from `~/.config/bargeboard/f1tv-token`. Store just the token on one line.
+Use `--token-file PATH` to choose another file. Both commands send the token
+to the configured archive endpoint, including requests for `Index.json`.
+If the default file is missing, the commands can use a mirror without
+authentication. An explicit file must exist and be valid.
+For a Collector configuration, set `f1static.auth.token_file` to the file path.
+
 Run `bargeboard sessions 2025` to list meetings and sessions, or add `--json`
 for the season index as JSON. Omit the year to list the current UTC season.
 Replay accepts `year/meeting/session` and only selects completed sessions.
