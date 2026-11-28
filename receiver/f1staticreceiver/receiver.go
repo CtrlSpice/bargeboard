@@ -3,15 +3,16 @@ package f1staticreceiver
 import (
 	"context"
 	"errors"
-	"maps"
-	"slices"
 	"sync"
 	"time"
 
+	"github.com/CtrlSpice/bargeboard/internal/circuitmap"
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 	"github.com/CtrlSpice/bargeboard/internal/f1id"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componentstatus"
 	"go.opentelemetry.io/collector/consumer"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/receiver"
 	"go.uber.org/zap"
 )
@@ -171,26 +172,72 @@ func (r *staticReceiver) run(ctx context.Context) error {
 	return r.play(ctx, p)
 }
 func (r *staticReceiver) play(ctx context.Context, p FrozenReplayPlan) error {
-	s := newSession(p)
+	var state f1engine.State
 	var tracesFailed, metricsFailed, logsFailed bool
-	reported := map[string]bool{}
-	err := Replay(ctx, p, r.cfg.Pace, r.clock, func(ctx context.Context, b FrozenBatch, now time.Time) error {
-		e := s.apply(b, b.Ordinal == int64(len(p.batches)-1))
-		for _, reason := range slices.Sorted(maps.Keys(e.issues)) {
-			if !reported[reason] && r.settings.Logger != nil {
-				r.settings.Logger.Warn("Static replay input rejected", zap.String("reason", reason))
-				reported[reason] = true
+	var reported f1engine.RacingDiagnostics
+	var nextTick time.Time
+	deliver := func(e f1engine.Effects, now time.Time) {
+		if r.settings.Logger != nil {
+			var messages []string
+			reported, messages = state.Diagnostics().NewMessages(reported)
+			for _, message := range messages {
+				r.settings.Logger.Warn(message)
 			}
 		}
-		v := r.settings.BuildInfo.Version
-		if r.traces != nil && len(e.spans) > 0 && r.traces.ConsumeTraces(ctx, projectTraces(p, e.spans, v)) != nil {
-			tracesFailed = true
+		version := r.settings.BuildInfo.Version
+		if r.traces != nil && e.HasSpans() {
+			traces := f1engine.ProjectTracesWithCircuit(version, e, func(f1engine.SessionInfoIdentity) circuitmap.Map { return p.Circuit })
+			if traces.SpanCount() > 0 && r.traces.ConsumeTraces(ctx, traces) != nil {
+				tracesFailed = true
+			}
 		}
-		if r.metrics != nil && len(e.points) > 0 && r.metrics.ConsumeMetrics(ctx, projectMetrics(p, e.points, v)) != nil {
+		if r.metrics != nil && e.HasMetrics() && r.metrics.ConsumeMetrics(ctx, f1engine.ProjectMetrics(version, e)) != nil {
 			metricsFailed = true
 		}
-		if r.logs != nil && len(e.logs) > 0 && r.logs.ConsumeLogs(ctx, projectLogs(p, e.logs, v, now)) != nil {
-			logsFailed = true
+		if r.logs != nil && e.HasLogs() {
+			logs := f1engine.ProjectLogs(version, e)
+			for _, resource := range logs.ResourceLogs().All() {
+				for _, scope := range resource.ScopeLogs().All() {
+					for _, l := range scope.LogRecords().All() {
+						l.SetObservedTimestamp(pcommon.NewTimestampFromTime(now))
+					}
+				}
+			}
+			if r.logs.ConsumeLogs(ctx, logs) != nil {
+				logsFailed = true
+			}
+		}
+	}
+	tick := func(now time.Time) {
+		var e f1engine.Effects
+		state, e = f1engine.ReduceTick(state, nextTick)
+		deliver(e, now)
+		nextTick = nextTick.Add(time.Second)
+	}
+	err := Replay(ctx, p, r.cfg.Pace, r.clock, func(ctx context.Context, b FrozenBatch, now time.Time) error {
+		if b.Snapshot {
+			nextTick = b.ObservationUTC
+		}
+		for nextTick.Before(b.ObservationUTC) {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			tick(now)
+		}
+		red, err := f1engine.ReduceBatch(state, b.engineBatch())
+		if err != nil {
+			return err
+		}
+		state = red.State
+		deliver(red.Effects, now)
+		last := b.Ordinal == int64(len(p.batches)-1)
+		if nextTick.Equal(b.ObservationUTC) && (last || p.batches[b.Ordinal+1].CoordNs != b.CoordNs) {
+			tick(now)
+		}
+		if last {
+			var e f1engine.Effects
+			state, e = f1engine.ReduceShutdown(state)
+			deliver(e, now)
 		}
 		return nil
 	})

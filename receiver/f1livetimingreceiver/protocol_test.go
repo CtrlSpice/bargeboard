@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 )
 
 func TestSubscriptionTopicsReturnsCopy(t *testing.T) {
@@ -161,7 +163,7 @@ func TestHubRecordBufferSizeErrorPreservesState(t *testing.T) {
 			want := hubRecordBuffer{contents: bytes.Clone(input), needsCompaction: true}
 			capacityBefore := cap(buffer.contents)
 			record, complete, err := buffer.next()
-			if !errors.Is(err, errInvalidLiveTimingData) || record != nil || complete || !reflect.DeepEqual(buffer, want) ||
+			if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || record != nil || complete || !reflect.DeepEqual(buffer, want) ||
 				&buffer.contents[0] != &input[0] || cap(buffer.contents) != capacityBefore {
 				t.Fatalf("size error changed state: record length %d, complete %v, error %v", len(record), complete, err)
 			}
@@ -208,7 +210,7 @@ func TestSplitHubRecordSizeBoundary(t *testing.T) {
 				before := bytes.Clone(contents)
 				record, remaining, complete, err := splitHubRecord(contents, 0)
 				if size > maxHubRecordSize {
-					if !errors.Is(err, errInvalidLiveTimingData) || record != nil || remaining != nil || complete {
+					if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || record != nil || remaining != nil || complete {
 						t.Errorf("oversized result: record length %d, remaining length %d, complete %v, error %v", len(record), len(remaining), complete, err)
 					}
 				} else if terminated {
@@ -265,7 +267,7 @@ func TestDecodeHubRecord(t *testing.T) {
 	tests := []struct {
 		name          string
 		record        string
-		wantBatch     *liveTimingBatch
+		wantBatch     *f1engine.WireBatch
 		wantErr       string
 		wantClosed    bool
 		wantReconnect bool
@@ -273,83 +275,83 @@ func TestDecodeHubRecord(t *testing.T) {
 		{
 			name:   "feed update",
 			record: `{"type":1,"target":"feed","arguments":["SessionStatus",{"Status":"Started"},"2026-08-21T10:30:00.034Z"]}`,
-			wantBatch: &liveTimingBatch{
-				source: liveTimingUpdateSourceFeed,
-				updates: []liveTimingUpdate{{
-					topic:     "SessionStatus",
-					payload:   json.RawMessage(`{"Status":"Started"}`),
-					timestamp: "2026-08-21T10:30:00.034Z",
-					source:    liveTimingUpdateSourceFeed,
+			wantBatch: &f1engine.WireBatch{
+				Source: f1engine.Feed,
+				Updates: []f1engine.WireUpdate{{
+					Topic:     "SessionStatus",
+					Payload:   json.RawMessage(`{"Status":"Started"}`),
+					Timestamp: "2026-08-21T10:30:00.034Z",
+					Source:    f1engine.Feed,
 				}},
 			},
 		},
 		{
 			name:   "compressed feed update",
 			record: `{"type":1,"target":"feed","arguments":["CarData.z","compressed-data","2026-08-21T10:30:00.034Z"]}`,
-			wantBatch: &liveTimingBatch{
-				source: liveTimingUpdateSourceFeed,
-				updates: []liveTimingUpdate{{
-					topic:     "CarData.z",
-					payload:   json.RawMessage(`"compressed-data"`),
-					timestamp: "2026-08-21T10:30:00.034Z",
-					source:    liveTimingUpdateSourceFeed,
+			wantBatch: &f1engine.WireBatch{
+				Source: f1engine.Feed,
+				Updates: []f1engine.WireUpdate{{
+					Topic:     "CarData.z",
+					Payload:   json.RawMessage(`"compressed-data"`),
+					Timestamp: "2026-08-21T10:30:00.034Z",
+					Source:    f1engine.Feed,
 				}},
 			},
 		},
 		{
 			name:   "subscription snapshot",
 			record: `{"type":3,"invocationId":"0","result":{"TimingData":{"Lines":{}},"Heartbeat":{"Utc":"now"}}}`,
-			wantBatch: &liveTimingBatch{
-				source:          liveTimingUpdateSourceSnapshot,
-				requestedTopics: requestedTopics,
-				presentTopics:   []string{"Heartbeat", "TimingData"},
-				updates: []liveTimingUpdate{
-					{topic: "Heartbeat", payload: json.RawMessage(`{"Utc":"now"}`), source: liveTimingUpdateSourceSnapshot},
-					{topic: "TimingData", payload: json.RawMessage(`{"Lines":{}}`), source: liveTimingUpdateSourceSnapshot},
+			wantBatch: &f1engine.WireBatch{
+				Source:          f1engine.Snapshot,
+				RequestedTopics: requestedTopics,
+				PresentTopics:   []string{"Heartbeat", "TimingData"},
+				Updates: []f1engine.WireUpdate{
+					{Topic: "Heartbeat", Payload: json.RawMessage(`{"Utc":"now"}`), Source: f1engine.Snapshot},
+					{Topic: "TimingData", Payload: json.RawMessage(`{"Lines":{}}`), Source: f1engine.Snapshot},
 				},
 			},
 		},
 		{
 			name:   "null subscription snapshot",
 			record: `{"type":3,"invocationId":"0","result":null}`,
-			wantBatch: &liveTimingBatch{
-				source:          liveTimingUpdateSourceSnapshot,
-				requestedTopics: requestedTopics,
-				presentTopics:   []string{},
-				updates:         []liveTimingUpdate{},
+			wantBatch: &f1engine.WireBatch{
+				Source:          f1engine.Snapshot,
+				RequestedTopics: requestedTopics,
+				PresentTopics:   []string{},
+				Updates:         []f1engine.WireUpdate{},
 			},
 		},
 		{
 			name:   "subscription completion without result and with extensions",
 			record: `{"type":3,"invocationId":"0","headers":{"traceparent":"value"},"futureExtension":true}`,
-			wantBatch: &liveTimingBatch{
-				source:          liveTimingUpdateSourceSnapshot,
-				requestedTopics: requestedTopics,
-				presentTopics:   []string{},
-				updates:         []liveTimingUpdate{},
+			wantBatch: &f1engine.WireBatch{
+				Source:          f1engine.Snapshot,
+				RequestedTopics: requestedTopics,
+				PresentTopics:   []string{},
+				Updates:         []f1engine.WireUpdate{},
 			},
 		},
 		{
 			name:   "empty subscription snapshot",
 			record: `{"type":3,"invocationId":"0","result":{}}`,
-			wantBatch: &liveTimingBatch{
-				source:          liveTimingUpdateSourceSnapshot,
-				requestedTopics: requestedTopics,
-				presentTopics:   []string{},
-				updates:         []liveTimingUpdate{},
+			wantBatch: &f1engine.WireBatch{
+				Source:          f1engine.Snapshot,
+				RequestedTopics: requestedTopics,
+				PresentTopics:   []string{},
+				Updates:         []f1engine.WireUpdate{},
 			},
 		},
 		{
 			name:   "present null topic",
 			record: `{"type":3,"invocationId":"0","result":{"SessionInfo":null}}`,
-			wantBatch: &liveTimingBatch{
-				source:          liveTimingUpdateSourceSnapshot,
-				requestedTopics: requestedTopics,
-				presentTopics:   []string{"SessionInfo"},
-				updates: []liveTimingUpdate{{
-					topic:   "SessionInfo",
-					payload: json.RawMessage(`null`),
-					source:  liveTimingUpdateSourceSnapshot,
+			wantBatch: &f1engine.WireBatch{
+				Source:          f1engine.Snapshot,
+				RequestedTopics: requestedTopics,
+				PresentTopics:   []string{"SessionInfo"},
+				Updates: []f1engine.WireUpdate{{
+					Topic:   "SessionInfo",
+					Payload: json.RawMessage(`null`),
+					Source:  f1engine.Snapshot,
 				}},
 			},
 		},
@@ -395,7 +397,7 @@ func TestDecodeHubRecord(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 					t.Fatalf("decodeHubRecord() error = %v, want containing %q", err, test.wantErr)
 				}
-				if !errors.Is(err, errInvalidLiveTimingData) {
+				if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 					t.Errorf("decodeHubRecord() error does not wrap errInvalidLiveTimingData")
 				}
 				return
@@ -420,7 +422,7 @@ func TestDecodeSubscriptionCompletionCopiesRequestedTopics(t *testing.T) {
 		t.Fatalf("decodeHubRecord() error = %v", err)
 	}
 	requestedTopics[0] = "changed"
-	if got := batch.requestedTopics[0]; got != "SessionInfo" {
+	if got := batch.RequestedTopics[0]; got != "SessionInfo" {
 		t.Errorf("batch requested topic = %q, want SessionInfo", got)
 	}
 }
@@ -430,7 +432,7 @@ func TestDecodeSubscriptionCompletionRequiresRequestedTopics(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "no requested topics") {
 		t.Fatalf("decodeHubRecord() error = %v, want requested-topics error", err)
 	}
-	if !errors.Is(err, errInvalidLiveTimingData) {
+	if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 		t.Errorf("decodeHubRecord() error does not wrap errInvalidLiveTimingData")
 	}
 
@@ -438,7 +440,7 @@ func TestDecodeSubscriptionCompletionRequiresRequestedTopics(t *testing.T) {
 		[]byte(`{"type":3,"invocationId":"0","result":{}}`),
 		[]string{"SessionInfo", "SessionInfo"},
 	)
-	if err == nil || !errors.Is(err, errInvalidLiveTimingData) {
+	if err == nil || !errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 		t.Fatalf("decodeHubRecord() duplicate requested topics error = %v", err)
 	}
 }

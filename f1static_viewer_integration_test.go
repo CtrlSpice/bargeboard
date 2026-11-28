@@ -158,6 +158,7 @@ func TestViewerPersistsF1StaticReplayWaterfall(t *testing.T) {
 			`00:01:30.000{"CurrentLap":2,"TotalLaps":2}`,
 		}, "\n"),
 		"TimingAppData.jsonStream": `00:00:01.000{"Lines":{"17":{"Stints":{"0":{"Compound":"MEDIUM","New":"true","StartLaps":0,"TotalLaps":0}}},"31":{"Stints":{"0":{"Compound":"HARD","New":"true","StartLaps":0,"TotalLaps":0}}}}}`,
+		"CarData.z.jsonStream":     deflateBase64JSONLine(t, "00:00:05.000", `{"Entries":[{"Utc":"2025-05-04T15:00:05Z","Cars":{"17":{"Channels":{"0":10240,"2":256}}}}]}`),
 		"Position.z.jsonStream":    pos1 + "\n" + pos2,
 		"TimingData.jsonStream": strings.Join([]string{
 			`00:00:01.000{"Lines":{"17":{"Position":"2","NumberOfLaps":1,"InPit":false,"NumberOfPitStops":0},"31":{"Position":"1","NumberOfLaps":1,"InPit":false,"NumberOfPitStops":0}}}`,
@@ -472,13 +473,13 @@ service:
 		}
 	}
 	wantSpans := map[pcommon.SpanID]spanLink{
-		wantRootID:    {name: "driver.session", parent: pcommon.SpanID{}},
-		wantStint1ID:  {name: "stint", parent: wantRootID},
-		wantLap1ID:    {name: "lap", parent: wantStint1ID},
-		wantLap2ID:    {name: "lap", parent: wantStint1ID},
-		wantSector1ID: {name: "sector", parent: wantLap1ID},
-		wantSector2ID: {name: "sector", parent: wantLap1ID},
-		wantSector3ID: {name: "sector", parent: wantLap1ID},
+		wantRootID:    {name: "driver.session FIG", parent: pcommon.SpanID{}},
+		wantStint1ID:  {name: "stint 1", parent: wantRootID},
+		wantLap1ID:    {name: "lap 1", parent: wantStint1ID},
+		wantLap2ID:    {name: "lap 2", parent: wantStint1ID},
+		wantSector1ID: {name: "sector 1", parent: wantLap1ID},
+		wantSector2ID: {name: "sector 2", parent: wantLap1ID},
+		wantSector3ID: {name: "sector 3", parent: wantLap1ID},
 	}
 	if !reflect.DeepEqual(gotSpans, wantSpans) {
 		t.Fatalf("driver 17 waterfall hierarchy:\ngot  %+v\nwant %+v", gotSpans, wantSpans)
@@ -487,7 +488,7 @@ service:
 		t.Fatalf("corner enrichment missing: positionChanged=%v fastestLap=%v", gotPositionCorner, gotFastestLapCorner)
 	}
 
-	// 2. Verify persisted F1 metrics (Delta histograms and Gauges, zero CarData).
+	// 2. Verify persisted F1 metrics (Delta histograms and Gauges, CarData ExponentialHistograms).
 	metricNames := map[string]bool{}
 	var lapHistChecked, sectorHistChecked bool
 	for _, id := range metricIDs {
@@ -503,6 +504,9 @@ service:
 				for k := 0; k < ms.Len(); k++ {
 					m := ms.At(k)
 					metricNames[m.Name()] = true
+					if m.Name() == "f1.field.speed" || m.Name() == "f1.field.engine_speed" {
+						checkViewerCarHistogram(t, m, driver17TraceID, func(id pcommon.SpanID) bool { return id == wantLap1ID })
+					}
 					if strings.HasPrefix(m.Name(), "f1.car.") {
 						t.Fatalf("unexpected YELLOW CarData metric persisted: %s", m.Name())
 					}
@@ -527,7 +531,7 @@ service:
 			}
 		}
 	}
-	for _, wantMetric := range []string{
+	for _, wantMetric := range []string{"f1.field.speed", "f1.field.engine_speed",
 		"f1.driver.lap_time",
 		"f1.driver.sector_time",
 		"f1.driver.best_lap_time",

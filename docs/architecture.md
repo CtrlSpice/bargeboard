@@ -76,7 +76,7 @@ package and configuration formats, and resource, signal, and output schemas
 carry no compatibility or migration contract. Contributors MUST NOT add
 compatibility stubs, deprecation wrappers, cache readers or migrations, aliases,
 or output-schema compatibility for them without a separately approved
-architecture decision. Future Go historical replay and OpenF1 work instead
+architecture decision. Historical replay and OpenF1
 follow their accepted source, timing, identity, signal, and verification
 contracts in this document.
 
@@ -289,7 +289,7 @@ The first approved implementation sequence is:
 
 U1 implements `decodeLosslessJSONString`, `visitRawJSONObject`, and
 `visitRawJSONObjectMembers` in
-`receiver/f1livetimingreceiver/json_tokens.go`. The string decoder checks raw
+`internal/f1engine/json_tokens.go`. The string decoder checks raw
 UTF-8, JSON grammar, quoted-string shape, and surrogate pairing before decoding
 once. Its errors distinguish these layers without including source content.
 Intentional U+FFFD, valid pairs, and literal backslash-u text are accepted;
@@ -1929,15 +1929,9 @@ instead fixes its accepted timestamp and derivation contract.
 
 ### Historical Replay Timing
 
-**Status: FORMATION LAP**
+**Status: GREEN for static archive replay**
 
-This section accepts the timing substrate for future Go historical replay. It
-does not promote a removed prototype's signal mapping, grant a new source
-authority, or accept replay of a captured Live Timing transport stream. Every
-replay domain still requires its own GREEN source and signal contract.
-
-The first conforming mode consumes a fully materialized, immutable normalized
-input. Before replay starts, it freezes the per-domain source-authority plan,
+Before replay, `f1static` freezes the per-domain source-authority plan,
 semantic configuration, normalized records, atomic source batch boundaries, and
 deterministic record ordinals. It also freezes one evidence-backed historical
 observation UTC origin and one non-negative, non-decreasing integer-nanosecond
@@ -2005,11 +1999,10 @@ nanosecond before, exactly at, and one nanosecond after its boundary. In
 particular, an observation at the end of a right-closed metric interval belongs
 to that interval, which finalizes only when its source watermark passes the end;
 a Collector-clock freshness deadline follows that domain's accepted expiry and
-update ordering. A virtual timer strictly before the next batch coordinate is
-reduced first; one strictly after remains pending. A domain without accepted
-timer-versus-source ordering at an equal coordinate, or without accepted
-behavior when several periodic deadlines are crossed, is not replay-eligible
-until those rules become GREEN. Replay scheduling adds no universal tie-breaker.
+update ordering. Virtual ticks start at the bootstrap observation time and
+recur every second. Replay processes crossed ticks in order and applies all
+batches at a shared coordinate before that tick. An `Ends` at the grace deadline
+therefore wins. After the final batch and any equal-time tick, replay flushes.
 
 For racing logs, `Timestamp` follows the accepted historical event or replay
 observation time while `ObservedTimestamp` uses actual process observation wall
@@ -2048,11 +2041,11 @@ replay of Formula 1's post-session `/static/<session_path>/` archive. It is NOT
 captured SignalR transport replay (which remains **YELLOW** above) because
 static per-topic `.jsonStream` files expose no global SignalR callback ordinal.
 
-`f1static` defaults to `enabled: false` and MUST be explicitly configured with a
+`f1static` defaults to `enabled: false`. Replay requires `enabled: true` and a
 safe relative `session_path` (slash-separated `[A-Za-z0-9._-]+` segments, no
-leading/trailing `/`, empty segment, `.`, or `..`) and `pace` (`instant` by
-default, or canonical `<N>x` for integer `1..1000`). Endpoints MUST use HTTPS
-or loopback HTTP without trailing `/`, user-info, query, or fragment; redirects
+leading/trailing `/`, empty segment, `.`, or `..`). The default `pace` is
+`instant`; canonical `<N>x` is also accepted for integers `1..1000`. Endpoints
+MUST use HTTPS or loopback HTTP without trailing `/`, user-info, query, or fragment; redirects
 are disabled. Optional `auth.token_file` attaches a Bearer token only to that
 validated endpoint and MUST never leak through errors or logs. Active `f1static`
 instances within one factory MUST reject both duplicate configured
@@ -2092,24 +2085,16 @@ input:
    `StartDate`.
 4. Within each topic stream, line order is strictly preserved using monotonic
    in-topic effective offset `max(prevEffectiveOffset, lineOffset)` while
-   retaining `t0 + lineOffset` as the historical feed-envelope publication UTC.
+   retaining `t0 + lineOffset` as publication UTC. Bootstrap observation UTC is
+   `t0 + min(lineOffset)` across streams. Later batches use `t0 + effectiveOffset`
+   as observation UTC.
    Across topics sharing an effective offset, a fixed deterministic topic
    precedence orders identity, roster, and position context before dependent
    timing and race-control updates.
 5. `f1static` replays the frozen batches at most once per Collector run,
    emitting `f1.data.source=livetiming` and canonical `bargeboard.otlp.id/v1`
-   IDs across GREEN traces, metrics, and logs (excluding high-volume `CarData.z`
-   archive streams). For `f1static` Delta histograms (`f1.driver.lap_time` with the 74
-   canonical bounds and `f1.driver.sector_time` with the 78 canonical bounds),
-   the session window opens at the first authoritative indexed `Started` UTC and
-   clips any final partial window to `Ends` UTC, falling back to `Finalised` UTC
-   and then that stream's greatest accepted source watermark. Periodic
-   Collector-timer heartbeats and `ExtrapolatedClock` second ticks remain
-   omitted in static replay until equal-coordinate timer tie-breaking is
-   promoted; complete `ExtrapolatedClock` source anchors and source-driven Gauge
-   changes still emit, and Race/Sprint roots close at accepted `Ends` UTC (or at
-   archive completion using `Finalised` UTC and then greatest-owned fallback
-   when `Ends` is absent) rather than racing a virtual `Finalised` grace timer.
+   IDs across GREEN traces, metrics, and logs. It reduces `CarData.z` and
+   timing observations through the same windows as the live receiver.
    Playback `pace` changes host sleeps between ordinals
    only; reducer outcomes, deterministic IDs, metric windows, and OTLP racing
    timestamps are invariant across `instant` and `1x..1000x`, while racing log
@@ -2119,15 +2104,6 @@ input:
    batches have been accepted by the attached pipeline consumers, and
    `StatusPermanentError` if materialization, replay, or immediate consumer
    acceptance fails without caller cancellation.
-
-A deleted pre-completion replay prototype was not conforming: it grouped events
-by endpoint and globally sorted them by relative event time; a coarse tick could
-place observations after a five-second boundary into the preceding metric flush
-at accelerated speeds; partial replay drained earlier queued events into the
-first tick rather than performing an accepted seek or warm-up; log event and
-observation timestamps were equal; and repeated network export had no declared
-delivery policy. These rejected designs are rationale for the contracts above,
-not implementation or compatibility authority, and MUST NOT be copied into Go.
 
 Required replay verification uses the same frozen fixture, authority plan, and
 semantic configuration at slow, normal, accelerated, and unpaced delivery. It
@@ -2292,6 +2268,21 @@ MUST use trace and span correlation rather than forcing a rewrite of an exported
 span.
 
 ## Metric Race Control
+
+**Sparse histogram exemplars (GREEN).** Each datapoint for field speed, engine
+speed, gear, throttle, lap DRS ratio, lap time, sector time or pit duration
+carries its minimum and maximum observations. Equal values keep the lowest
+`(timestamp, driver number, lap number, sector number)` tuple. When both extrema
+select the same observation, the datapoint carries one exemplar.
+
+Each exemplar carries the driver trace ID, target span ID, driver number and
+acronym. CarData uses the resampled second and links to the active lap. Lap time and lap DRS
+ratio link to the lap; sector time links to the sector. Pit durations link to
+the reported lap when its phase is resolved. If the lap or sector link cannot
+be resolved, the exemplar links to the driver session root. Filtered attributes
+include positive lap and sector numbers when available. Speed, engine speed and
+gear exemplars use OTLP integers; throttle, ratios and durations use doubles.
+The field-wide DRS ratio Gauge has no exemplar.
 
 ### Delta Interval Contract
 
@@ -2640,6 +2631,7 @@ explicit semantic-convention migration defines them.
 
 **Status: GREEN**
 
+Live and static receivers decode `CarData.z` into the same field instruments.
 Inflated `CarData` payloads carry an `Entries` array of samples, each with strict
 RFC3339 `Utc` and object-valued `Cars` keyed by canonical positive decimal driver
 number. Each car object carries object-valued `Channels` keyed by canonical
@@ -3887,8 +3879,8 @@ Stationary-stop upper bounds are:
 ```
 
 Both histograms use only the common session attributes. Driver, lap, visit,
-source index, and report identity MUST NOT split the series. A selectively
-attached exemplar MAY carry driver and visit correlation when both are known.
+source index, and report identity MUST NOT split the series. Exemplars identify
+the driver and link to the lap or session root as specified in [Metric Race Control](#metric-race-control).
 Source report publication time assigns the observation to the aligned
 ten-second Delta window; the datapoint retains the window timestamps. Snapshot
 records never replay observations. Exact count, sum, minimum, and maximum are
@@ -5638,9 +5630,9 @@ particular, `Utc`, `RacingNumber`, `Path`, the filename token, and the filename'
 embedded clock MUST NOT deduplicate a record. A different index is a distinct
 source publication even when another record has equal metadata.
 
-An authoritative snapshot `Captures` array atomically replaces current capture
-payload and assigns zero-based implicit indexes. Every present index is marked
-consumed without emitting a log, including an incomplete or invalid entry, so
+An authoritative snapshot replaces current capture payload. A `Captures` array
+uses zero-based indexes; an indexed object uses its keys. Every present index
+is marked consumed without emitting a log, including incomplete or invalid entries, so
 snapshot history cannot replay later. An empty array is a valid empty
 replacement even though none was observed. `null` is invalid. The optional
 snapshot member `_kf` is transport keyframe metadata: when present it is the
@@ -5651,8 +5643,10 @@ payload but retains consumed identities and overflow state.
 A feed `Captures` object is a sparse numeric-key patch. Keys are processed in
 ascending numeric order inside that topic update; this does not reorder other
 topics. An invalid key is diagnosed and ignored without suppressing valid
-siblings. An empty object is a no-op. A feed array, `null`, or another container
-shape is unsupported and quarantined without mutation. `_deleted` and null
+siblings. An empty object is a no-op. Only the first static TeamRadio stream
+record can carry a feed array. If its `Captures` payload is empty or invalid,
+the exception does not carry over. Other feed arrays, `null`, and unsupported
+container shapes are quarantined without mutation. `_deleted` and null
 entry deletion are unsupported because neither form is fixture-backed.
 
 An unseen feed index may accumulate a sparse entry until `RacingNumber` and
@@ -5785,8 +5779,9 @@ The receiver has one shared instance across traces, metrics, and logs. That
 instance MUST own one session state machine. The reader waits for a normalized
 batch to finish before it delivers the next record.
 
-The functional core SHOULD expose deterministic transformations with no
-network, Collector consumer, logger, context, or wall-clock dependency.
+`internal/f1engine` reduces normalized batches, ticks, disconnects and shutdown
+and projects the resulting effects to OTLP. Both receivers own their clocks
+and consumers; the engine has no network or process-clock dependency.
 
 One owner serializes normalized batches and timer observations. Reduction returns
 new state and racing effects. An invariant error discards both; a consumer error
@@ -6080,13 +6075,13 @@ Current implementation seams:
 | Pure transport liveness budgets and ping policy | `receiver/f1livetimingreceiver/liveness.go` |
 | Connection-owned keepalive writer | `receiver/f1livetimingreceiver/liveness_runtime.go` |
 | Wire record decoding | `receiver/f1livetimingreceiver/protocol.go` |
-| JSON and compressed normalization | `receiver/f1livetimingreceiver/normalize.go` |
-| Session descriptor parsing and classification | `receiver/f1livetimingreceiver/session_info.go` |
-| Pure SessionInfo descriptor-state reduction | `receiver/f1livetimingreceiver/session_info_reducer.go` |
-| Pure SessionInfo normalized-batch adapter | `receiver/f1livetimingreceiver/session_info_batch.go` |
-| Transactional Live Timing reducer | `receiver/f1livetimingreceiver/state.go` |
+| JSON and compressed normalization | `internal/f1engine/normalize.go` |
+| Session descriptor parsing and classification | `internal/f1engine/session_info.go` |
+| Pure SessionInfo descriptor-state reduction | `internal/f1engine/session_info_reducer.go` |
+| Pure SessionInfo normalized-batch adapter | `internal/f1engine/session_info_batch.go` |
+| Transactional Live Timing reducer | `internal/f1engine/state.go` |
 | Shared receiver lifecycle and consumer seam | `receiver/f1livetimingreceiver/receiver.go` |
-| Live Timing deterministic IDs and OTLP projection | `receiver/f1livetimingreceiver/ids.go`, `receiver/f1livetimingreceiver/projection.go` |
+| Live Timing deterministic IDs and OTLP projection | `internal/f1engine/ids.go`, `internal/f1engine/projection.go` |
 | Shared F1 identity, deterministic IDs, lossless JSON, and HTTP safety | `internal/f1id` |
 | Pure MultiViewer circuit corner and marshal-sector lookup | `internal/circuitmap` |
 | Historical static archive replay receiver | `receiver/f1staticreceiver` |

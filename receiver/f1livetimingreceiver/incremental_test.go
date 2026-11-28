@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 	"github.com/coder/websocket"
 )
 
@@ -20,12 +21,12 @@ const incrementalFeedA = `{"type":1,"target":"feed","arguments":["SessionStatus"
 const incrementalFeedC = `{"type":1,"target":"feed","arguments":["SessionStatus",{"Status":"Finished"},"2026-08-21T10:31:00Z"]}` + "\x1e"
 const incrementalClose = "{\"type\":7}\x1e"
 
-func incrementalWantFeed(status, timestamp string) liveTimingBatch {
-	return liveTimingBatch{
-		source: liveTimingUpdateSourceFeed,
-		updates: []liveTimingUpdate{{
-			topic: "SessionStatus", payload: json.RawMessage(`{"Status":"` + status + `"}`),
-			timestamp: timestamp, source: liveTimingUpdateSourceFeed,
+func incrementalWantFeed(status, timestamp string) f1engine.WireBatch {
+	return f1engine.WireBatch{
+		Source: f1engine.Feed,
+		Updates: []f1engine.WireUpdate{{
+			Topic: "SessionStatus", Payload: json.RawMessage(`{"Status":"` + status + `"}`),
+			Timestamp: timestamp, Source: f1engine.Feed,
 		}},
 	}
 }
@@ -50,15 +51,15 @@ func TestIncrementalReadCommitsBeforeInvalidRecord(t *testing.T) {
 			before := bytes.Clone(contents)
 			connection := incrementalTestConnection(t, [][]byte{contents}, false)
 			connection.requestedTopics = []string{"SessionStatus"}
-			var got []liveTimingBatch
-			err := connection.read(t.Context(), func(_ context.Context, batch liveTimingBatch) error {
+			var got []f1engine.WireBatch
+			err := connection.read(t.Context(), func(_ context.Context, batch f1engine.WireBatch) error {
 				got = append(got, batch)
 				return nil
 			})
-			if !errors.Is(err, errInvalidLiveTimingData) {
+			if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 				t.Fatalf("read() error = %v, want invalid data", err)
 			}
-			want := []liveTimingBatch{incrementalWantFeed("Started", "2026-08-21T10:30:00Z")}
+			want := []f1engine.WireBatch{incrementalWantFeed("Started", "2026-08-21T10:30:00Z")}
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("batches = %#v, want %#v", got, want)
 			}
@@ -81,8 +82,8 @@ func TestIncrementalReadCancellationBetweenRecords(t *testing.T) {
 			pending := []byte(incrementalFeedA + `{"type":6}` + "\x1e" + incrementalFeedC + incrementalClose)
 			before := bytes.Clone(pending)
 			connection := &signalRConnection{pending: pending, requestedTopics: []string{"SessionStatus"}}
-			var got []liveTimingBatch
-			err := connection.read(ctx, func(_ context.Context, batch liveTimingBatch) error {
+			var got []f1engine.WireBatch
+			err := connection.read(ctx, func(_ context.Context, batch f1engine.WireBatch) error {
 				got = append(got, batch)
 				cancel()
 				return nil
@@ -90,9 +91,9 @@ func TestIncrementalReadCancellationBetweenRecords(t *testing.T) {
 			if !errors.Is(err, context.Canceled) {
 				t.Errorf("read() error = %v, want canceled", err)
 			}
-			var want []liveTimingBatch
+			var want []f1engine.WireBatch
 			if !alreadyCanceled {
-				want = []liveTimingBatch{incrementalWantFeed("Started", "2026-08-21T10:30:00Z")}
+				want = []f1engine.WireBatch{incrementalWantFeed("Started", "2026-08-21T10:30:00Z")}
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("batches = %#v, want %#v", got, want)
@@ -107,14 +108,14 @@ func TestIncrementalReadCancellationBetweenRecords(t *testing.T) {
 
 func TestIncrementalReadFragmentationAndHandshakePending(t *testing.T) {
 	snapshot := `{"type":3,"invocationId":"0","result":{"SessionStatus":{"Status":"Inactive"},"Heartbeat":{"Utc":"now"}}}` + "\x1e"
-	want := []liveTimingBatch{
+	want := []f1engine.WireBatch{
 		{
-			source:          liveTimingUpdateSourceSnapshot,
-			requestedTopics: []string{"SessionStatus", "Heartbeat"},
-			presentTopics:   []string{"Heartbeat", "SessionStatus"},
-			updates: []liveTimingUpdate{
-				{topic: "Heartbeat", payload: json.RawMessage(`{"Utc":"now"}`), source: liveTimingUpdateSourceSnapshot},
-				{topic: "SessionStatus", payload: json.RawMessage(`{"Status":"Inactive"}`), source: liveTimingUpdateSourceSnapshot},
+			Source:          f1engine.Snapshot,
+			RequestedTopics: []string{"SessionStatus", "Heartbeat"},
+			PresentTopics:   []string{"Heartbeat", "SessionStatus"},
+			Updates: []f1engine.WireUpdate{
+				{Topic: "Heartbeat", Payload: json.RawMessage(`{"Utc":"now"}`), Source: f1engine.Snapshot},
+				{Topic: "SessionStatus", Payload: json.RawMessage(`{"Status":"Inactive"}`), Source: f1engine.Snapshot},
 			},
 		},
 		incrementalWantFeed("Started", "2026-08-21T10:30:00Z"),
@@ -142,8 +143,8 @@ func TestIncrementalReadFragmentationAndHandshakePending(t *testing.T) {
 			connection.requestedTopics = requested
 			pendingBefore := bytes.Clone(connection.pending)
 			pending := connection.pending
-			var got []liveTimingBatch
-			err := connection.read(t.Context(), func(_ context.Context, batch liveTimingBatch) error {
+			var got []f1engine.WireBatch
+			err := connection.read(t.Context(), func(_ context.Context, batch f1engine.WireBatch) error {
 				if connection.requestedTopics != nil {
 					t.Error("subscription state not cleared before snapshot callback")
 				}
@@ -166,36 +167,36 @@ func TestIncrementalReadStopsInWireOrder(t *testing.T) {
 	for _, test := range []struct {
 		name       string
 		contents   string
-		want       []liveTimingBatch
+		want       []f1engine.WireBatch
 		wantTopics []string
 		wantErr    error
 	}{
 		{
 			name: "duplicate completion", contents: snapshot + snapshot + incrementalFeedC,
-			want:    []liveTimingBatch{{source: liveTimingUpdateSourceSnapshot, requestedTopics: []string{"SessionStatus"}, presentTopics: []string{}, updates: []liveTimingUpdate{}}},
-			wantErr: errInvalidLiveTimingData,
+			want:    []f1engine.WireBatch{{Source: f1engine.Snapshot, RequestedTopics: []string{"SessionStatus"}, PresentTopics: []string{}, Updates: []f1engine.WireUpdate{}}},
+			wantErr: f1engine.ErrInvalidLiveTimingData,
 		},
 		{
 			name: "close before oversized record", contents: incrementalFeedA + incrementalClose + strings.Repeat("x", maxHubRecordSize+1) + "\x1e" + incrementalFeedC,
-			want:       []liveTimingBatch{incrementalWantFeed("Started", "2026-08-21T10:30:00Z")},
+			want:       []f1engine.WireBatch{incrementalWantFeed("Started", "2026-08-21T10:30:00Z")},
 			wantTopics: []string{"SessionStatus"}, wantErr: errSignalRClosed,
 		},
 		{
 			name: "reconnect close before invalid record", contents: incrementalFeedA + `{"type":7,"allowReconnect":true}` + "\x1e{\x1e" + incrementalFeedC,
-			want:       []liveTimingBatch{incrementalWantFeed("Started", "2026-08-21T10:30:00Z")},
+			want:       []f1engine.WireBatch{incrementalWantFeed("Started", "2026-08-21T10:30:00Z")},
 			wantTopics: []string{"SessionStatus"}, wantErr: errSignalRReconnectAllowed,
 		},
 		{
 			name: "invalid before close", contents: incrementalFeedA + "{\x1e" + incrementalClose,
-			want:       []liveTimingBatch{incrementalWantFeed("Started", "2026-08-21T10:30:00Z")},
-			wantTopics: []string{"SessionStatus"}, wantErr: errInvalidLiveTimingData,
+			want:       []f1engine.WireBatch{incrementalWantFeed("Started", "2026-08-21T10:30:00Z")},
+			wantTopics: []string{"SessionStatus"}, wantErr: f1engine.ErrInvalidLiveTimingData,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			pending := []byte(test.contents)
 			connection := &signalRConnection{pending: pending, requestedTopics: []string{"SessionStatus"}}
-			var got []liveTimingBatch
-			err := connection.read(t.Context(), func(_ context.Context, batch liveTimingBatch) error {
+			var got []f1engine.WireBatch
+			err := connection.read(t.Context(), func(_ context.Context, batch f1engine.WireBatch) error {
 				got = append(got, batch)
 				return nil
 			})
@@ -215,12 +216,12 @@ func TestIncrementalReadDiscardsErroredWebSocketMessage(t *testing.T) {
 	connection := incrementalTestConnection(t, [][]byte{[]byte(incrementalFeedA + incrementalFeedC)}, false)
 	connection.conn.SetReadLimit(int64(len(incrementalFeedA)))
 	connection.requestedTopics = []string{"SessionStatus"}
-	var got []liveTimingBatch
-	err := connection.read(t.Context(), func(_ context.Context, batch liveTimingBatch) error {
+	var got []f1engine.WireBatch
+	err := connection.read(t.Context(), func(_ context.Context, batch f1engine.WireBatch) error {
 		got = append(got, batch)
 		return nil
 	})
-	if !errors.Is(err, errInvalidLiveTimingData) || got != nil || connection.pending != nil ||
+	if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || got != nil || connection.pending != nil ||
 		!reflect.DeepEqual(connection.requestedTopics, []string{"SessionStatus"}) {
 		t.Errorf("read() = %#v, %v, state = %#v", got, err, connection)
 	}
@@ -233,24 +234,24 @@ func TestIncrementalReadNormalizationKeepsSnapshotAtomic(t *testing.T) {
 	before := bytes.Clone(pending)
 	requested := []string{"CarData.z", "Position.z"}
 	connection := &signalRConnection{pending: pending, requestedTopics: requested}
-	wantWire := liveTimingBatch{
-		source:          liveTimingUpdateSourceSnapshot,
-		requestedTopics: []string{"CarData.z", "Position.z"}, presentTopics: []string{"CarData.z", "Position.z"},
-		updates: []liveTimingUpdate{
-			{topic: "CarData.z", payload: bytes.Clone(valid), source: liveTimingUpdateSourceSnapshot},
-			{topic: "Position.z", payload: bytes.Clone(invalid), source: liveTimingUpdateSourceSnapshot},
+	wantWire := f1engine.WireBatch{
+		Source:          f1engine.Snapshot,
+		RequestedTopics: []string{"CarData.z", "Position.z"}, PresentTopics: []string{"CarData.z", "Position.z"},
+		Updates: []f1engine.WireUpdate{
+			{Topic: "CarData.z", Payload: bytes.Clone(valid), Source: f1engine.Snapshot},
+			{Topic: "Position.z", Payload: bytes.Clone(invalid), Source: f1engine.Snapshot},
 		},
 	}
-	var wire []liveTimingBatch
-	var normalized []normalizedLiveTimingBatch
-	err := connection.read(t.Context(), func(_ context.Context, batch liveTimingBatch) error {
+	var wire []f1engine.WireBatch
+	var normalized []f1engine.Batch
+	err := connection.read(t.Context(), func(_ context.Context, batch f1engine.WireBatch) error {
 		wire = append(wire, batch)
-		result, err := normalizeLiveTimingBatch(batch, time.Date(2026, 8, 21, 10, 30, 0, 0, time.UTC))
+		result, err := f1engine.NormalizeBatch(batch, time.Date(2026, 8, 21, 10, 30, 0, 0, time.UTC))
 		if !reflect.DeepEqual(batch, wantWire) {
 			t.Error("normalization mutated wire batch")
 		}
 		if err != nil {
-			if !reflect.DeepEqual(result, normalizedLiveTimingBatch{}) {
+			if !reflect.DeepEqual(result, f1engine.Batch{}) {
 				t.Errorf("failed normalization returned partial batch: %#v", result)
 			}
 			return err
@@ -258,8 +259,8 @@ func TestIncrementalReadNormalizationKeepsSnapshotAtomic(t *testing.T) {
 		normalized = append(normalized, result)
 		return nil
 	})
-	if !errors.Is(err, errInvalidLiveTimingData) || !strings.Contains(err.Error(), "update 1:") ||
-		!reflect.DeepEqual(wire, []liveTimingBatch{wantWire}) || normalized != nil {
+	if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || !strings.Contains(err.Error(), "update 1:") ||
+		!reflect.DeepEqual(wire, []f1engine.WireBatch{wantWire}) || normalized != nil {
 		t.Errorf("read() wire = %#v, normalized = %#v, error = %v", wire, normalized, err)
 	}
 	if connection.pending != nil || connection.requestedTopics != nil || !bytes.Equal(pending, before) ||

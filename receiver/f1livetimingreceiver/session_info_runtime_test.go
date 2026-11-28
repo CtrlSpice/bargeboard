@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 	"github.com/coder/websocket"
 	"go.opentelemetry.io/collector/component/componentstatus"
 	"go.opentelemetry.io/collector/receiver/receivertest"
@@ -43,11 +44,11 @@ func TestReceiverOwnsSessionInfoStateAcrossReconnect(t *testing.T) {
 
 	settings := receivertest.NewNopSettings(Type)
 	receiver := newLiveTimingReceiver(connectionTestConfig(t, server.URL), settings)
-	receiver.now = func() time.Time { return identityGateTestState().origin }
+	receiver.now = func() time.Time { return identityGateTestState(t).Origin }
 	receiver.retryDelay = func(int) time.Duration { return 0 }
-	states := make(chan liveTimingState, 2)
+	states := make(chan f1engine.State, 2)
 	var consumeCalls atomic.Int32
-	receiver.consume = func(context.Context, normalizedLiveTimingBatch) error {
+	receiver.consume = func(context.Context, f1engine.Batch) error {
 		states <- receiver.state
 		if consumeCalls.Add(1) == 1 {
 			return errors.New("synthetic downstream failure")
@@ -69,15 +70,15 @@ func TestReceiverOwnsSessionInfoStateAcrossReconnect(t *testing.T) {
 		t.Fatal("timed out waiting for receiver completion")
 	}
 
-	wantA := identityGateTestState()
-	wantBReduction, err := reduceLiveTimingBatch(
+	wantA := identityGateTestState(t)
+	wantBReduction, err := f1engine.ReduceBatch(
 		wantA,
 		normalizeIdentityGateSessionInfoFeed(t, identityGateDescriptorB, "2022-01-01T00:00:01Z"),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	gotStates := make([]liveTimingState, 0, 2)
+	gotStates := make([]f1engine.State, 0, 2)
 	for range 2 {
 		select {
 		case state := <-states:
@@ -86,11 +87,11 @@ func TestReceiverOwnsSessionInfoStateAcrossReconnect(t *testing.T) {
 			t.Fatal("timed out waiting for post-reduction state")
 		}
 	}
-	if wantStates := []liveTimingState{wantA, wantBReduction.state}; !reflect.DeepEqual(gotStates, wantStates) {
+	if wantStates := []f1engine.State{wantA, wantBReduction.State}; !reflect.DeepEqual(gotStates, wantStates) {
 		t.Fatalf("runtime states = %#v, want %#v", gotStates, wantStates)
 	}
-	if !reflect.DeepEqual(receiver.state, wantBReduction.state) {
-		t.Fatalf("receiver state = %#v, want %#v", receiver.state, wantBReduction.state)
+	if !reflect.DeepEqual(receiver.state, wantBReduction.State) {
+		t.Fatalf("receiver state = %#v, want %#v", receiver.state, wantBReduction.State)
 	}
 	if connections.Load() != 2 {
 		t.Fatalf("connections = %d, want 2", connections.Load())
@@ -127,14 +128,14 @@ func TestReceiverContainsReductionFailure(t *testing.T) {
 	settings.Logger = zap.New(core)
 	host := &statusHost{events: make(chan *componentstatus.Event, 8)}
 	receiver := newLiveTimingReceiver(connectionTestConfig(t, server.URL), settings)
-	receiver.now = func() time.Time { return identityGateTestState().origin }
+	receiver.now = func() time.Time { return identityGateTestState(t).Origin }
 	baseReduce := receiver.reduce
 	var reduceCalls atomic.Int32
 	var accountedUpdates []int64
-	receiver.reduce = func(state liveTimingState, batch normalizedLiveTimingBatch) (liveTimingReduction, error) {
+	receiver.reduce = func(state f1engine.State, batch f1engine.Batch) (f1engine.Reduction, error) {
 		accountedUpdates = append(accountedUpdates, receiver.operational.state.Load().updates)
 		if reduceCalls.Add(1) == 2 {
-			return liveTimingReduction{}, errors.New("sensitive synthetic reduction failure")
+			return f1engine.Reduction{}, errors.New("sensitive synthetic reduction failure")
 		}
 		return baseReduce(state, batch)
 	}
@@ -148,8 +149,8 @@ func TestReceiverContainsReductionFailure(t *testing.T) {
 		payload string
 	}
 	consumed := make(chan consumedBatch, 2)
-	receiver.consume = func(_ context.Context, batch normalizedLiveTimingBatch) error {
-		consumed <- consumedBatch{topic: batch.updates[0].topic, payload: string(batch.updates[0].payload)}
+	receiver.consume = func(_ context.Context, batch f1engine.Batch) error {
+		consumed <- consumedBatch{topic: batch.Updates[0].Topic, payload: string(batch.Updates[0].Payload)}
 		return nil
 	}
 
@@ -184,8 +185,8 @@ func TestReceiverContainsReductionFailure(t *testing.T) {
 	if reduceCalls.Load() != 3 || connections.Load() != 1 || retries.Load() != 0 {
 		t.Fatalf("reduce calls = %d, connections = %d, retries = %d", reduceCalls.Load(), connections.Load(), retries.Load())
 	}
-	wantState := identityGateTestState()
-	wantState.status.status = "Finished"
+	wantState := identityGateTestState(t)
+	wantState.Status.Status = "Finished"
 	if !reflect.DeepEqual(receiver.state, wantState) {
 		t.Fatalf("failed reduction did not preserve receiver state: %#v", receiver.state)
 	}
@@ -229,11 +230,11 @@ func TestLiveTimingReceiverStateIsInstanceOwned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first.state = r.state
-	if !reflect.DeepEqual(first.state, identityGateTestState()) {
+	first.state = r.State
+	if !reflect.DeepEqual(first.state, identityGateTestState(t)) {
 		t.Fatalf("first receiver state = %#v", first.state)
 	}
-	if !reflect.DeepEqual(second.state, liveTimingState{}) {
+	if !reflect.DeepEqual(second.state, f1engine.State{}) {
 		t.Fatalf("new receiver inherited state = %#v", second.state)
 	}
 }

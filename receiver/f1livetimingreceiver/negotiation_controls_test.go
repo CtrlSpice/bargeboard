@@ -10,6 +10,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 )
 
 const negotiationTextCapability = `{"transport":"WebSockets","transferFormats":["Text"]}`
@@ -28,9 +30,9 @@ func TestNegotiationControlsSourceExamples(t *testing.T) {
 		t.Fatal(err)
 	}
 	transports := []negotiateTransport{
-		{Transport: "WebSockets", TransferFormats: []jsonControlString{"Text", "Binary"}},
-		{Transport: "ServerSentEvents", TransferFormats: []jsonControlString{"Text"}},
-		{Transport: "LongPolling", TransferFormats: []jsonControlString{"Text", "Binary"}},
+		{Transport: "WebSockets", TransferFormats: []f1engine.JSONControlString{"Text", "Binary"}},
+		{Transport: "ServerSentEvents", TransferFormats: []f1engine.JSONControlString{"Text"}},
+		{Transport: "LongPolling", TransferFormats: []f1engine.JSONControlString{"Text", "Binary"}},
 	}
 	wants := []struct {
 		name    string
@@ -72,7 +74,7 @@ func assertNegotiationResult(t *testing.T, raw string, wantDecoded negotiateResp
 		if err != nil {
 			t.Errorf("parse error = %v", err)
 		}
-	} else if !errors.Is(err, errInvalidLiveTimingData) || err.Error() != "invalid F1 live timing data: "+reason {
+	} else if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || err.Error() != "invalid F1 live timing data: "+reason {
 		t.Errorf("parse error = %v, want %s", err, reason)
 	}
 	if string(input) != raw {
@@ -104,7 +106,7 @@ func assertNegotiationDecodeFailure(t *testing.T, raw string) {
 		t.Errorf("decode accepted invalid controls or returned partial state: %#v, %v", decoded, decodeErr)
 	}
 	got, err := parseNegotiateResponse(input)
-	if got != (negotiation{}) || !errors.Is(err, errInvalidLiveTimingData) || err.Error() != "invalid F1 live timing data: decode SignalR negotiation response" {
+	if got != (negotiation{}) || !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || err.Error() != "invalid F1 live timing data: decode SignalR negotiation response" {
 		t.Errorf("parse accepted invalid controls or returned partial state: %#v, %v", got, err)
 	}
 	if !bytes.Equal(input, before) {
@@ -166,7 +168,7 @@ func TestNegotiationControlsKnownMemberMatrix(t *testing.T) {
 func TestNegotiationControlsExactDecodedNamesAndOpaqueExtensions(t *testing.T) {
 	// Every known name is escaped but decodes to the canonical spelling.
 	raw := `{"\u0063onnectionId":"id","\u0063onnectionToken":"token","\u006eegotiateVersion":1,"\u0075rl":"","\u0061ccessToken":"","\u0065rror":"","\u0061vailableTransports":[{"\u0074ransport":"WebSockets","\u0074ransferFormats":["Text"]}]}`
-	want := negotiateResponse{ConnectionID: "id", ConnectionToken: "token", NegotiateVersion: 1, AvailableTransports: []negotiateTransport{{Transport: "WebSockets", TransferFormats: []jsonControlString{"Text"}}}}
+	want := negotiateResponse{ConnectionID: "id", ConnectionToken: "token", NegotiateVersion: 1, AvailableTransports: []negotiateTransport{{Transport: "WebSockets", TransferFormats: []f1engine.JSONControlString{"Text"}}}}
 	assertNegotiationResult(t, raw, want, negotiation{connectionToken: "token"}, "")
 	// Nonempty values prove that escaped rejection controls were recognized too.
 	raw = strings.Replace(raw, `"\u0075rl":""`, `"\u0075rl":"https://synthetic.test/redirect"`, 1)
@@ -178,7 +180,7 @@ func TestNegotiationControlsExactDecodedNamesAndOpaqueExtensions(t *testing.T) {
 	// normalize confusables, trim keys, or inspect nested unknown values.
 	const extensions = `"connection\\u0049d":"\uD800","connectionId ":null,"cоnnectionId":false,"extension":{"\uD800":"\uDC00","error":null},"exten\u0073ion":"\uD800","�":null,"\uFFFD":[],"\uD83D\uDE80":"\uD800"`
 	raw = `{"connectionId":"id",` + extensions + `,"availableTransports":[{"transport":"WebSockets","transferFormats":["Text"],` + extensions + `}]}`
-	want = negotiateResponse{ConnectionID: "id", AvailableTransports: []negotiateTransport{{Transport: "WebSockets", TransferFormats: []jsonControlString{"Text"}}}}
+	want = negotiateResponse{ConnectionID: "id", AvailableTransports: []negotiateTransport{{Transport: "WebSockets", TransferFormats: []f1engine.JSONControlString{"Text"}}}}
 	assertNegotiationResult(t, raw, want, negotiation{connectionToken: "id"}, "")
 	for _, member := range []string{`"acceſsToken":""`, `"connectionToKen":""`, `"availableTranſports":[]`} {
 		assertNegotiationDecodeFailure(t, `{`+negotiationValidMembers+`,`+member+`}`)
@@ -212,7 +214,7 @@ func TestNegotiationControlsArrayEntriesAndLosslessStrings(t *testing.T) {
 }
 
 func TestNegotiationControlsPreservedDomainDecisions(t *testing.T) {
-	capability := []negotiateTransport{{Transport: "WebSockets", TransferFormats: []jsonControlString{"Text"}}}
+	capability := []negotiateTransport{{Transport: "WebSockets", TransferFormats: []f1engine.JSONControlString{"Text"}}}
 	for _, version := range []string{"", `,"negotiateVersion":0`, `,"negotiateVersion":1`} {
 		want := negotiateResponse{ConnectionID: "id", ConnectionToken: "token", AvailableTransports: capability}
 		result := negotiation{connectionToken: "id"}
@@ -244,11 +246,11 @@ func TestNegotiationControlsPreservedDomainDecisions(t *testing.T) {
 		{"", []negotiateTransport{}},
 		{`{}`, []negotiateTransport{{}}},
 		{`{"transport":"WebSockets"}`, []negotiateTransport{{Transport: "WebSockets"}}},
-		{`{"transferFormats":["Text"]}`, []negotiateTransport{{TransferFormats: []jsonControlString{"Text"}}}},
-		{`{"transport":"WebSockets","transferFormats":[]}`, []negotiateTransport{{Transport: "WebSockets", TransferFormats: []jsonControlString{}}}},
-		{`{"transport":"","transferFormats":["Text"]}`, []negotiateTransport{{TransferFormats: []jsonControlString{"Text"}}}},
-		{`{"transport":"WebSockets","transferFormats":[""]}`, []negotiateTransport{{Transport: "WebSockets", TransferFormats: []jsonControlString{""}}}},
-		{`{"transport":"WebSockets","transferFormats":["Binary"]},{"transferFormats":["Text"]}`, []negotiateTransport{{Transport: "WebSockets", TransferFormats: []jsonControlString{"Binary"}}, {TransferFormats: []jsonControlString{"Text"}}}},
+		{`{"transferFormats":["Text"]}`, []negotiateTransport{{TransferFormats: []f1engine.JSONControlString{"Text"}}}},
+		{`{"transport":"WebSockets","transferFormats":[]}`, []negotiateTransport{{Transport: "WebSockets", TransferFormats: []f1engine.JSONControlString{}}}},
+		{`{"transport":"","transferFormats":["Text"]}`, []negotiateTransport{{TransferFormats: []f1engine.JSONControlString{"Text"}}}},
+		{`{"transport":"WebSockets","transferFormats":[""]}`, []negotiateTransport{{Transport: "WebSockets", TransferFormats: []f1engine.JSONControlString{""}}}},
+		{`{"transport":"WebSockets","transferFormats":["Binary"]},{"transferFormats":["Text"]}`, []negotiateTransport{{Transport: "WebSockets", TransferFormats: []f1engine.JSONControlString{"Binary"}}, {TransferFormats: []f1engine.JSONControlString{"Text"}}}},
 	} {
 		want := negotiateResponse{ConnectionID: "id", AvailableTransports: test.want}
 		assertNegotiationResult(t, `{"connectionId":"id","availableTransports":[`+test.entries+`]}`, want, negotiation{}, "SignalR negotiation does not support WebSockets with text frames")
@@ -266,9 +268,9 @@ func TestNegotiationControlsCapabilityDestinationAtomicity(t *testing.T) {
 		`{"transferFormats":["Text"],"transport":"\uD800"}`,
 		`{"transport":"new","extension":1,"\uD800":false}`, `{"transport":"new",`,
 	} {
-		originalFormats := []jsonControlString{"Binary", "private-original"}
+		originalFormats := []f1engine.JSONControlString{"Binary", "private-original"}
 		destination := negotiateTransport{Transport: "original", TransferFormats: originalFormats}
-		want := negotiateTransport{Transport: "original", TransferFormats: []jsonControlString{"Binary", "private-original"}}
+		want := negotiateTransport{Transport: "original", TransferFormats: []f1engine.JSONControlString{"Binary", "private-original"}}
 		input := []byte(raw)
 		err := destination.UnmarshalJSON(input)
 		if err == nil || !reflect.DeepEqual(destination, want) || &destination.TransferFormats[0] != &originalFormats[0] || !reflect.DeepEqual(originalFormats, want.TransferFormats) || string(input) != raw {
@@ -280,10 +282,10 @@ func TestNegotiationControlsCapabilityDestinationAtomicity(t *testing.T) {
 		want negotiateTransport
 	}{
 		{`{}`, negotiateTransport{}},
-		{`{"transferFormats":["Text"]}`, negotiateTransport{TransferFormats: []jsonControlString{"Text"}}},
+		{`{"transferFormats":["Text"]}`, negotiateTransport{TransferFormats: []f1engine.JSONControlString{"Text"}}},
 		{`{"transport":"LongPolling"}`, negotiateTransport{Transport: "LongPolling"}},
 	} {
-		destination := negotiateTransport{Transport: "WebSockets", TransferFormats: []jsonControlString{"Binary"}}
+		destination := negotiateTransport{Transport: "WebSockets", TransferFormats: []f1engine.JSONControlString{"Binary"}}
 		input := []byte(test.raw)
 		if err := json.Unmarshal(input, &destination); err != nil || !reflect.DeepEqual(destination, test.want) || string(input) != test.raw {
 			t.Errorf("replacement inherited omitted fields: %#v, %v", destination, err)
@@ -339,7 +341,7 @@ func TestNegotiationControlsSetupPrevention(t *testing.T) {
 
 func assertNegotiationSetupError(t *testing.T, err error) {
 	t.Helper()
-	if !errors.Is(err, errInvalidLiveTimingData) || err.Error() != "invalid F1 live timing data: decode SignalR negotiation response" || errors.Unwrap(err) != errInvalidLiveTimingData || asSetupHTTPError(err) != nil {
+	if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || err.Error() != "invalid F1 live timing data: decode SignalR negotiation response" || errors.Unwrap(err) != f1engine.ErrInvalidLiveTimingData || asSetupHTTPError(err) != nil {
 		t.Fatalf("unsanitized or misclassified setup error: %v", err)
 	}
 }
@@ -350,7 +352,7 @@ func TestNegotiationControlsDepthAndByteBounds(t *testing.T) {
 		if depth == 9998 {
 			assertNegotiationDecodeFailure(t, raw)
 		} else {
-			want := negotiateResponse{ConnectionID: "id", AvailableTransports: []negotiateTransport{{Transport: "WebSockets", TransferFormats: []jsonControlString{"Text"}}}}
+			want := negotiateResponse{ConnectionID: "id", AvailableTransports: []negotiateTransport{{Transport: "WebSockets", TransferFormats: []f1engine.JSONControlString{"Text"}}}}
 			assertNegotiationResult(t, raw, want, negotiation{connectionToken: "id"}, "")
 		}
 	}
@@ -366,7 +368,7 @@ func TestNegotiationControlsDepthAndByteBounds(t *testing.T) {
 			if got != (negotiation{connectionToken: "id"}) || !reflect.DeepEqual(cookies, []*http.Cookie{}) || err != nil {
 				t.Errorf("exact byte cap rejected: %#v, %v, %v", got, cookies, err)
 			}
-		} else if got != (negotiation{}) || cookies != nil || !errors.Is(err, errInvalidLiveTimingData) || err.Error() != "invalid F1 live timing data: SignalR negotiation response exceeds 65536 bytes" {
+		} else if got != (negotiation{}) || cookies != nil || !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || err.Error() != "invalid F1 live timing data: SignalR negotiation response exceeds 65536 bytes" {
 			t.Errorf("over byte cap accepted: %#v, %v, %v", got, cookies, err)
 		}
 		if body.closes != 1 || body.bytes != len(raw) {

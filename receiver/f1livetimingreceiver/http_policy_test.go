@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 )
 
 func TestHTTPRejectedNegotiationBodyIsUnread(t *testing.T) {
@@ -69,7 +71,7 @@ func TestHTTPStageStatusMatrix(t *testing.T) {
 				if want == httpRetry {
 					wantError.retryAt = now.Add(time.Minute)
 				}
-				if *got != wantError || got.permanent() != (want == httpStop) || errors.Is(got, errInvalidLiveTimingData) {
+				if *got != wantError || got.permanent() != (want == httpStop) || errors.Is(got, f1engine.ErrInvalidLiveTimingData) {
 					t.Fatalf("HTTP failure = %#v, want %#v", got, wantError)
 				}
 			}
@@ -100,7 +102,7 @@ func TestHTTPPreflightCookieFirstMatrix(t *testing.T) {
 					t.Fatal(err)
 				}
 			} else if status >= 200 && status < 300 {
-				if !errors.Is(err, errInvalidLiveTimingData) || asSetupHTTPError(err) != nil {
+				if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || asSetupHTTPError(err) != nil {
 					t.Fatalf("HTTP %d = %v", status, err)
 				}
 			} else if failure := asSetupHTTPError(err); failure == nil || *failure != (setupHTTPError{stage: stagePreflight, status: status}) {

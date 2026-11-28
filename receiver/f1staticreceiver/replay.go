@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 )
 
 type BatchConsumer func(ctx context.Context, batch FrozenBatch, processNow time.Time) error
@@ -57,4 +59,19 @@ func Replay(ctx context.Context, p FrozenReplayPlan, pace string, clock Clock, c
 		}
 	}
 	return nil
+}
+
+func (b FrozenBatch) engineBatch() f1engine.Batch {
+	batch := f1engine.Batch{ObservationTime: b.ObservationUTC, Source: f1engine.Feed}
+	if b.Snapshot {
+		batch.Source = f1engine.Snapshot
+	}
+	for _, rec := range b.records {
+		batch.Updates = append(batch.Updates, f1engine.Update{Source: batch.Source, Topic: rec.Topic, Payload: []byte(rec.Payload), Timestamp: rec.PublicationUTC, InitialArchiveRadio: rec.initialArchiveRadio})
+		if b.Snapshot {
+			batch.RequestedTopics = append(batch.RequestedTopics, rec.Topic)
+			batch.PresentTopics = append(batch.PresentTopics, rec.Topic)
+		}
+	}
+	return batch
 }

@@ -12,6 +12,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 	"github.com/coder/websocket"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componentstatus"
@@ -133,7 +134,7 @@ func TestOperationalShutdownTimeoutWaitsForCallbackSummary(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		r, socket, logs := operationalTestRun(t, nil)
 		entered, release := make(chan struct{}), make(chan struct{})
-		r.consume = func(context.Context, normalizedLiveTimingBatch) error {
+		r.consume = func(context.Context, f1engine.Batch) error {
 			close(entered)
 			<-release
 			return errors.New("private downstream error")
@@ -185,7 +186,7 @@ func TestOperationalSharedShutdownTimeoutKeepsOwnership(t *testing.T) {
 		}
 		r := shared.receiver
 		entered, release := make(chan struct{}), make(chan struct{})
-		r.consume = func(context.Context, normalizedLiveTimingBatch) error { close(entered); <-release; return nil }
+		r.consume = func(context.Context, f1engine.Batch) error { close(entered); <-release; return nil }
 		ctx, cancel := context.WithCancel(t.Context())
 		r.cancel, r.done = cancel, make(chan struct{})
 		r.operational.start(nil)
@@ -353,7 +354,7 @@ func TestOperationalInputDoesNotImplyRacingEmission(t *testing.T) {
 		if got := collectOperational(t, reader); !reflect.DeepEqual(got, want) {
 			t.Fatalf("input metrics = %#v, want %#v", got, want)
 		}
-		if shared.receiver.state.sessionInfo != identityGateTestState().sessionInfo {
+		if shared.receiver.state.SessionInfo != identityGateTestState(t).SessionInfo {
 			t.Fatalf("receiver state = %#v, want synchronized SessionInfo", shared.receiver.state)
 		}
 		if len(traces.AllTraces()) != 0 || len(metrics.AllMetrics()) != 0 || len(logs.AllLogs()) != 0 {

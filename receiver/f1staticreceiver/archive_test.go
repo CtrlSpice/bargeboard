@@ -64,6 +64,7 @@ func TestFrozenDelivery(t *testing.T) {
 		"SessionInfo.json": "\xef\xbb\xbf" + info, "DriverList.json": drivers,
 		"Heartbeat.jsonStream":  `00:00:02.000{"Utc":"2025-03-10T10:00:02Z"}`,
 		"Position.z.jsonStream": "00:00:03.000" + position,
+		"CarData.z.jsonStream":  `00:00:03.000"q1ZyzSspykwtVrKKjq0FAA=="`,
 		"TimingData.jsonStream": "00:00:03.000{}\n00:00:01.000null\n00:00:03.000[]",
 	}
 	c := DefaultConfig()
@@ -98,9 +99,9 @@ func TestFrozenDelivery(t *testing.T) {
 	if p.Identity.MeetingKey != 78 || p.RouteKey != 175 || p.CircuitKey != 3 || p.ScheduledStart != start || p.ScheduledEnd != start.Add(2*time.Hour) {
 		t.Fatal("descriptor")
 	}
-	wantTopics := []string{"SessionInfo", "Heartbeat", "Position", "TimingData", "TimingData", "TimingData"}
-	coords := []int{0, 1, 2, 2, 2, 2}
-	pub := []int{1, 2, 3, 3, 1, 3}
+	wantTopics := []string{"SessionInfo", "Heartbeat", "Position", "CarData", "TimingData", "TimingData", "TimingData"}
+	coords := []int{0, 1, 2, 2, 2, 2, 2}
+	pub := []int{1, 2, 3, 3, 3, 1, 3}
 	for _, speed := range []string{"instant", "1x", "10x", "100x"} {
 		t.Run(speed, func(t *testing.T) {
 			host := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -117,6 +118,9 @@ func TestFrozenDelivery(t *testing.T) {
 				}
 				if i == 0 && (len(r) != 2 || r[1].Topic != "DriverList") {
 					t.Fatal("bootstrap not atomic")
+				}
+				if r[0].Topic == "CarData" && r[0].Payload != `{"Entries":[]}` {
+					t.Fatalf("CarData payload: %s", r[0].Payload)
 				}
 				scale, _ := multiplier(speed)
 				elapsed := time.Duration(0)

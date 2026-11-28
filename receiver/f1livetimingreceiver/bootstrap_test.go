@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 )
 
 func TestBootstrapConnection(t *testing.T) {
@@ -84,7 +86,7 @@ func TestBootstrapConnectionRejectsInvalidPreflight(t *testing.T) {
 				if failure := asSetupHTTPError(err); failure == nil || *failure != (setupHTTPError{stage: stagePreflight, status: 401}) {
 					t.Errorf("bootstrapConnection() HTTP failure = %#v", failure)
 				}
-			} else if !errors.Is(err, errInvalidLiveTimingData) {
+			} else if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 				t.Errorf("bootstrapConnection() error does not wrap errInvalidLiveTimingData")
 			}
 		})
@@ -277,7 +279,7 @@ func TestCredentialsFromPreflight(t *testing.T) {
 					if failure := asSetupHTTPError(err); failure == nil || *failure != (setupHTTPError{stage: stagePreflight, status: 405}) {
 						t.Errorf("HTTP failure = %#v", failure)
 					}
-				} else if !errors.Is(err, errInvalidLiveTimingData) {
+				} else if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 					t.Errorf("credentialsFromPreflight() error does not wrap errInvalidLiveTimingData")
 				}
 				return

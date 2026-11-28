@@ -11,6 +11,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 	"github.com/coder/websocket"
 )
 
@@ -93,8 +94,8 @@ func TestLivenessWebSocketSuccessfulReadCancellationAndControlPings(t *testing.T
 			t.Fatal(err)
 		}
 		server := <-peer
-		var batches []liveTimingBatch
-		result := startLivenessRead(t.Context(), connection, func(_ context.Context, batch liveTimingBatch) error {
+		var batches []f1engine.WireBatch
+		result := startLivenessRead(t.Context(), connection, func(_ context.Context, batch f1engine.WireBatch) error {
 			batches = append(batches, batch)
 			return nil
 		})
@@ -125,8 +126,8 @@ func TestLivenessWebSocketSuccessfulReadCancellationAndControlPings(t *testing.T
 		time.Sleep(1)
 		requireLivenessResult(t, result, errSignalRReceiveTimeout)
 		<-peerDone
-		want := []liveTimingBatch{
-			{source: liveTimingUpdateSourceSnapshot, requestedTopics: subscriptionTopics(), presentTopics: []string{}, updates: []liveTimingUpdate{}},
+		want := []f1engine.WireBatch{
+			{Source: f1engine.Snapshot, RequestedTopics: subscriptionTopics(), PresentTopics: []string{}, Updates: []f1engine.WireUpdate{}},
 			incrementalWantFeed("Started", "2026-08-21T10:30:00Z"),
 			incrementalWantFeed("Finished", "2026-08-21T10:31:00Z"),
 		}
@@ -160,7 +161,7 @@ func TestLivenessWebSocketPingWriteTimeoutClosesBlockedRead(t *testing.T) {
 		}
 		server := <-peer
 		connection.pending = []byte(`{"type":3,"invocationId":"0"}` + "\x1e")
-		result := startLivenessRead(t.Context(), connection, func(context.Context, liveTimingBatch) error { return nil })
+		result := startLivenessRead(t.Context(), connection, func(context.Context, f1engine.WireBatch) error { return nil })
 		for range 4 {
 			time.Sleep(10 * time.Second)
 			if err := server.Write(t.Context(), websocket.MessageText, []byte(hubPingRecord)); err != nil {

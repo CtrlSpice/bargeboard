@@ -9,6 +9,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componentstatus"
 	"go.opentelemetry.io/collector/receiver/receivertest"
@@ -168,8 +169,8 @@ func TestPayloadQualityRuntimeRejectsWholeSnapshot(t *testing.T) {
 		r, socket, logs := operationalTestRun(t, host)
 		requireAwaitingInput(t, host)
 		origin := time.Now()
-		var delivered []normalizedLiveTimingBatch
-		r.consume = func(_ context.Context, batch normalizedLiveTimingBatch) error {
+		var delivered []f1engine.Batch
+		r.consume = func(_ context.Context, batch f1engine.Batch) error {
 			delivered = append(delivered, batch)
 			return nil
 		}
@@ -177,9 +178,9 @@ func TestPayloadQualityRuntimeRejectsWholeSnapshot(t *testing.T) {
 		socket.reads <- livenessRead{contents: incrementalFeedA + `{"type":3,"invocationId":"0","result":{"SessionInfo":{"unused":"\uD800"},"CarData.z":"AAAA"}}` + "\x1e" + incrementalFeedC}
 		<-r.done
 		want := operationalState{started: origin, outageStarted: origin, lastUpdate: origin, outage: true, stopped: true, summarized: true, outages: 1, updates: 1}
-		wantBatch := normalizedLiveTimingBatch{source: liveTimingUpdateSourceFeed, requestedTopics: []string{}, presentTopics: []string{}, observationTime: origin,
-			updates: []normalizedLiveTimingUpdate{{topic: "SessionStatus", payload: []byte(`{"Status":"Started"}`), timestamp: time.Date(2026, 8, 21, 10, 30, 0, 0, time.UTC), source: liveTimingUpdateSourceFeed}}}
-		if *r.operational.state.Load() != want || !reflect.DeepEqual(delivered, []normalizedLiveTimingBatch{wantBatch}) {
+		wantBatch := f1engine.Batch{Source: f1engine.Feed, RequestedTopics: []string{}, PresentTopics: []string{}, ObservationTime: origin,
+			Updates: []f1engine.Update{{Topic: "SessionStatus", Payload: []byte(`{"Status":"Started"}`), Timestamp: time.Date(2026, 8, 21, 10, 30, 0, 0, time.UTC), Source: f1engine.Feed}}}
+		if *r.operational.state.Load() != want || !reflect.DeepEqual(delivered, []f1engine.Batch{wantBatch}) {
 			t.Fatalf("state=%+v delivered=%#v; want %+v / %#v", r.operational.state.Load(), delivered, want, wantBatch)
 		}
 		assertPayloadQualityWarnings(t, logs, nil, nil)
@@ -227,7 +228,7 @@ func TestPayloadQualitySummaryWaitsForConsumer(t *testing.T) {
 		r, socket, logs := operationalTestRun(t, nil)
 		origin := time.Now()
 		entered, release := make(chan struct{}), make(chan struct{})
-		r.consume = func(context.Context, normalizedLiveTimingBatch) error {
+		r.consume = func(context.Context, f1engine.Batch) error {
 			close(entered)
 			<-release
 			return errors.New("synthetic private consumer failure")
@@ -277,14 +278,14 @@ func TestPayloadQualityDistinctInputsHaveFixedCardinality(t *testing.T) {
 		r.apply(operationalInput{event: opConnected})
 		for i := range 128 {
 			// Vary topics, nested keys, and text independently; none is a label.
-			batch, err := normalizeLiveTimingBatch(liveTimingBatch{source: liveTimingUpdateSourceFeed, updates: []liveTimingUpdate{{
-				topic: fmt.Sprintf("Unused%d", i), payload: []byte(fmt.Sprintf(`{"key%d":{"nested%d":"text%d\uD800","\uDC00":null}}`, i, i*2, i*3)),
-				timestamp: "2026-08-21T10:30:00Z", source: liveTimingUpdateSourceFeed,
+			batch, err := f1engine.NormalizeBatch(f1engine.WireBatch{Source: f1engine.Feed, Updates: []f1engine.WireUpdate{{
+				Topic: fmt.Sprintf("Unused%d", i), Payload: []byte(fmt.Sprintf(`{"key%d":{"nested%d":"text%d\uD800","\uDC00":null}}`, i, i*2, i*3)),
+				Timestamp: "2026-08-21T10:30:00Z", Source: f1engine.Feed,
 			}}}, origin)
 			if err != nil {
 				t.Fatal(err)
 			}
-			r.apply(operationalInput{event: opBatch, updates: len(batch.updates), invalidUnicodeUpdates: batch.invalidUnicodeUpdates})
+			r.apply(operationalInput{event: opBatch, updates: len(batch.Updates), invalidUnicodeUpdates: batch.InvalidUnicodeUpdates})
 		}
 		assertPayloadQualityWarnings(t, logs, []int64{1}, []int64{1})
 		r.apply(operationalInput{event: opPeriodicTick})

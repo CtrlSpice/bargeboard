@@ -10,6 +10,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 	"github.com/coder/websocket"
 )
 
@@ -70,28 +71,28 @@ func TestLivenessIdleReadExpires(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 		defer cancel()
 		started := time.Now()
-		err := connection.read(ctx, func(context.Context, liveTimingBatch) error {
+		err := connection.read(ctx, func(context.Context, f1engine.WireBatch) error {
 			t.Error("idle connection delivered a batch")
 			return nil
 		})
 		if elapsed := time.Since(started); elapsed != 30*time.Second {
 			t.Errorf("idle read lasted %s, want 30s", elapsed)
 		}
-		if err == nil || err.Error() != "SignalR receive timeout" || errors.Is(err, errInvalidLiveTimingData) {
+		if err == nil || err.Error() != "SignalR receive timeout" || errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 			t.Errorf("idle read = %v, want sanitized transient receive timeout", err)
 		}
 	})
 }
 
-func startLivenessRead(ctx context.Context, connection *signalRConnection, consume func(context.Context, liveTimingBatch) error) <-chan error {
+func startLivenessRead(ctx context.Context, connection *signalRConnection, consume func(context.Context, f1engine.WireBatch) error) <-chan error {
 	result := make(chan error, 1)
 	go func() { result <- connection.read(ctx, consume) }()
 	synctest.Wait()
 	return result
 }
 
-func noLivenessBatch(t *testing.T) func(context.Context, liveTimingBatch) error {
-	return func(context.Context, liveTimingBatch) error {
+func noLivenessBatch(t *testing.T) func(context.Context, f1engine.WireBatch) error {
+	return func(context.Context, f1engine.WireBatch) error {
 		t.Error("unexpected batch")
 		return nil
 	}
@@ -139,13 +140,13 @@ func TestLivenessSubscribeClockAndPingEncoding(t *testing.T) {
 		time.Sleep(7 * time.Second) // Initial handoff must not restart keepalive.
 		connection.pending = []byte(`{"type":3,"invocationId":"0"}` + "\x1e")
 		ctx, cancel := context.WithCancel(t.Context())
-		var batches []liveTimingBatch
-		result := startLivenessRead(ctx, connection, func(_ context.Context, batch liveTimingBatch) error {
+		var batches []f1engine.WireBatch
+		result := startLivenessRead(ctx, connection, func(_ context.Context, batch f1engine.WireBatch) error {
 			batches = append(batches, batch)
 			return nil
 		})
-		wantBatch := liveTimingBatch{source: liveTimingUpdateSourceSnapshot, requestedTopics: subscriptionTopics(), presentTopics: []string{}, updates: []liveTimingUpdate{}}
-		if !reflect.DeepEqual(batches, []liveTimingBatch{wantBatch}) || connection.requestedTopics != nil || connection.pending != nil {
+		wantBatch := f1engine.WireBatch{Source: f1engine.Snapshot, RequestedTopics: subscriptionTopics(), PresentTopics: []string{}, Updates: []f1engine.WireUpdate{}}
+		if !reflect.DeepEqual(batches, []f1engine.WireBatch{wantBatch}) || connection.requestedTopics != nil || connection.pending != nil {
 			t.Fatal("initial pending completion or manifest was not consumed")
 		}
 		time.Sleep(8*time.Second - 1)
@@ -204,8 +205,8 @@ func TestLivenessAcceptedRecordsResetReceive(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				socket := newLivenessSocket()
 				connection := &signalRConnection{conn: socket}
-				var batches []liveTimingBatch
-				result := startLivenessRead(t.Context(), connection, func(_ context.Context, batch liveTimingBatch) error {
+				var batches []f1engine.WireBatch
+				result := startLivenessRead(t.Context(), connection, func(_ context.Context, batch f1engine.WireBatch) error {
 					batches = append(batches, batch)
 					return nil
 				})
@@ -218,9 +219,9 @@ func TestLivenessAcceptedRecordsResetReceive(t *testing.T) {
 				requireLivenessRunning(t, result)
 				time.Sleep(1)
 				requireLivenessResult(t, result, errSignalRReceiveTimeout)
-				var want []liveTimingBatch
+				var want []f1engine.WireBatch
 				if record == incrementalFeedA {
-					want = []liveTimingBatch{incrementalWantFeed("Started", "2026-08-21T10:30:00Z"), incrementalWantFeed("Started", "2026-08-21T10:30:00Z")}
+					want = []f1engine.WireBatch{incrementalWantFeed("Started", "2026-08-21T10:30:00Z"), incrementalWantFeed("Started", "2026-08-21T10:30:00Z")}
 				}
 				if !reflect.DeepEqual(batches, want) || len(socket.written()) != 0 || connection.requestedTopics != nil {
 					t.Fatalf("batches = %#v, writes = %q, manifest = %q", batches, socket.written(), connection.requestedTopics)
@@ -288,8 +289,8 @@ func TestLivenessLocalProcessingPausesBothBudgetsButNotPings(t *testing.T) {
 				if err := connection.subscribe(t.Context()); err != nil {
 					t.Fatal(err)
 				}
-				var batches []liveTimingBatch
-				result := startLivenessRead(t.Context(), connection, func(_ context.Context, batch liveTimingBatch) error {
+				var batches []f1engine.WireBatch
+				result := startLivenessRead(t.Context(), connection, func(_ context.Context, batch f1engine.WireBatch) error {
 					// Normalization and the receiver's synchronous consume execute here.
 					time.Sleep(time.Minute)
 					batches = append(batches, batch)
@@ -300,13 +301,13 @@ func TestLivenessLocalProcessingPausesBothBudgetsButNotPings(t *testing.T) {
 				want := incrementalWantFeed("Started", "2026-08-21T10:30:00Z")
 				if completion {
 					record = `{"type":3,"invocationId":"0","result":null}` + "\x1e"
-					want = liveTimingBatch{source: liveTimingUpdateSourceSnapshot, requestedTopics: subscriptionTopics(), presentTopics: []string{}, updates: []liveTimingUpdate{}}
+					want = f1engine.WireBatch{Source: f1engine.Snapshot, RequestedTopics: subscriptionTopics(), PresentTopics: []string{}, Updates: []f1engine.WireUpdate{}}
 				}
 				socket.reads <- livenessRead{contents: record}
 				synctest.Wait()
 				time.Sleep(time.Minute)
 				requireLivenessRunning(t, result)
-				if len(socket.written()) != 5 || !reflect.DeepEqual(batches, []liveTimingBatch{want}) {
+				if len(socket.written()) != 5 || !reflect.DeepEqual(batches, []f1engine.WireBatch{want}) {
 					t.Fatalf("local work: writes = %q, batches = %#v", socket.written(), batches)
 				}
 				remaining, expiry := 20*time.Second, errSignalRSubscriptionTimeout
@@ -343,7 +344,7 @@ func TestLivenessPingFailureInterruptsRead(t *testing.T) {
 				}
 				ctx, cancel := context.WithCancelCause(t.Context())
 				defer cancel(nil)
-				result := startLivenessRead(ctx, connection, func(context.Context, liveTimingBatch) error { return nil })
+				result := startLivenessRead(ctx, connection, func(context.Context, f1engine.WireBatch) error { return nil })
 				time.Sleep(15 * time.Second)
 				want := "write SignalR ping failed"
 				if failure != "peer error" {
@@ -363,7 +364,7 @@ func TestLivenessPingFailureInterruptsRead(t *testing.T) {
 				synctest.Wait()
 				select {
 				case err := <-result:
-					if err == nil || err.Error() != want || errors.Is(err, errInvalidLiveTimingData) {
+					if err == nil || err.Error() != want || errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 						t.Fatalf("ping failure = %v, want sanitized transient %q", err, want)
 					}
 					if cause := errors.Unwrap(err); cause != nil && cause != context.DeadlineExceeded {
@@ -409,11 +410,11 @@ func TestLivenessPingFailureCancelsActiveCallback(t *testing.T) {
 					}
 					return errors.New("synthetic-confidential-ping-error")
 				}
-				var batches []liveTimingBatch
+				var batches []f1engine.WireBatch
 				var callbackErr error
-				result := startLivenessRead(ctx, connection, func(callbackCtx context.Context, batch liveTimingBatch) error {
+				result := startLivenessRead(ctx, connection, func(callbackCtx context.Context, batch f1engine.WireBatch) error {
 					batches = append(batches, batch)
-					if batch.source == liveTimingUpdateSourceSnapshot {
+					if batch.Source == f1engine.Snapshot {
 						return nil
 					}
 					<-callbackCtx.Done()
@@ -443,7 +444,7 @@ func TestLivenessPingFailureCancelsActiveCallback(t *testing.T) {
 				releaseCallback <- struct{}{}
 				synctest.Wait()
 				err := <-result
-				if err == nil || err.Error() != wantError || errors.Is(err, errInvalidLiveTimingData) {
+				if err == nil || err.Error() != wantError || errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 					t.Fatalf("read after callback completion = %v, want %q", err, wantError)
 				}
 				var wantCause error
@@ -458,8 +459,8 @@ func TestLivenessPingFailureCancelsActiveCallback(t *testing.T) {
 				default:
 					t.Fatal("read returned before the ping writer exited")
 				}
-				want := []liveTimingBatch{
-					{source: liveTimingUpdateSourceSnapshot, requestedTopics: subscriptionTopics(), presentTopics: []string{}, updates: []liveTimingUpdate{}},
+				want := []f1engine.WireBatch{
+					{Source: f1engine.Snapshot, RequestedTopics: subscriptionTopics(), PresentTopics: []string{}, Updates: []f1engine.WireUpdate{}},
 					incrementalWantFeed("Started", "2026-08-21T10:30:00Z"),
 				}
 				encoded, _ := encodeSubscribeInvocation(subscriptionTopics())
@@ -479,11 +480,11 @@ func TestLivenessReadExitJoinsBlockedWriter(t *testing.T) {
 		callbackErr  error
 		want         error
 	}{
-		{"invalid record", "{\x1e", nil, errInvalidLiveTimingData},
+		{"invalid record", "{\x1e", nil, f1engine.ErrInvalidLiveTimingData},
 		{"source close", incrementalClose, nil, errSignalRClosed},
 		{"reconnect close", "{\"type\":7,\"allowReconnect\":true}\x1e", nil, errSignalRReconnectAllowed},
 		{"consumer exit", incrementalFeedA, consumerErr, consumerErr},
-		{"normalization exit", incrementalFeedA, invalidLiveTimingData("synthetic normalization failure"), errInvalidLiveTimingData},
+		{"normalization exit", incrementalFeedA, f1engine.InvalidLiveTimingData("synthetic normalization failure"), f1engine.ErrInvalidLiveTimingData},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -498,7 +499,7 @@ func TestLivenessReadExitJoinsBlockedWriter(t *testing.T) {
 					exited = true
 					return ctx.Err()
 				}
-				result := startLivenessRead(t.Context(), connection, func(context.Context, liveTimingBatch) error { return test.callbackErr })
+				result := startLivenessRead(t.Context(), connection, func(context.Context, f1engine.WireBatch) error { return test.callbackErr })
 				time.Sleep(16 * time.Second)
 				socket.reads <- livenessRead{contents: test.record}
 				requireLivenessResult(t, result, test.want)
@@ -514,8 +515,8 @@ func TestLivenessFailedReadDiscardsBytesAndSanitizes(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		socket := newLivenessSocket()
 		connection := &signalRConnection{conn: socket, pending: []byte(incrementalFeedA)}
-		var batches []liveTimingBatch
-		result := startLivenessRead(t.Context(), connection, func(_ context.Context, batch liveTimingBatch) error {
+		var batches []f1engine.WireBatch
+		result := startLivenessRead(t.Context(), connection, func(_ context.Context, batch f1engine.WireBatch) error {
 			batches = append(batches, batch)
 			return nil
 		})
@@ -523,7 +524,7 @@ func TestLivenessFailedReadDiscardsBytesAndSanitizes(t *testing.T) {
 		synctest.Wait()
 		err := <-result
 		if err == nil || err.Error() != "read F1 live timing message failed" || errors.Unwrap(err) != nil ||
-			!reflect.DeepEqual(batches, []liveTimingBatch{incrementalWantFeed("Started", "2026-08-21T10:30:00Z")}) {
+			!reflect.DeepEqual(batches, []f1engine.WireBatch{incrementalWantFeed("Started", "2026-08-21T10:30:00Z")}) {
 			t.Fatalf("failed read = %v, batches = %#v", err, batches)
 		}
 	})

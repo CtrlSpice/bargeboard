@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 )
 
 func TestPayloadQualityOperationalReduction(t *testing.T) {
@@ -77,8 +79,8 @@ func TestPayloadQualityResultShapesStayBounded(t *testing.T) {
 		value  any
 		fields string
 	}{
-		{normalizedLiveTimingBatch{}, "source requestedTopics presentTopics observationTime updates invalidUnicodeUpdates"},
-		{normalizedLiveTimingUpdate{}, "topic payload timestamp source"},
+		{f1engine.Batch{}, "Source RequestedTopics PresentTopics ObservationTime Updates InvalidUnicodeUpdates"},
+		{f1engine.Update{}, "Topic Payload Timestamp Source InitialArchiveRadio"},
 		{operationalState{}, "started outageStarted lastUpdate retryAt connection subscription connectionData ready outage stopped summarized outages attempts recoveries updates consumerFailures invalidUnicodeUpdates reportedInvalidUnicodeUpdates closedOutageDuration"},
 		{operationalInput{}, "event at delay notBefore setupStage httpStatus updates invalidUnicodeUpdates snapshot"},
 	} {

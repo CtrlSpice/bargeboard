@@ -2,7 +2,6 @@ package f1livetimingreceiver
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/CtrlSpice/bargeboard/internal/circuitmap"
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componentstatus"
 	"go.opentelemetry.io/collector/consumer"
@@ -21,7 +21,7 @@ var errPermanentLiveTimingFailure = errors.New("F1 live timing receiver stopped 
 var errReceiverStopping = errors.New("F1 live timing receiver is stopping")
 
 type circuitLoadResult struct {
-	gen      sessionInfoGeneration
+	gen      f1engine.SessionInfoGeneration
 	key      int64
 	circuit  circuitmap.Map
 	err      error
@@ -35,9 +35,9 @@ type liveTimingReceiver struct {
 
 	cancel           context.CancelFunc
 	done             chan struct{}
-	state            liveTimingState
-	reduce           func(liveTimingState, normalizedLiveTimingBatch) (liveTimingReduction, error)
-	consume          func(context.Context, normalizedLiveTimingBatch) error
+	state            f1engine.State
+	reduce           func(f1engine.State, f1engine.Batch) (f1engine.Reduction, error)
+	consume          func(context.Context, f1engine.Batch) error
 	now              func() time.Time
 	retryDelay       func(int) time.Duration
 	operational      *operationalReporter
@@ -47,13 +47,13 @@ type liveTimingReceiver struct {
 	circuitResults   chan circuitLoadResult
 	circuitCancel    context.CancelFunc
 	circuitWG        sync.WaitGroup
-	circuitGen       sessionInfoGeneration
+	circuitGen       f1engine.SessionInfoGeneration
 	circuitKey       int64
 	circuitFetches   int
 	circuitRequested bool
 	circuitWarned    bool
 	circuitCurr      circuitmap.Map
-	circuitPrevID    sessionInfoIdentity
+	circuitPrevID    f1engine.SessionInfoIdentity
 	circuitPrev      circuitmap.Map
 	onCircuitSettled func()
 
@@ -73,7 +73,7 @@ func newLiveTimingReceiver(config *Config, settings receiver.Settings) *liveTimi
 				return http.ErrUseLastResponse
 			},
 		},
-		reduce:         reduceLiveTimingBatch,
+		reduce:         f1engine.ReduceBatch,
 		now:            time.Now,
 		retryDelay:     reconnectDelay,
 		circuitResults: make(chan circuitLoadResult, 1),
@@ -149,84 +149,19 @@ func (r *liveTimingReceiver) consumers() (consumer.Traces, consumer.Metrics, con
 	return r.traces, r.metrics, r.logs
 }
 
-type racingDiagnostics [3]bool
-
-func (s liveTimingState) diagnostics() racingDiagnostics {
-	return racingDiagnostics{s.idCollision, s.timing.cars.lateSample || s.timing.lateObservation || s.timing.control.blueAfterEnd,
-		s.timing.control.overflow || s.radio.overflow || len(s.timing.control.repairOverflow) > 0}
-}
-
-func (r *liveTimingReceiver) reportDiagnostics(active racingDiagnostics) {
+func (r *liveTimingReceiver) reportDiagnostics(active f1engine.RacingDiagnostics) {
 	logger := r.settings.Logger
 	if r.operational != nil && r.operational.logger != nil {
 		logger = r.operational.logger
 	}
-	for i, message := range [...]string{
-		"F1 span ID collision; affected span subtree suppressed",
-		"F1 late metric observation excluded after window finalization",
-		"F1 session record bound reached; excess records suppressed",
-	} {
-		if active[i] && !r.reported[i] && logger != nil {
+	if logger != nil {
+		var messages []string
+		r.reported, messages = active.NewMessages(r.reported)
+		for _, message := range messages {
 			logger.Warn(message)
-			r.reported[i] = true
 		}
 	}
 }
-func uniqueSessionField(raw json.RawMessage, target string) (json.RawMessage, bool, bool) {
-	var out json.RawMessage
-	count := 0
-	var issues sessionInfoIssueSet
-	ok, err := visitSessionInfoObject(raw, &issues, func(name string, val json.RawMessage) {
-		if name == target {
-			out = val
-			count++
-		}
-	})
-	if err != nil || !ok {
-		return nil, true, false
-	}
-	if count == 0 {
-		return nil, false, true
-	}
-	return out, true, count == 1
-}
-
-func sessionCircuitKey(batch normalizedLiveTimingBatch) (int64, bool) {
-	snap := batch.source == liveTimingUpdateSourceSnapshot
-	for _, u := range batch.updates {
-		if u.topic != "SessionInfo" {
-			continue
-		}
-		meeting, hasMeeting, ok := uniqueSessionField(u.payload, "Meeting")
-		if !ok {
-			return 0, true
-		}
-		if !hasMeeting {
-			return 0, snap
-		}
-		circuit, hasCircuit, ok := uniqueSessionField(meeting, "Circuit")
-		if !ok {
-			return 0, true
-		}
-		if !hasCircuit {
-			return 0, snap
-		}
-		rawKey, hasKey, ok := uniqueSessionField(circuit, "Key")
-		if !ok {
-			return 0, true
-		}
-		if !hasKey {
-			return 0, snap
-		}
-		key, ok := parsePositiveCanonicalInt64(rawKey)
-		if !ok {
-			return 0, true
-		}
-		return key, true
-	}
-	return 0, false
-}
-
 func (r *liveTimingReceiver) cancelCircuitFetch() {
 	if r.circuitCancel != nil {
 		r.circuitCancel()
@@ -246,7 +181,7 @@ func (r *liveTimingReceiver) drainCircuitResults() {
 }
 
 func (r *liveTimingReceiver) applyCircuitResult(res circuitLoadResult) {
-	if res.gen != r.state.sessionInfo.generation || res.key != r.circuitKey || !r.state.sessionInfo.identityAvailable {
+	if res.gen != r.state.SessionInfo.Generation || res.key != r.circuitKey || !r.state.SessionInfo.IdentityAvailable {
 		return
 	}
 	if res.err != nil {
@@ -272,39 +207,39 @@ func (r *liveTimingReceiver) applyCircuitResult(res circuitLoadResult) {
 	}
 }
 
-func (r *liveTimingReceiver) circuitFor(id sessionInfoIdentity) circuitmap.Map {
-	if r.state.sessionInfo.identityAvailable && id == r.state.sessionInfo.identity {
+func (r *liveTimingReceiver) circuitFor(id f1engine.SessionInfoIdentity) circuitmap.Map {
+	if r.state.SessionInfo.IdentityAvailable && id == r.state.SessionInfo.Identity {
 		return r.circuitCurr
 	}
-	if r.circuitPrevID != (sessionInfoIdentity{}) && id == r.circuitPrevID {
+	if r.circuitPrevID != (f1engine.SessionInfoIdentity{}) && id == r.circuitPrevID {
 		return r.circuitPrev
 	}
 	return circuitmap.Map{}
 }
 
-func (r *liveTimingReceiver) updateCircuit(ctx context.Context, prevID sessionInfoIdentity, prevMap circuitmap.Map, batch normalizedLiveTimingBatch, reduction liveTimingReduction) {
+func (r *liveTimingReceiver) updateCircuit(ctx context.Context, prevID f1engine.SessionInfoIdentity, prevMap circuitmap.Map, batch f1engine.Batch, reduction f1engine.Reduction) {
 	if r.circuitClient == nil {
 		return
 	}
-	if reduction.sessionInfoDisposition == sessionInfoDispositionReplaced {
+	if reduction.SessionInfoDisposition == f1engine.SessionInfoDispositionReplaced {
 		r.circuitPrevID = prevID
 		r.circuitPrev = prevMap
 	}
-	if r.state.sessionInfo.generation != r.circuitGen {
+	if r.state.SessionInfo.Generation != r.circuitGen {
 		r.cancelCircuitFetch()
-		r.circuitGen = r.state.sessionInfo.generation
+		r.circuitGen = r.state.SessionInfo.Generation
 		r.circuitKey = 0
 		r.circuitFetches = 0
 		r.circuitRequested = false
 		r.circuitWarned = false
 		r.circuitCurr = circuitmap.Map{}
 	}
-	if !r.state.sessionInfo.synchronized {
+	if !r.state.SessionInfo.Synchronized {
 		return
 	}
-	switch reduction.sessionInfoDisposition {
-	case sessionInfoDispositionInstalled, sessionInfoDispositionRefreshed, sessionInfoDispositionReplaced:
-		if key, present := sessionCircuitKey(batch); present && key != r.circuitKey {
+	switch reduction.SessionInfoDisposition {
+	case f1engine.SessionInfoDispositionInstalled, f1engine.SessionInfoDispositionRefreshed, f1engine.SessionInfoDispositionReplaced:
+		if key, present := batch.CircuitKey(); present && key != r.circuitKey {
 			r.cancelCircuitFetch()
 			r.circuitKey = key
 			r.circuitRequested = false
@@ -317,7 +252,7 @@ func (r *liveTimingReceiver) updateCircuit(ctx context.Context, prevID sessionIn
 		fetchCtx, cancel := context.WithCancel(ctx)
 		r.circuitCancel = cancel
 		client := r.circuitClient
-		gen, key, season := r.circuitGen, r.circuitKey, r.state.sessionInfo.identity.season
+		gen, key, season := r.circuitGen, r.circuitKey, r.state.SessionInfo.Identity.Season
 		r.circuitWG.Add(1)
 		go func() {
 			defer r.circuitWG.Done()
@@ -331,24 +266,24 @@ func (r *liveTimingReceiver) updateCircuit(ctx context.Context, prevID sessionIn
 	}
 }
 
-func (r *liveTimingReceiver) deliver(ctx context.Context, e liveTimingEffects) bool {
-	r.reportDiagnostics(r.state.diagnostics())
+func (r *liveTimingReceiver) deliver(ctx context.Context, e f1engine.Effects) bool {
+	r.reportDiagnostics(r.state.Diagnostics())
 	traces, metrics, logs := r.consumers()
 	version := r.settings.BuildInfo.Version
 	failed := false
-	if traces != nil && len(e.spans) > 0 {
-		var lookup func(sessionInfoIdentity) circuitmap.Map
+	if traces != nil && e.HasSpans() {
+		var lookup func(f1engine.SessionInfoIdentity) circuitmap.Map
 		if r.circuitClient != nil {
 			lookup = r.circuitFor
 		}
-		if p := projectTracesWithCircuit(version, e, lookup); p.SpanCount() > 0 && traces.ConsumeTraces(ctx, p) != nil {
+		if p := f1engine.ProjectTracesWithCircuit(version, e, lookup); p.SpanCount() > 0 && traces.ConsumeTraces(ctx, p) != nil {
 			failed = true
 		}
 	}
-	if metrics != nil && len(e.metrics) > 0 && metrics.ConsumeMetrics(ctx, projectMetrics(version, e)) != nil {
+	if metrics != nil && e.HasMetrics() && metrics.ConsumeMetrics(ctx, f1engine.ProjectMetrics(version, e)) != nil {
 		failed = true
 	}
-	if logs != nil && len(e.logs) > 0 && logs.ConsumeLogs(ctx, projectLogs(version, e)) != nil {
+	if logs != nil && e.HasLogs() && logs.ConsumeLogs(ctx, f1engine.ProjectLogs(version, e)) != nil {
 		failed = true
 	}
 	return failed
@@ -356,14 +291,14 @@ func (r *liveTimingReceiver) deliver(ctx context.Context, e liveTimingEffects) b
 
 // Keep ticks and batches on one state owner. The reader waits for each
 // callback to finish before accepting the next record.
-func (r *liveTimingReceiver) read(ctx context.Context, c *signalRConnection, consume func(context.Context, liveTimingBatch) error) error {
+func (r *liveTimingReceiver) read(ctx context.Context, c *signalRConnection, consume func(context.Context, f1engine.WireBatch) error) error {
 	t, m, l := r.consumers()
 	if t == nil && m == nil && l == nil {
 		return c.read(ctx, consume)
 	}
 	type input struct {
 		ctx   context.Context
-		batch liveTimingBatch
+		batch f1engine.WireBatch
 	}
 	inputs := make(chan input)
 	ack := make(chan error)
@@ -372,7 +307,7 @@ func (r *liveTimingReceiver) read(ctx context.Context, c *signalRConnection, con
 	defer cancelConn()
 	go func() {
 		defer cancelConn()
-		done <- c.read(connCtx, func(cbCtx context.Context, b liveTimingBatch) error {
+		done <- c.read(connCtx, func(cbCtx context.Context, b f1engine.WireBatch) error {
 			select {
 			case <-cbCtx.Done():
 				return cbCtx.Err()
@@ -399,8 +334,8 @@ func (r *liveTimingReceiver) read(ctx context.Context, c *signalRConnection, con
 }
 
 func (r *liveTimingReceiver) tick(ctx context.Context) {
-	var e liveTimingEffects
-	r.state, e = reduceLiveTimingTick(r.state, r.now())
+	var e f1engine.Effects
+	r.state, e = f1engine.ReduceTick(r.state, r.now())
 	if r.deliver(ctx, e) {
 		r.operational.apply(operationalInput{event: opConsumerFailure})
 	}
@@ -411,8 +346,8 @@ func (r *liveTimingReceiver) flushTerminal(ctx context.Context) {
 	if t == nil && m == nil && l == nil {
 		return
 	}
-	var e liveTimingEffects
-	r.state, e = reduceLiveTimingShutdown(r.state)
+	var e f1engine.Effects
+	r.state, e = f1engine.ReduceShutdown(r.state)
 	if r.deliver(context.WithoutCancel(ctx), e) && r.operational != nil {
 		r.operational.apply(operationalInput{event: opConsumerFailure})
 	}
@@ -433,28 +368,28 @@ func (r *liveTimingReceiver) run(
 	for {
 		r.operational.apply(operationalInput{event: opConnected})
 		receivedBatch := false
-		err := r.read(ctx, connection, func(cbCtx context.Context, batch liveTimingBatch) error {
-			normalized, err := normalizeLiveTimingBatch(batch, r.now())
+		err := r.read(ctx, connection, func(cbCtx context.Context, batch f1engine.WireBatch) error {
+			normalized, err := f1engine.NormalizeBatch(batch, r.now())
 			if err != nil {
 				return err
 			}
 			receivedBatch = true
-			r.operational.apply(operationalInput{event: opBatch, snapshot: normalized.source == liveTimingUpdateSourceSnapshot,
-				updates: len(normalized.updates), invalidUnicodeUpdates: normalized.invalidUnicodeUpdates})
+			r.operational.apply(operationalInput{event: opBatch, snapshot: normalized.Source == f1engine.Snapshot,
+				updates: len(normalized.Updates), invalidUnicodeUpdates: normalized.InvalidUnicodeUpdates})
 			reduction, err := r.reduce(r.state, normalized)
 			if err != nil {
 				r.operational.apply(operationalInput{event: opConsumerFailure})
 				return nil
 			}
-			prevID, prevMap := r.state.sessionInfo.identity, r.circuitCurr
-			r.state = reduction.state
+			prevID, prevMap := r.state.SessionInfo.Identity, r.circuitCurr
+			r.state = reduction.State
 			r.drainCircuitResults()
 			r.updateCircuit(ctx, prevID, prevMap, normalized, reduction)
-			if reduction.sessionInfoDisposition == sessionInfoDispositionReplaced {
-				r.reportDiagnostics(reduction.retiredDiagnostics)
+			if reduction.SessionInfoDisposition == f1engine.SessionInfoDispositionReplaced {
+				r.reportDiagnostics(reduction.RetiredDiagnostics)
 				r.reported = [3]bool{}
 			}
-			failed := r.deliver(cbCtx, reduction.effects)
+			failed := r.deliver(cbCtx, reduction.Effects)
 			if r.consume != nil && r.consume(cbCtx, normalized) != nil {
 				failed = true
 			}
@@ -467,7 +402,7 @@ func (r *liveTimingReceiver) run(
 		if ctx.Err() != nil {
 			return
 		}
-		if errors.Is(err, errInvalidLiveTimingData) {
+		if errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 			r.operational.apply(operationalInput{event: opInvalid})
 			return
 		}
@@ -478,7 +413,7 @@ func (r *liveTimingReceiver) run(
 			r.operational.apply(operationalInput{event: opSourceStopped})
 			return
 		}
-		r.state = reduceLiveTimingDisconnect(r.state)
+		r.state = f1engine.ReduceDisconnect(r.state)
 		r.operational.apply(operationalInput{event: opOutage})
 
 		var ticks <-chan time.Time
@@ -515,7 +450,7 @@ func (r *liveTimingReceiver) reconnect(ctx context.Context, ticks <-chan time.Ti
 		if ctx.Err() != nil {
 			return nil, false
 		}
-		if errors.Is(err, errInvalidLiveTimingData) {
+		if errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 			r.operational.apply(operationalInput{event: opInvalid})
 			return nil, false
 		}
