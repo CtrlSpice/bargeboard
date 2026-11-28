@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 )
 
 // Synthetic outer-grammar probes, also used as the fuzz seed corpus. Invalid
@@ -76,11 +78,11 @@ func checkRawJSONObjectGrammar(t *testing.T, raw []byte) {
 	var wantErr error
 	switch {
 	case !utf8.Valid(raw):
-		wantErr = errJSONUTF8
+		wantErr = f1engine.ErrJSONUTF8
 	case !json.Valid(raw):
-		wantErr = errJSONSyntax
+		wantErr = f1engine.ErrJSONSyntax
 	case len(trimmed) == 0 || trimmed[0] != '{':
-		wantErr = errJSONObject
+		wantErr = f1engine.ErrJSONObject
 	}
 	want, shallowErr := shallowJSONMemberOracle(raw)
 	if (shallowErr == nil) != (wantErr == nil) {
@@ -90,7 +92,7 @@ func checkRawJSONObjectGrammar(t *testing.T, raw []byte) {
 		name  string
 		visit func([]byte, func(json.RawMessage, json.RawMessage) error) error
 	}{
-		{"whole", visitRawJSONObject}, {"members", visitRawJSONObjectMembers},
+		{"whole", f1engine.VisitRawJSONObject}, {"members", f1engine.VisitRawJSONObjectMembers},
 	} {
 		var got []rawJSONTestMember
 		cursor := 0
@@ -127,13 +129,13 @@ func TestRawJSONObjectMembersValidationBeforeCallbacks(t *testing.T) {
 		calls int
 	}{
 		{`{"x":1,"y":2}`, stop, 1},
-		{`{"x":1,"y":}`, errJSONSyntax, 0},
-		{`{"x":1,"y":2} trailing`, errJSONSyntax, 0},
-		{`{"x":1,"y":` + nestedJSONArrays(10001) + `}`, errJSONSyntax, 0},
+		{`{"x":1,"y":}`, f1engine.ErrJSONSyntax, 0},
+		{`{"x":1,"y":2} trailing`, f1engine.ErrJSONSyntax, 0},
+		{`{"x":1,"y":` + nestedJSONArrays(10001) + `}`, f1engine.ErrJSONSyntax, 0},
 		{`{"\uD800":1,"y":2}`, stop, 1}, // Scalar policy still belongs to the caller.
 	} {
 		calls := 0
-		err := visitRawJSONObjectMembers([]byte(test.raw), func(key, value json.RawMessage) error {
+		err := f1engine.VisitRawJSONObjectMembers([]byte(test.raw), func(key, value json.RawMessage) error {
 			calls++
 			if (string(key) != `"x"` && string(key) != `"\uD800"`) || string(value) != `1` {
 				t.Error("visited beyond caller stop")

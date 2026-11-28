@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 	"github.com/coder/websocket"
 )
 
@@ -38,18 +39,18 @@ func (negotiation) GoString() string {
 }
 
 type negotiateResponse struct {
-	ConnectionID        jsonControlString
-	ConnectionToken     jsonControlString
+	ConnectionID        f1engine.JSONControlString
+	ConnectionToken     f1engine.JSONControlString
 	NegotiateVersion    int
-	URL                 jsonControlString
-	AccessToken         jsonControlString
+	URL                 f1engine.JSONControlString
+	AccessToken         f1engine.JSONControlString
 	ErrorNonempty       bool
 	AvailableTransports []negotiateTransport
 }
 
 type negotiateTransport struct {
-	Transport       jsonControlString
-	TransferFormats []jsonControlString
+	Transport       f1engine.JSONControlString
+	TransferFormats []f1engine.JSONControlString
 }
 
 // visitNegotiateObject applies the negotiation-only known-member policy. There
@@ -57,8 +58,8 @@ type negotiateTransport struct {
 // unknown values (including nested keys) remain opaque and need no seen state.
 func visitNegotiateObject(raw []byte, names []string, visit func(string, json.RawMessage) error) error {
 	var seen uint8
-	return visitRawJSONObject(raw, func(key, value json.RawMessage) error {
-		field, err := decodeLosslessJSONString(key)
+	return f1engine.VisitRawJSONObject(raw, func(key, value json.RawMessage) error {
+		field, err := f1engine.DecodeLosslessJSONString(key)
 		if err != nil {
 			return err
 		}
@@ -90,13 +91,13 @@ func (transport *negotiateTransport) UnmarshalJSON(raw []byte) error {
 			if err := json.Unmarshal(value, &formats); err != nil {
 				return err
 			}
-			decoded.TransferFormats = make([]jsonControlString, len(formats))
+			decoded.TransferFormats = make([]f1engine.JSONControlString, len(formats))
 			for i, rawFormat := range formats {
-				format, err := decodeLosslessJSONString(rawFormat)
+				format, err := f1engine.DecodeLosslessJSONString(rawFormat)
 				if err != nil {
 					return err
 				}
-				decoded.TransferFormats[i] = jsonControlString(format)
+				decoded.TransferFormats[i] = f1engine.JSONControlString(format)
 			}
 		}
 		return nil
@@ -131,9 +132,9 @@ func decodeNegotiateResponse(raw []byte) (negotiateResponse, error) {
 		case "availableTransports":
 			destination = &response.AvailableTransports
 		case "error":
-			isString, empty := jsonStringShape(value)
+			isString, empty := f1engine.JSONStringShape(value)
 			if !isString {
-				return errJSONString
+				return f1engine.ErrJSONString
 			}
 			response.ErrorNonempty = !empty
 			return nil
@@ -180,7 +181,7 @@ func connectSignalR(ctx context.Context, client *http.Client, cfg *Config) (*sig
 		return nil, err
 	}
 	if !hasAffinityCookie(negotiateCookies) {
-		return nil, invalidLiveTimingData("SignalR affinity cookie does not apply to the negotiation endpoint")
+		return nil, f1engine.InvalidLiveTimingData("SignalR affinity cookie does not apply to the negotiation endpoint")
 	}
 
 	negotiation, responseCookies, err := negotiate(
@@ -207,7 +208,7 @@ func connectSignalR(ctx context.Context, client *http.Client, cfg *Config) (*sig
 		return nil, err
 	}
 	if !hasAffinityCookie(upgradeCookies) {
-		return nil, invalidLiveTimingData("SignalR affinity cookie does not apply to the WebSocket endpoint")
+		return nil, f1engine.InvalidLiveTimingData("SignalR affinity cookie does not apply to the WebSocket endpoint")
 	}
 
 	connection, response, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{
@@ -223,7 +224,7 @@ func connectSignalR(ctx context.Context, client *http.Client, cfg *Config) (*sig
 		}
 		if response != nil {
 			if response.StatusCode == http.StatusSwitchingProtocols {
-				return nil, invalidLiveTimingData("SignalR WebSocket upgrade response is invalid")
+				return nil, f1engine.InvalidLiveTimingData("SignalR WebSocket upgrade response is invalid")
 			}
 			return nil, setupHTTPFailure(stageUpgrade, response.StatusCode, "", time.Time{})
 		}
@@ -266,7 +267,7 @@ func (c *signalRConnection) subscribe(ctx context.Context) error {
 
 func (c *signalRConnection) read(
 	ctx context.Context,
-	consume func(context.Context, liveTimingBatch) error,
+	consume func(context.Context, f1engine.WireBatch) error,
 ) (result error) {
 	// Subscription success is the initial clock boundary. Charge the handoff
 	// to this read owner once, then pause while processing handshake pending data.
@@ -302,7 +303,7 @@ func (c *signalRConnection) read(
 		}
 		if callerErr != nil {
 			result = callerErr
-		} else if pingErr != nil && !errors.Is(result, errInvalidLiveTimingData) &&
+		} else if pingErr != nil && !errors.Is(result, f1engine.ErrInvalidLiveTimingData) &&
 			!errors.Is(result, errSignalRClosed) && !errors.Is(result, errSignalRReconnectAllowed) {
 			result = pingErr
 		}
@@ -328,14 +329,14 @@ func (c *signalRConnection) read(
 				return err
 			}
 			if batch != nil {
-				if batch.source == liveTimingUpdateSourceSnapshot {
+				if batch.Source == f1engine.Snapshot {
 					c.requestedTopics = nil
 				}
 				if err := consume(runCtx, *batch); err != nil {
 					return fmt.Errorf("consume F1 live timing batch: %w", err)
 				}
 			}
-			budget = budget.accepted(batch != nil && batch.source == liveTimingUpdateSourceSnapshot)
+			budget = budget.accepted(batch != nil && batch.Source == f1engine.Snapshot)
 			continue
 		}
 
@@ -348,7 +349,7 @@ func (c *signalRConnection) read(
 		cancelRead()
 		if err != nil {
 			if invalidWebSocketRead(err) {
-				return invalidLiveTimingData("F1 live timing WebSocket data is invalid")
+				return f1engine.InvalidLiveTimingData("F1 live timing WebSocket data is invalid")
 			}
 			if expired := budget.expired(); expired != nil {
 				return expired
@@ -356,7 +357,7 @@ func (c *signalRConnection) read(
 			return sanitizedTransportError(runCtx, "read F1 live timing message", err)
 		}
 		if messageType != websocket.MessageText {
-			return invalidLiveTimingData("F1 live timing used a non-text WebSocket message")
+			return f1engine.InvalidLiveTimingData("F1 live timing used a non-text WebSocket message")
 		}
 		buffered.contents = append(buffered.contents, contents...)
 	}
@@ -401,7 +402,7 @@ func negotiate(
 		return negotiation{}, nil, sanitizedTransportError(ctx, "read SignalR negotiation response", err)
 	}
 	if len(contents) > maxNegotiateResponseSize {
-		return negotiation{}, nil, invalidLiveTimingData(
+		return negotiation{}, nil, f1engine.InvalidLiveTimingData(
 			fmt.Sprintf("SignalR negotiation response exceeds %d bytes", maxNegotiateResponseSize),
 		)
 	}
@@ -438,33 +439,33 @@ func negotiateEndpoint(raw string) (string, error) {
 
 func parseNegotiateResponse(contents []byte) (negotiation, error) {
 	if !utf8.Valid(contents) {
-		return negotiation{}, invalidLiveTimingData("SignalR negotiation response is not UTF-8")
+		return negotiation{}, f1engine.InvalidLiveTimingData("SignalR negotiation response is not UTF-8")
 	}
 	response, err := decodeNegotiateResponse(contents)
 	if err != nil {
-		return negotiation{}, invalidLiveTimingData("decode SignalR negotiation response")
+		return negotiation{}, f1engine.InvalidLiveTimingData("decode SignalR negotiation response")
 	}
 	if response.ErrorNonempty {
-		return negotiation{}, invalidLiveTimingData("SignalR negotiation rejected the connection")
+		return negotiation{}, f1engine.InvalidLiveTimingData("SignalR negotiation rejected the connection")
 	}
 	if response.URL != "" || response.AccessToken != "" {
-		return negotiation{}, invalidLiveTimingData("SignalR negotiation redirects are not supported")
+		return negotiation{}, f1engine.InvalidLiveTimingData("SignalR negotiation redirects are not supported")
 	}
 
 	if response.NegotiateVersion < 0 || response.NegotiateVersion > 1 {
-		return negotiation{}, invalidLiveTimingData(
+		return negotiation{}, f1engine.InvalidLiveTimingData(
 			fmt.Sprintf("SignalR negotiation returned unsupported version %d", response.NegotiateVersion),
 		)
 	}
 	connectionToken := response.ConnectionID
 	if response.NegotiateVersion >= 1 {
 		if response.ConnectionID == "" {
-			return negotiation{}, invalidLiveTimingData("SignalR negotiation did not return a connection ID")
+			return negotiation{}, f1engine.InvalidLiveTimingData("SignalR negotiation did not return a connection ID")
 		}
 		connectionToken = response.ConnectionToken
 	}
 	if connectionToken == "" {
-		return negotiation{}, invalidLiveTimingData("SignalR negotiation did not return a connection token")
+		return negotiation{}, f1engine.InvalidLiveTimingData("SignalR negotiation did not return a connection token")
 	}
 
 	for _, transport := range response.AvailableTransports {
@@ -477,7 +478,7 @@ func parseNegotiateResponse(contents []byte) (negotiation, error) {
 			}
 		}
 	}
-	return negotiation{}, invalidLiveTimingData("SignalR negotiation does not support WebSockets with text frames")
+	return negotiation{}, f1engine.InvalidLiveTimingData("SignalR negotiation does not support WebSockets with text frames")
 }
 
 func cookiesForEndpoint(
@@ -562,19 +563,19 @@ func readHandshakeResponse(ctx context.Context, connection signalRSocket) ([]byt
 		messageType, contents, err := connection.Read(ctx)
 		if err != nil {
 			if invalidWebSocketRead(err) {
-				return nil, invalidLiveTimingData("SignalR handshake WebSocket data is invalid")
+				return nil, f1engine.InvalidLiveTimingData("SignalR handshake WebSocket data is invalid")
 			}
 			return nil, sanitizedTransportError(ctx, "read SignalR handshake", err)
 		}
 		if messageType != websocket.MessageText {
-			return nil, invalidLiveTimingData("SignalR handshake used a non-text WebSocket message")
+			return nil, f1engine.InvalidLiveTimingData("SignalR handshake used a non-text WebSocket message")
 		}
 		buffered = append(buffered, contents...)
 
 		record, remaining, complete := splitFirstRecord(buffered, scanned)
 		if !complete {
 			if len(buffered) > maxHandshakeResponseSize {
-				return nil, invalidLiveTimingData(
+				return nil, f1engine.InvalidLiveTimingData(
 					fmt.Sprintf("SignalR handshake response exceeds %d bytes", maxHandshakeResponseSize),
 				)
 			}
@@ -582,7 +583,7 @@ func readHandshakeResponse(ctx context.Context, connection signalRSocket) ([]byt
 			continue
 		}
 		if len(record) > maxHandshakeResponseSize {
-			return nil, invalidLiveTimingData(
+			return nil, f1engine.InvalidLiveTimingData(
 				fmt.Sprintf("SignalR handshake response exceeds %d bytes", maxHandshakeResponseSize),
 			)
 		}
@@ -611,12 +612,12 @@ func splitFirstRecord(contents []byte, scanned int) (record, remaining []byte, c
 
 func parseHandshakeResponse(record []byte) error {
 	if !utf8.Valid(record) {
-		return invalidLiveTimingData("SignalR handshake response is not UTF-8")
+		return f1engine.InvalidLiveTimingData("SignalR handshake response is not UTF-8")
 	}
 	var hasType bool
 	var encodedError json.RawMessage
-	err := visitRawJSONObject(record, func(key, value json.RawMessage) error {
-		field, err := decodeLosslessJSONString(key)
+	err := f1engine.VisitRawJSONObject(record, func(key, value json.RawMessage) error {
+		field, err := f1engine.DecodeLosslessJSONString(key)
 		if err != nil {
 			return err
 		}
@@ -629,19 +630,19 @@ func parseHandshakeResponse(record []byte) error {
 		return nil
 	})
 	if err != nil {
-		return invalidLiveTimingData("decode SignalR handshake response")
+		return f1engine.InvalidLiveTimingData("decode SignalR handshake response")
 	}
 	if hasType {
-		return invalidLiveTimingData("expected a SignalR handshake response")
+		return f1engine.InvalidLiveTimingData("expected a SignalR handshake response")
 	}
 	if encodedError == nil {
 		return nil
 	}
-	isString, empty := jsonStringShape(encodedError)
+	isString, empty := f1engine.JSONStringShape(encodedError)
 	if !isString || empty {
-		return invalidLiveTimingData("decode SignalR handshake error")
+		return f1engine.InvalidLiveTimingData("decode SignalR handshake error")
 	}
-	return invalidLiveTimingData("SignalR handshake rejected the connection")
+	return f1engine.InvalidLiveTimingData("SignalR handshake rejected the connection")
 }
 
 func invalidWebSocketRead(err error) bool {

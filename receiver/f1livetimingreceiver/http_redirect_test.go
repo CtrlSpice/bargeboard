@@ -9,6 +9,8 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 )
 
 func TestHTTPRedirectClassificationBeforeLocationParsing(t *testing.T) {
@@ -43,7 +45,7 @@ func TestHTTPRedirectClassificationBeforeLocationParsing(t *testing.T) {
 						t.Fatal("rejected negotiation returned state")
 					}
 				}
-				if failure := asSetupHTTPError(err); failure == nil || *failure != (setupHTTPError{stage: stage, status: 302}) || !failure.permanent() || errors.Unwrap(err) != nil || errors.Is(err, errInvalidLiveTimingData) {
+				if failure := asSetupHTTPError(err); failure == nil || *failure != (setupHTTPError{stage: stage, status: 302}) || !failure.permanent() || errors.Unwrap(err) != nil || errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 					t.Errorf("error=%v; want bare terminal HTTP 302 at %s", err, stage)
 				}
 				for _, format := range []string{"%v", "%+v", "%#v"} {

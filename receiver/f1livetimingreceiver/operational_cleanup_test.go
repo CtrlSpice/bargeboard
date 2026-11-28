@@ -12,6 +12,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/receiver"
 	"go.opentelemetry.io/collector/receiver/receivertest"
@@ -331,7 +332,7 @@ func TestOperationalCleanupFailedStartPreservesCause(t *testing.T) {
 		ctx, cancel := context.WithTimeoutCause(t.Context(), time.Millisecond, errors.New("private start deadline"))
 		defer cancel()
 		err = shared.Start(ctx, nil)
-		if !errors.Is(err, errInvalidLiveTimingData) || !errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "private") {
+		if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || !errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "private") {
 			t.Fatalf("Start lost its sanitized cause or cleanup deadline: %v", err)
 		}
 		<-provider.entered

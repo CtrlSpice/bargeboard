@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 	"github.com/coder/websocket"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/consumer/consumertest"
@@ -121,11 +122,10 @@ func TestTransportLossCancelsTimerDelivery(t *testing.T) {
 	r.retryDelay = func(int) time.Duration { return 0 }
 	ticks := make(chan time.Time, 1)
 	r.newRacingTicker = func() (<-chan time.Time, func()) { return ticks, func() {} }
-	r.state = identityGateTestState()
-	r.state.drivers = fieldRoster()
-	r.state.timing.drivers = map[int64]timingDriver{1: {driverRegistryEntry: r.state.drivers.drivers[0], position: 1}}
+	r.state = runtimeRoster(t)
+	r.state = runtimeFeed(t, r.state, 2, "TimingData", `{"Lines":{"1":{"Position":"1"}}}`)
 	r.now = func() time.Time { return fieldTime(100) }
-	r.state.origin = fieldTime(1)
+	r.state.Origin = fieldTime(1)
 	m, err := consumer.NewMetrics(func(cb context.Context, _ pmetric.Metrics) error { close(blocked); <-cb.Done(); return cb.Err() })
 	if err != nil {
 		t.Fatal(err)
@@ -148,14 +148,8 @@ func TestRacingDiagnosticsUseStaticMessagesOnce(t *testing.T) {
 	settings := receivertest.NewNopSettings(Type)
 	r := newLiveTimingReceiver(nil, settings)
 	r.operational = &operationalReporter{logger: zap.New(core)}
-	r.state.idCollision = true
-	r.state.timing.control.repairOverflow = map[int64]bool{7: true}
-	s := &r.state.timing
-	s.deltaStart = fieldTime(1)
-	s.streamTimes = map[string]time.Time{"private instrument": fieldTime(11)}
-	s.observe("private instrument", sessionFixture().identity, fieldTime(3), 1, nil)
 	for range 3 {
-		r.deliver(t.Context(), liveTimingEffects{})
+		r.reportDiagnostics(f1engine.RacingDiagnostics{true, true, true})
 	}
 	want := []string{"F1 span ID collision; affected span subtree suppressed", "F1 late metric observation excluded after window finalization", "F1 session record bound reached; excess records suppressed"}
 	if entries.Len() != len(want) {
@@ -192,14 +186,11 @@ func TestGraceExpiresDuringReconnect(t *testing.T) {
 				}
 				return time.Hour
 			}
-			o := sessionFixture()
-			r.state = identityGateTestState()
-			r.state.origin = o.observed
-			r.state.sessionInfo.identity = o.identity
-			r.state.sessionInfo.synchronized = false
-			r.state.drivers = fieldRoster()
-			r.state.timing, _ = applySessionStatusTransition(timingStart(o), o, sessionStatusTransition{current: "Finalised", utc: fieldTime(12)}, r.state.drivers)
-			r.now = func() time.Time { return o.observed.Add(5 * time.Minute) }
+			r.state = runtimeRoster(t)
+			r.state = runtimeFeed(t, r.state, 1, "SessionData", `{"StatusSeries":{"0":{"Utc":"1970-01-01T00:00:01Z","SessionStatus":"Started"}}}`)
+			r.state = runtimeFeed(t, r.state, 12, "SessionData", `{"StatusSeries":{"1":{"Utc":"1970-01-01T00:00:12Z","SessionStatus":"Finalised"}}}`)
+			r.state = f1engine.ReduceDisconnect(r.state)
+			r.now = func() time.Time { return fieldTime(312) }
 			ticks := make(chan time.Time)
 			var tickers int
 			r.newRacingTicker = func() (<-chan time.Time, func()) {
@@ -346,14 +337,14 @@ func TestProjectionRuntime(t *testing.T) {
 					}
 				}
 			}
-			id := r.state.sessionInfo.identity
-			root := deterministicRootSpanID(id, 1)
+			id := r.state.SessionInfo.Identity
+			root := f1engine.DeterministicRootSpanID(id, 1)
 			bodies := map[string]int{}
 			for _, batch := range ls.AllLogs() {
 				check((&plog.JSONMarshaler{}).MarshalLogs(batch))
 				for _, p := range batch.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().All() {
 					bodies[p.Body().Str()]++
-					if p.Body().Str() == "f1.team_radio.available" && (p.SpanID() != root || p.TraceID() != deterministicTraceID(id, 1)) {
+					if p.Body().Str() == "f1.team_radio.available" && (p.SpanID() != root || p.TraceID() != f1engine.DeterministicTraceID(id, 1)) {
 						t.Fatal("uncorrelated radio")
 					}
 				}
@@ -370,7 +361,7 @@ func TestProjectionRuntime(t *testing.T) {
 					names[m.Name()] = true
 				}
 			}
-			for _, name := range []string{currentLapMetric, totalLapsMetric, clockMetric, "f1.field.speed", "f1.driver.blue_flags", "f1.driver.last_lap_time", "f1.driver.sector_time", "f1.driver.lap_time", "f1.pit.stop_duration", "f1.pit.lane_duration", "f1.driver.best_speed_trap", "f1.driver.tyre.age"} {
+			for _, name := range []string{f1engine.CurrentLapMetric, f1engine.TotalLapsMetric, f1engine.ClockMetric, "f1.field.speed", "f1.driver.blue_flags", "f1.driver.last_lap_time", "f1.driver.sector_time", "f1.driver.lap_time", "f1.pit.stop_duration", "f1.pit.lane_duration", "f1.driver.best_speed_trap", "f1.driver.tyre.age"} {
 				if !names[name] {
 					t.Fatal(name, names)
 				}
@@ -378,18 +369,18 @@ func TestProjectionRuntime(t *testing.T) {
 			if fail {
 				return
 			}
-			stint := func(n int64) pcommon.SpanID { return deterministicStintSpanID(id, 1, "none", n) }
-			lap := func(n int64) pcommon.SpanID { return deterministicLapSpanID(id, 1, "none", n) }
+			stint := func(n int64) pcommon.SpanID { return f1engine.DeterministicStintSpanID(id, 1, "none", n) }
+			lap := func(n int64) pcommon.SpanID { return f1engine.DeterministicLapSpanID(id, 1, "none", n) }
 			parents := map[pcommon.SpanID]pcommon.SpanID{root: {}, stint(1): root, stint(2): root, lap(1): stint(1), lap(2): stint(2)}
 			for i := int64(1); i <= 3; i++ {
-				parents[deterministicSectorSpanID(id, 1, "none", 1, i)] = lap(1)
+				parents[f1engine.DeterministicSectorSpanID(id, 1, "none", 1, i)] = lap(1)
 			}
 			events := map[string]bool{}
 			for _, batch := range ts.AllTraces() {
 				check((&ptrace.JSONMarshaler{}).MarshalTraces(batch))
 				for _, s := range batch.ResourceSpans().At(0).ScopeSpans().At(0).Spans().All() {
 					parent, ok := parents[s.SpanID()]
-					if !ok || s.ParentSpanID() != parent || s.TraceID() != deterministicTraceID(id, 1) {
+					if !ok || s.ParentSpanID() != parent || s.TraceID() != f1engine.DeterministicTraceID(id, 1) {
 						t.Fatal(s.Name(), s.ParentSpanID())
 					}
 					delete(parents, s.SpanID())
@@ -448,8 +439,8 @@ func TestCancellationDeliversOwnedRoot(t *testing.T) {
 	}
 	r.registerTraces(tr)
 	started := make(chan struct{})
-	r.consume = func(_ context.Context, b normalizedLiveTimingBatch) error {
-		if b.source == liveTimingUpdateSourceFeed {
+	r.consume = func(_ context.Context, b f1engine.Batch) error {
+		if b.Source == f1engine.Feed {
 			close(started)
 		}
 		return nil

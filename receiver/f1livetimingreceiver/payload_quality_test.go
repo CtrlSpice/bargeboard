@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 )
 
 // Synthetic encoding probes exercise input quality, not source field semantics.
@@ -51,7 +53,7 @@ func TestPayloadQualityScalarScan(t *testing.T) {
 			if !json.Valid(raw) {
 				t.Fatal("test requires valid JSON grammar")
 			}
-			if got := hasInvalidJSONScalars(raw); got != tc.want || string(raw) != tc.raw {
+			if got := f1engine.HasInvalidJSONScalars(raw); got != tc.want || string(raw) != tc.raw {
 				t.Fatalf("scan = %t, want %t; preserved=%t", got, tc.want, string(raw) == tc.raw)
 			}
 			// The same original representation must survive both normalization paths.
@@ -62,12 +64,12 @@ func TestPayloadQualityScalarScan(t *testing.T) {
 				}
 				before := bytes.Clone(payload)
 				at := time.Date(2026, 8, 21, 10, 30, 0, 0, time.UTC)
-				batch := liveTimingBatch{source: liveTimingUpdateSourceFeed, updates: []liveTimingUpdate{{topic: topic, payload: payload, timestamp: "2026-08-21T10:30:00Z", source: liveTimingUpdateSourceFeed}}}
-				got, err := normalizeLiveTimingBatch(batch, at)
-				want := normalizedLiveTimingBatch{source: liveTimingUpdateSourceFeed, requestedTopics: []string{}, presentTopics: []string{}, observationTime: at,
-					updates: []normalizedLiveTimingUpdate{{topic: "Unused", payload: json.RawMessage(tc.raw), timestamp: at, source: liveTimingUpdateSourceFeed}}}
+				batch := f1engine.WireBatch{Source: f1engine.Feed, Updates: []f1engine.WireUpdate{{Topic: topic, Payload: payload, Timestamp: "2026-08-21T10:30:00Z", Source: f1engine.Feed}}}
+				got, err := f1engine.NormalizeBatch(batch, at)
+				want := f1engine.Batch{Source: f1engine.Feed, RequestedTopics: []string{}, PresentTopics: []string{}, ObservationTime: at,
+					Updates: []f1engine.Update{{Topic: "Unused", Payload: json.RawMessage(tc.raw), Timestamp: at, Source: f1engine.Feed}}}
 				if tc.want {
-					want.invalidUnicodeUpdates = 1
+					want.InvalidUnicodeUpdates = 1
 				}
 				if err != nil || !reflect.DeepEqual(got, want) || !bytes.Equal(payload, before) {
 					t.Fatalf("compressed=%t: err=%v, full result match=%t, input preserved=%t", compressed, err, reflect.DeepEqual(got, want), bytes.Equal(payload, before))
@@ -86,27 +88,27 @@ func TestPayloadQualitySnapshotAtomicity(t *testing.T) {
 	at := time.Unix(100, 0)
 	const affected = ` { "unused":"\uD800", "\uDC00":["\uDBFF", "\uDFFF"] } `
 	const clean = `{"text":"�","pair":"\uD800\uDC00"}`
-	batch := liveTimingBatch{source: liveTimingUpdateSourceSnapshot,
-		requestedTopics: []string{"Missing", "Plain", "Inflated.z", "Clean"}, presentTopics: []string{"Clean", "Inflated.z", "Plain"},
-		updates: []liveTimingUpdate{
-			{topic: "Clean", payload: json.RawMessage(clean), source: liveTimingUpdateSourceSnapshot},
-			{topic: "Inflated.z", payload: compressedJSONPayload(t, []byte(affected)), source: liveTimingUpdateSourceSnapshot},
-			{topic: "Plain", payload: json.RawMessage(affected), source: liveTimingUpdateSourceSnapshot},
+	batch := f1engine.WireBatch{Source: f1engine.Snapshot,
+		RequestedTopics: []string{"Missing", "Plain", "Inflated.z", "Clean"}, PresentTopics: []string{"Clean", "Inflated.z", "Plain"},
+		Updates: []f1engine.WireUpdate{
+			{Topic: "Clean", Payload: json.RawMessage(clean), Source: f1engine.Snapshot},
+			{Topic: "Inflated.z", Payload: compressedJSONPayload(t, []byte(affected)), Source: f1engine.Snapshot},
+			{Topic: "Plain", Payload: json.RawMessage(affected), Source: f1engine.Snapshot},
 		}}
-	got, err := normalizeLiveTimingBatch(batch, at)
-	want := normalizedLiveTimingBatch{source: liveTimingUpdateSourceSnapshot,
-		requestedTopics: []string{"Missing", "Plain", "Inflated", "Clean"}, presentTopics: []string{"Clean", "Inflated", "Plain"}, observationTime: at, invalidUnicodeUpdates: 2,
-		updates: []normalizedLiveTimingUpdate{
-			{topic: "Clean", payload: json.RawMessage(clean), source: liveTimingUpdateSourceSnapshot},
-			{topic: "Inflated", payload: json.RawMessage(affected), source: liveTimingUpdateSourceSnapshot},
-			{topic: "Plain", payload: json.RawMessage(affected), source: liveTimingUpdateSourceSnapshot},
+	got, err := f1engine.NormalizeBatch(batch, at)
+	want := f1engine.Batch{Source: f1engine.Snapshot,
+		RequestedTopics: []string{"Missing", "Plain", "Inflated", "Clean"}, PresentTopics: []string{"Clean", "Inflated", "Plain"}, ObservationTime: at, InvalidUnicodeUpdates: 2,
+		Updates: []f1engine.Update{
+			{Topic: "Clean", Payload: json.RawMessage(clean), Source: f1engine.Snapshot},
+			{Topic: "Inflated", Payload: json.RawMessage(affected), Source: f1engine.Snapshot},
+			{Topic: "Plain", Payload: json.RawMessage(affected), Source: f1engine.Snapshot},
 		}}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("snapshot = %#v, %v; want %#v", got, err, want)
 	}
-	batch.requestedTopics[0], batch.presentTopics[0] = "changed", "changed"
-	for i := range batch.updates {
-		batch.updates[i].payload[0] = '!'
+	batch.RequestedTopics[0], batch.PresentTopics[0] = "changed", "changed"
+	for i := range batch.Updates {
+		batch.Updates[i].Payload[0] = '!'
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatal("normalized snapshot aliases source bytes or manifests")
@@ -125,8 +127,8 @@ func TestPayloadQualityRejectedBatchHasNoFindings(t *testing.T) {
 		{"inflated UTF8", "B.z", compressedJSONPayload(t, []byte("\"\xff\""))},
 		{"inflated grammar", "B.z", compressedJSONPayload(t, []byte(`"\uD800" false`))},
 		{"inflated depth", "B.z", compressedJSONPayload(t, []byte(nestedJSONArrays(10001)))},
-		{"inflated size", "B.z", compressedJSONPayload(t, []byte(`"\uD800`+strings.Repeat("x", maxDecompressedPayloadSize-7)+`"`))},
-		{"encoded size", "B.z", json.RawMessage(`"` + strings.Repeat("A", maxEncodedPayloadSize+1) + `"`)},
+		{"inflated size", "B.z", compressedJSONPayload(t, []byte(`"\uD800`+strings.Repeat("x", f1engine.MaxDecompressedPayloadSize-7)+`"`))},
+		{"encoded size", "B.z", json.RawMessage(`"` + strings.Repeat("A", f1engine.MaxEncodedPayloadSize+1) + `"`)},
 		{"base64", "B.z", json.RawMessage(`"!"`)},
 		{"DEFLATE", "B.z", json.RawMessage(`"AAAA"`)},
 		{"compressed outer scalar", "B.z", json.RawMessage(`"\uD800"`)},
@@ -134,21 +136,21 @@ func TestPayloadQualityRejectedBatchHasNoFindings(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, badFirst := range []bool{false, true} {
-				batch := liveTimingBatch{source: liveTimingUpdateSourceSnapshot, requestedTopics: []string{"A", tc.topic}, presentTopics: []string{"A", tc.topic},
-					updates: []liveTimingUpdate{
-						{topic: "A", payload: json.RawMessage(`{"\uD800":"\uDC00"}`), source: liveTimingUpdateSourceSnapshot},
-						{topic: tc.topic, payload: bytes.Clone(tc.payload), source: liveTimingUpdateSourceSnapshot},
+				batch := f1engine.WireBatch{Source: f1engine.Snapshot, RequestedTopics: []string{"A", tc.topic}, PresentTopics: []string{"A", tc.topic},
+					Updates: []f1engine.WireUpdate{
+						{Topic: "A", Payload: json.RawMessage(`{"\uD800":"\uDC00"}`), Source: f1engine.Snapshot},
+						{Topic: tc.topic, Payload: bytes.Clone(tc.payload), Source: f1engine.Snapshot},
 					}}
 				if badFirst {
-					batch.presentTopics[0], batch.presentTopics[1] = batch.presentTopics[1], batch.presentTopics[0]
-					batch.updates[0], batch.updates[1] = batch.updates[1], batch.updates[0]
+					batch.PresentTopics[0], batch.PresentTopics[1] = batch.PresentTopics[1], batch.PresentTopics[0]
+					batch.Updates[0], batch.Updates[1] = batch.Updates[1], batch.Updates[0]
 				}
-				payloads := []string{string(batch.updates[0].payload), string(batch.updates[1].payload)}
-				got, err := normalizeLiveTimingBatch(batch, time.Unix(100, 0))
-				if !errors.Is(err, errInvalidLiveTimingData) || !reflect.DeepEqual(got, normalizedLiveTimingBatch{}) {
+				payloads := []string{string(batch.Updates[0].Payload), string(batch.Updates[1].Payload)}
+				got, err := f1engine.NormalizeBatch(batch, time.Unix(100, 0))
+				if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || !reflect.DeepEqual(got, f1engine.Batch{}) {
 					t.Fatalf("badFirst=%t: rejected batch = %#v, %v", badFirst, got, err)
 				}
-				if string(batch.updates[0].payload) != payloads[0] || string(batch.updates[1].payload) != payloads[1] {
+				if string(batch.Updates[0].Payload) != payloads[0] || string(batch.Updates[1].Payload) != payloads[1] {
 					t.Fatal("rejected normalization changed source bytes")
 				}
 			}
@@ -157,14 +159,14 @@ func TestPayloadQualityRejectedBatchHasNoFindings(t *testing.T) {
 }
 
 func TestPayloadQualityInflatedSizeBoundary(t *testing.T) {
-	for _, size := range []int{maxDecompressedPayloadSize - 1, maxDecompressedPayloadSize} {
+	for _, size := range []int{f1engine.MaxDecompressedPayloadSize - 1, f1engine.MaxDecompressedPayloadSize} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
 			payload := `"\uD800` + strings.Repeat("x", size-8) + `"`
 			at := time.Unix(100, 0)
-			got, err := normalizeLiveTimingBatch(liveTimingBatch{source: liveTimingUpdateSourceSnapshot, requestedTopics: []string{"A.z"}, presentTopics: []string{"A.z"},
-				updates: []liveTimingUpdate{{topic: "A.z", payload: compressedJSONPayload(t, []byte(payload)), source: liveTimingUpdateSourceSnapshot}}}, at)
-			want := normalizedLiveTimingBatch{source: liveTimingUpdateSourceSnapshot, requestedTopics: []string{"A"}, presentTopics: []string{"A"}, observationTime: at, invalidUnicodeUpdates: 1,
-				updates: []normalizedLiveTimingUpdate{{topic: "A", payload: json.RawMessage(payload), source: liveTimingUpdateSourceSnapshot}}}
+			got, err := f1engine.NormalizeBatch(f1engine.WireBatch{Source: f1engine.Snapshot, RequestedTopics: []string{"A.z"}, PresentTopics: []string{"A.z"},
+				Updates: []f1engine.WireUpdate{{Topic: "A.z", Payload: compressedJSONPayload(t, []byte(payload)), Source: f1engine.Snapshot}}}, at)
+			want := f1engine.Batch{Source: f1engine.Snapshot, RequestedTopics: []string{"A"}, PresentTopics: []string{"A"}, ObservationTime: at, InvalidUnicodeUpdates: 1,
+				Updates: []f1engine.Update{{Topic: "A", Payload: json.RawMessage(payload), Source: f1engine.Snapshot}}}
 			if err != nil || !reflect.DeepEqual(got, want) {
 				t.Fatalf("size=%d: err=%v, full result match=%t", size, err, reflect.DeepEqual(got, want))
 			}

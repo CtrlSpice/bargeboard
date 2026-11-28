@@ -118,7 +118,8 @@ func TestSignalReplay(t *testing.T) {
 					for i := 0; i < ss.Len(); i++ {
 						sp := ss.At(i)
 						id, parent := root, pcommon.SpanID{}
-						switch sp.Name() {
+						kind, _, _ := strings.Cut(sp.Name(), " ")
+						switch kind {
 						case "qualifying.phase":
 							id, parent = phase, root
 						case "stint":
@@ -127,7 +128,7 @@ func TestSignalReplay(t *testing.T) {
 							lap, _ := sp.Attributes().Get("f1.lap.number")
 							lapID, _ := f1id.LapSpanID(p.Identity, 17, f1id.PhaseQ1, lap.Int())
 							id, parent = lapID, stint
-							if sp.Name() == "sector" {
+							if kind == "sector" {
 								n, _ := sp.Attributes().Get("f1.sector.number")
 								id, _ = f1id.SectorSpanID(p.Identity, 17, f1id.PhaseQ1, lap.Int(), n.Int())
 								parent = lapID
@@ -136,7 +137,7 @@ func TestSignalReplay(t *testing.T) {
 						if sp.TraceID() != trace || sp.SpanID() != id || sp.ParentSpanID() != parent {
 							t.Fatalf("wrong %s identity", sp.Name())
 						}
-						names = append(names, sp.Name())
+						names = append(names, kind)
 						for j := 0; j < sp.Events().Len(); j++ {
 							ev := sp.Events().At(j)
 							if ev.Name() == "f1.position.changed" {
@@ -199,7 +200,7 @@ func TestSignalReplay(t *testing.T) {
 				if (err != nil) != (fail >= 0) {
 					t.Fatal(err)
 				}
-				if coord != 1 || clockPoints != 1 || lapCount != 1 || sectorCount != 3 || !reflect.DeepEqual(names, []string{"sector", "sector", "sector", "lap", "lap", "stint", "qualifying.phase", "driver.session"}) {
+				if coord != 1 || clockPoints != 9 || lapCount != 1 || sectorCount != 3 || !reflect.DeepEqual(names, []string{"sector", "sector", "sector", "lap", "lap", "stint", "qualifying.phase", "driver.session"}) {
 					t.Fatal(names, coord, clockPoints, lapCount, sectorCount)
 				}
 				if want[0] == nil {
@@ -208,37 +209,6 @@ func TestSignalReplay(t *testing.T) {
 					t.Fatal("racing signals changed")
 				}
 			})
-		}
-	}
-}
-func TestWindowBoundaries(t *testing.T) {
-	epoch := time.Unix(0, 0).UTC()
-	start := epoch.Add(3 * time.Second)
-	for _, c := range []struct{ at, lo, hi time.Duration }{{3e9, 3e9, 10e9}, {10e9 - 1, 3e9, 10e9}, {10e9, 3e9, 10e9}, {10e9 + 1, 10e9, 20e9}} {
-		lo, hi := window(epoch.Add(c.at), start)
-		if lo.Sub(epoch) != c.lo || hi.Sub(epoch) != c.hi {
-			t.Fatal(c, lo, hi)
-		}
-	}
-}
-
-func TestPacingDoesNotEnterReducer(t *testing.T) {
-	p := signalFixture(t)
-	reference := newSession(p)
-	want := make([]effects, len(p.batches))
-	for i, b := range p.batches {
-		want[i] = reference.apply(b, i == len(p.batches)-1)
-	}
-	for _, pace := range []string{"instant", "1x", "10x", "100x"} {
-		s := newSession(p)
-		got := []effects{}
-		clock := &fakeClock{time.Unix(2_000_000_000, 0)}
-		err := Replay(t.Context(), p, pace, clock, func(_ context.Context, b FrozenBatch, _ time.Time) error {
-			got = append(got, s.apply(b, b.Ordinal == int64(len(p.batches)-1)))
-			return nil
-		})
-		if err != nil || !reflect.DeepEqual(reference, s) || !reflect.DeepEqual(want, got) {
-			t.Fatal("reducer state or per-ordinal effects differ", pace, err)
 		}
 	}
 }

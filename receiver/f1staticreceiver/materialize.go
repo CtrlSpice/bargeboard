@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/CtrlSpice/bargeboard/internal/circuitmap"
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 	"github.com/CtrlSpice/bargeboard/internal/f1id"
 )
 
@@ -25,11 +26,12 @@ func validReplayTime(t time.Time) bool {
 	return t.Year() >= 1970 && t.Year() <= 2261 && t.UnixNano() > 0
 }
 
-var topics = [...]string{"SessionInfo", "Heartbeat", "DriverList", "Position", "SessionData", "TrackStatus", "ExtrapolatedClock", "LapCount", "WeatherData", "TimingAppData", "TimingStats", "TimingData", "PitLaneTimeCollection", "PitStopSeries", "PitStop", "RaceControlMessages", "TeamRadio"}
+var topics = [...]string{"SessionInfo", "Heartbeat", "DriverList", "Position", "CarData", "SessionData", "TrackStatus", "ExtrapolatedClock", "LapCount", "WeatherData", "TimingAppData", "TimingStats", "TimingData", "PitLaneTimeCollection", "PitStopSeries", "PitStop", "RaceControlMessages", "TeamRadio"}
 
 type Record struct {
-	Topic, Payload string
-	PublicationUTC time.Time
+	Topic, Payload      string
+	PublicationUTC      time.Time
+	initialArchiveRadio bool
 }
 type FrozenBatch struct {
 	Ordinal, CoordNs int64
@@ -67,60 +69,20 @@ func object(raw []byte) fields {
 	return f
 }
 func text(raw []byte) string { s, _ := f1id.DecodeLosslessString(raw); return s }
-func localDate(raw []byte) time.Time {
-	const layout = "2006-01-02T15:04:05"
-	s := text(raw)
-	t, err := time.Parse(layout, s)
-	if err != nil || t.Format(layout) != s {
-		return time.Time{}
-	}
-	return t
-}
-
 func bootstrap(info, roster []byte) (FrozenReplayPlan, error) {
-	var p FrozenReplayPlan
-	f := object(info)
-	meeting := object(f["Meeting"])
-	start := localDate(f["StartDate"])
-	year := int64(start.Year())
-	key, _ := f1id.ParsePositiveCanonicalInt64(meeting["Key"])
-	typ, name, _ := f1id.ClassifySessionInfo(year, key, text(meeting["Name"]), text(f["Type"]), text(f["Name"]))
-	p.Identity = f1id.SessionIdentity{Season: year, MeetingKey: key, SessionType: typ, SessionName: name}
-	p.RouteKey, _ = f1id.ParsePositiveCanonicalInt64(f["Key"])
-	p.CircuitKey, _ = f1id.ParsePositiveCanonicalInt64(object(meeting["Circuit"])["Key"])
-	if !p.Identity.Valid() || p.RouteKey == 0 || f1id.HasInvalidJSONScalars(info) {
+	// Archive materialization rejects duplicate top-level members and invalid
+	// SessionInfo scalars before any frozen input can reach a consumer.
+	if object(info) == nil || f1id.HasInvalidJSONScalars(info) {
 		return FrozenReplayPlan{}, errors.New("invalid SessionInfo")
 	}
-	end := localDate(f["EndDate"])
-	zone := text(f["GmtOffset"])
-	unsigned := strings.TrimPrefix(zone, "-")
-	if off, ok := parseOffset([]byte(unsigned + ".000")); ok && strings.HasSuffix(unsigned, ":00") && off <= int64(14*time.Hour) && zone != "-00:00:00" && end.After(start) {
-		if strings.HasPrefix(zone, "-") {
-			off = -off
-		}
-		p.ScheduledStart = start.Add(-time.Duration(off))
-		p.ScheduledEnd = end.Add(-time.Duration(off))
-	}
-	drivers := object(roster)
-	if k, ok := drivers["_kf"]; ok && string(k) == "true" {
-		delete(drivers, "_kf")
-	}
-	count := 0
-	for k, v := range drivers {
-		d := object(v)
-		_, ok := f1id.ParsePositiveCanonicalInt64([]byte(k))
-		if !ok {
-			continue
-		}
-		count++
-		if (d["RacingNumber"] != nil && text(d["RacingNumber"]) != k) || !f1id.IsValidAcronym(text(d["Tla"])) {
-			return FrozenReplayPlan{}, errors.New("invalid DriverList entry")
-		}
-	}
-	if count < 1 || count > 32 {
+	if object(roster) == nil {
 		return FrozenReplayPlan{}, errors.New("invalid DriverList")
 	}
-	return p, nil
+	m, err := f1engine.InspectBootstrap(info, roster)
+	if err != nil {
+		return FrozenReplayPlan{}, err
+	}
+	return FrozenReplayPlan{Identity: m.Identity, RouteKey: m.RouteKey, CircuitKey: m.CircuitKey, ScheduledStart: m.ScheduledStart, ScheduledEnd: m.ScheduledEnd}, nil
 }
 
 // indexed returns series elements in numerical index order.
@@ -183,7 +145,7 @@ func freeze(info, roster []byte, streams map[string][]StreamRecord) (FrozenRepla
 	var minOffset int64 = 1<<63 - 1
 	for _, topic := range topics {
 		var effective int64
-		for _, r := range streams[topic] {
+		for i, r := range streams[topic] {
 			minOffset = min(minOffset, r.OffsetNs)
 			effective = max(effective, r.OffsetNs)
 			pub := t0.Add(time.Duration(r.OffsetNs))
@@ -191,12 +153,12 @@ func freeze(info, roster []byte, streams map[string][]StreamRecord) (FrozenRepla
 			if !validReplayTime(pub) {
 				return FrozenReplayPlan{}, errTimeline
 			}
-			items = append(items, item{effective, Record{topic, r.Payload, pub}})
+			items = append(items, item{effective, Record{topic, r.Payload, pub, topic == "TeamRadio" && i == 0}})
 		}
 	}
 	sort.SliceStable(items, func(i, j int) bool { return items[i].effective < items[j].effective })
 	origin := t0.Add(time.Duration(minOffset))
-	p.batches = []FrozenBatch{{Snapshot: true, ObservationUTC: origin, records: []Record{{"SessionInfo", string(info), origin}, {"DriverList", string(roster), origin}}}}
+	p.batches = []FrozenBatch{{Snapshot: true, ObservationUTC: origin, records: []Record{{Topic: "SessionInfo", Payload: string(info), PublicationUTC: origin}, {Topic: "DriverList", Payload: string(roster), PublicationUTC: origin}}}}
 	for i, it := range items {
 		p.batches = append(p.batches, FrozenBatch{int64(i + 1), it.effective - minOffset, t0.Add(time.Duration(it.effective)), false, []Record{it.r}})
 	}
@@ -273,7 +235,7 @@ func Materialize(ctx context.Context, c Config) (FrozenReplayPlan, error) {
 			continue
 		}
 		file := topic + ".jsonStream"
-		compressed := topic == "Position"
+		compressed := topic == "Position" || topic == "CarData"
 		if compressed {
 			file = topic + ".z.jsonStream"
 		}

@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 )
 
 const (
@@ -24,28 +26,6 @@ const (
 var (
 	errSignalRClosed           = errors.New("SignalR connection closed")
 	errSignalRReconnectAllowed = errors.New("SignalR connection closed with reconnect allowed")
-	errInvalidLiveTimingData   = errors.New("invalid F1 live timing data")
-)
-
-type liveTimingUpdate struct {
-	topic     string
-	payload   json.RawMessage
-	timestamp string
-	source    liveTimingUpdateSource
-}
-
-type liveTimingBatch struct {
-	source          liveTimingUpdateSource
-	requestedTopics []string
-	presentTopics   []string
-	updates         []liveTimingUpdate
-}
-
-type liveTimingUpdateSource uint8
-
-const (
-	liveTimingUpdateSourceFeed liveTimingUpdateSource = iota + 1
-	liveTimingUpdateSourceSnapshot
 )
 
 type hubMessage struct {
@@ -91,7 +71,7 @@ func encodeSubscribeInvocation(topics []string) ([]byte, error) {
 	if len(topics) == 0 {
 		return nil, fmt.Errorf("SignalR subscription requires at least one topic")
 	}
-	if _, ok := liveTimingTopicSet(topics); !ok {
+	if _, ok := f1engine.LiveTimingTopicSet(topics); !ok {
 		return nil, fmt.Errorf("SignalR subscription topics must be unique and non-empty")
 	}
 	message := struct {
@@ -117,7 +97,7 @@ func encodeSubscribeInvocation(topics []string) ([]byte, error) {
 func splitHubRecord(contents []byte, scanned int) (record, remaining []byte, complete bool, err error) {
 	record, remaining, complete = splitFirstRecord(contents, scanned)
 	if len(record) > maxHubRecordSize || (!complete && len(remaining) > maxHubRecordSize) {
-		return nil, nil, false, invalidLiveTimingData(fmt.Sprintf("SignalR record exceeds %d bytes", maxHubRecordSize))
+		return nil, nil, false, f1engine.InvalidLiveTimingData(fmt.Sprintf("SignalR record exceeds %d bytes", maxHubRecordSize))
 	}
 	return record, remaining, complete, nil
 }
@@ -153,13 +133,13 @@ func (b *hubRecordBuffer) next() (record []byte, complete bool, err error) {
 	return record, complete, nil
 }
 
-func decodeHubRecord(record []byte, requestedTopics []string) (*liveTimingBatch, error) {
+func decodeHubRecord(record []byte, requestedTopics []string) (*f1engine.WireBatch, error) {
 	message, err := decodeHubMessage(record)
 	if err != nil {
 		return nil, err
 	}
 	if message.Type == nil {
-		return nil, invalidLiveTimingData("SignalR hub message is missing type")
+		return nil, f1engine.InvalidLiveTimingData("SignalR hub message is missing type")
 	}
 
 	switch *message.Type {
@@ -181,17 +161,17 @@ func decodeHubRecord(record []byte, requestedTopics []string) (*liveTimingBatch,
 
 func decodeHubMessage(record []byte) (hubMessage, error) {
 	if !utf8.Valid(record) {
-		return hubMessage{}, invalidLiveTimingData("SignalR hub message is not UTF-8")
+		return hubMessage{}, f1engine.InvalidLiveTimingData("SignalR hub message is not UTF-8")
 	}
 	var message hubMessage
 	seen := make(map[string]struct{})
-	err := visitRawJSONObjectMembers(record, func(key, raw json.RawMessage) error {
-		field, err := decodeLosslessJSONString(key)
+	err := f1engine.VisitRawJSONObjectMembers(record, func(key, raw json.RawMessage) error {
+		field, err := f1engine.DecodeLosslessJSONString(key)
 		if err != nil {
-			return invalidLiveTimingData("decode SignalR hub message key")
+			return f1engine.InvalidLiveTimingData("decode SignalR hub message key")
 		}
 		if _, exists := seen[field]; exists {
-			return invalidLiveTimingData("SignalR hub message contains a duplicate field")
+			return f1engine.InvalidLiveTimingData("SignalR hub message contains a duplicate field")
 		}
 		seen[field] = struct{}{}
 
@@ -200,18 +180,18 @@ func decodeHubMessage(record []byte) (hubMessage, error) {
 		case "type":
 			destination = &message.Type
 		case "invocationId":
-			return unmarshalControlString(raw, &message.InvocationID)
+			return f1engine.UnmarshalControlString(raw, &message.InvocationID)
 		case "target":
-			return unmarshalControlString(raw, &message.Target)
+			return f1engine.UnmarshalControlString(raw, &message.Target)
 		case "arguments":
 			destination = &message.Arguments
 		case "result":
 			destination = &message.Result
 		case "error":
 			message.HasError = true
-			isString, empty := jsonStringShape(raw)
+			isString, empty := f1engine.JSONStringShape(raw)
 			if !isString {
-				return invalidLiveTimingData("decode SignalR hub message")
+				return f1engine.InvalidLiveTimingData("decode SignalR hub message")
 			}
 			message.ErrorEmpty = empty
 			return nil
@@ -219,17 +199,17 @@ func decodeHubMessage(record []byte) (hubMessage, error) {
 			destination = &message.AllowReconnect
 		default:
 			if isHubMessageFieldAlias(field) {
-				return invalidLiveTimingData("SignalR hub message field names are case-sensitive")
+				return f1engine.InvalidLiveTimingData("SignalR hub message field names are case-sensitive")
 			}
 			return nil // Unknown values remain opaque, including nested keys.
 		}
 		return json.Unmarshal(raw, destination)
 	})
 	if err != nil {
-		if errors.Is(err, errInvalidLiveTimingData) {
+		if errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 			return hubMessage{}, err
 		}
-		return hubMessage{}, invalidLiveTimingData("decode SignalR hub message")
+		return hubMessage{}, f1engine.InvalidLiveTimingData("decode SignalR hub message")
 	}
 	return message, nil
 }
@@ -245,54 +225,54 @@ func isHubMessageFieldAlias(field string) bool {
 	return false
 }
 
-func decodeFeedInvocation(message hubMessage) (*liveTimingBatch, error) {
+func decodeFeedInvocation(message hubMessage) (*f1engine.WireBatch, error) {
 	if message.Target != "feed" {
 		return nil, nil
 	}
 	if len(message.Arguments) != 3 {
-		return nil, invalidLiveTimingData(fmt.Sprintf("F1 feed invocation has %d arguments, want 3", len(message.Arguments)))
+		return nil, f1engine.InvalidLiveTimingData(fmt.Sprintf("F1 feed invocation has %d arguments, want 3", len(message.Arguments)))
 	}
 
 	var topic string
-	if err := unmarshalControlString(message.Arguments[0], &topic); err != nil || topic == "" {
-		return nil, invalidLiveTimingData("decode F1 feed topic")
+	if err := f1engine.UnmarshalControlString(message.Arguments[0], &topic); err != nil || topic == "" {
+		return nil, f1engine.InvalidLiveTimingData("decode F1 feed topic")
 	}
 	var timestamp string
-	if err := unmarshalControlString(message.Arguments[2], &timestamp); err != nil {
-		return nil, invalidLiveTimingData("decode F1 feed timestamp")
+	if err := f1engine.UnmarshalControlString(message.Arguments[2], &timestamp); err != nil {
+		return nil, f1engine.InvalidLiveTimingData("decode F1 feed timestamp")
 	}
-	return &liveTimingBatch{
-		source: liveTimingUpdateSourceFeed,
-		updates: []liveTimingUpdate{{
-			topic:     topic,
-			payload:   bytes.Clone(message.Arguments[1]),
-			timestamp: timestamp,
-			source:    liveTimingUpdateSourceFeed,
+	return &f1engine.WireBatch{
+		Source: f1engine.Feed,
+		Updates: []f1engine.WireUpdate{{
+			Topic:     topic,
+			Payload:   bytes.Clone(message.Arguments[1]),
+			Timestamp: timestamp,
+			Source:    f1engine.Feed,
 		}},
 	}, nil
 }
 
-func decodeSubscriptionCompletion(message hubMessage, requestedTopics []string) (*liveTimingBatch, error) {
+func decodeSubscriptionCompletion(message hubMessage, requestedTopics []string) (*f1engine.WireBatch, error) {
 	if message.InvocationID == "" {
-		return nil, invalidLiveTimingData("SignalR completion is missing invocation ID")
+		return nil, f1engine.InvalidLiveTimingData("SignalR completion is missing invocation ID")
 	}
 	hasResult := len(message.Result) > 0
 	hasError := message.HasError
 	if hasResult && hasError {
-		return nil, invalidLiveTimingData("SignalR completion contains both result and error")
+		return nil, f1engine.InvalidLiveTimingData("SignalR completion contains both result and error")
 	}
 	if hasError && message.ErrorEmpty {
-		return nil, invalidLiveTimingData("SignalR completion error is invalid")
+		return nil, f1engine.InvalidLiveTimingData("SignalR completion error is invalid")
 	}
 	if message.InvocationID != subscribeInvocationID {
 		return nil, nil
 	}
-	requestedTopicSet, ok := liveTimingTopicSet(requestedTopics)
+	requestedTopicSet, ok := f1engine.LiveTimingTopicSet(requestedTopics)
 	if len(requestedTopics) == 0 || !ok {
-		return nil, invalidLiveTimingData("F1 topic subscription completion has no requested topics")
+		return nil, f1engine.InvalidLiveTimingData("F1 topic subscription completion has no requested topics")
 	}
 	if hasError {
-		return nil, invalidLiveTimingData("F1 topic subscription was rejected")
+		return nil, f1engine.InvalidLiveTimingData("F1 topic subscription was rejected")
 	}
 
 	topics, payloads, err := decodeSubscriptionSnapshot(message.Result, requestedTopicSet)
@@ -300,19 +280,19 @@ func decodeSubscriptionCompletion(message hubMessage, requestedTopics []string) 
 		return nil, err
 	}
 
-	updates := make([]liveTimingUpdate, 0, len(topics))
+	updates := make([]f1engine.WireUpdate, 0, len(topics))
 	for _, topic := range topics {
-		updates = append(updates, liveTimingUpdate{
-			topic:   topic,
-			payload: bytes.Clone(payloads[topic]),
-			source:  liveTimingUpdateSourceSnapshot,
+		updates = append(updates, f1engine.WireUpdate{
+			Topic:   topic,
+			Payload: bytes.Clone(payloads[topic]),
+			Source:  f1engine.Snapshot,
 		})
 	}
-	return &liveTimingBatch{
-		source:          liveTimingUpdateSourceSnapshot,
-		requestedTopics: append([]string(nil), requestedTopics...),
-		presentTopics:   topics,
-		updates:         updates,
+	return &f1engine.WireBatch{
+		Source:          f1engine.Snapshot,
+		RequestedTopics: append([]string(nil), requestedTopics...),
+		PresentTopics:   topics,
+		Updates:         updates,
 	}, nil
 }
 
@@ -326,46 +306,28 @@ func decodeSubscriptionSnapshot(
 
 	topics := make([]string, 0)
 	payloads := make(map[string]json.RawMessage)
-	err := visitRawJSONObjectMembers(result, func(key, payload json.RawMessage) error {
-		topic, err := decodeLosslessJSONString(key)
+	err := f1engine.VisitRawJSONObjectMembers(result, func(key, payload json.RawMessage) error {
+		topic, err := f1engine.DecodeLosslessJSONString(key)
 		if err != nil || topic == "" {
-			return invalidLiveTimingData("decode F1 subscription snapshot manifest")
+			return f1engine.InvalidLiveTimingData("decode F1 subscription snapshot manifest")
 		}
 		if _, exists := requestedTopics[topic]; !exists {
-			return invalidLiveTimingData("F1 subscription snapshot contains an unrequested topic")
+			return f1engine.InvalidLiveTimingData("F1 subscription snapshot contains an unrequested topic")
 		}
 		if _, exists := payloads[topic]; exists {
-			return invalidLiveTimingData("F1 subscription snapshot contains a duplicate topic")
+			return f1engine.InvalidLiveTimingData("F1 subscription snapshot contains a duplicate topic")
 		}
 		topics = append(topics, topic)
 		payloads[topic] = bytes.Clone(payload)
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, errInvalidLiveTimingData) {
+		if errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 			return nil, nil, err
 		}
-		return nil, nil, invalidLiveTimingData("decode F1 subscription snapshot")
+		return nil, nil, f1engine.InvalidLiveTimingData("decode F1 subscription snapshot")
 	}
 
 	sort.Strings(topics)
 	return topics, payloads, nil
-}
-
-func liveTimingTopicSet(topics []string) (map[string]struct{}, bool) {
-	set := make(map[string]struct{}, len(topics))
-	for _, topic := range topics {
-		if topic == "" {
-			return nil, false
-		}
-		if _, exists := set[topic]; exists {
-			return nil, false
-		}
-		set[topic] = struct{}{}
-	}
-	return set, true
-}
-
-func invalidLiveTimingData(reason string) error {
-	return fmt.Errorf("%w: %s", errInvalidLiveTimingData, reason)
 }

@@ -12,6 +12,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 	"github.com/coder/websocket"
 	"go.opentelemetry.io/collector/component/componentstatus"
 	"go.opentelemetry.io/collector/receiver/receivertest"
@@ -49,7 +50,7 @@ func TestHTTPSetupResponseBoundary(t *testing.T) {
 						want.retryAt = now.Add(time.Minute)
 					}
 					failure := asSetupHTTPError(err)
-					if connection != nil || failure == nil || *failure != want || errors.Is(err, errInvalidLiveTimingData) || errors.Unwrap(err) != nil {
+					if connection != nil || failure == nil || *failure != want || errors.Is(err, f1engine.ErrInvalidLiveTimingData) || errors.Unwrap(err) != nil {
 						t.Fatalf("connection=%v error=%#v; want %#v", connection, err, want)
 					}
 					if *body != (preflightTestBody{closes: 1}) {
@@ -102,7 +103,7 @@ func TestHTTPSetupCancellationAtHeaders(t *testing.T) {
 							return &http.Response{StatusCode: status, Header: http.Header{"Retry-After": {"999999"}, "Set-Cookie": {"AWSALBCORS=private-cookie"}}, Body: body}, nil
 						})
 						connection, err := connectSignalR(ctx, client, connectionTestConfig(t, "http://synthetic.test/private-route"))
-						if connection != nil || !errors.Is(err, wantErr) || errors.Unwrap(err) != wantErr || asSetupHTTPError(err) != nil || errors.Is(err, errInvalidLiveTimingData) {
+						if connection != nil || !errors.Is(err, wantErr) || errors.Unwrap(err) != wantErr || asSetupHTTPError(err) != nil || errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 							t.Fatalf("connection=%v error=%v", connection, err)
 						}
 						if *body != (preflightTestBody{closes: 1}) || calls != int(stage) {
@@ -129,7 +130,7 @@ func TestHTTPUpgrade101CodecFailureIsProtocol(t *testing.T) {
 		return &http.Response{StatusCode: 101, Header: http.Header{"Connection": {"private-invalid-handshake"}, "Retry-After": {"999999"}}, Body: body}, nil
 	})
 	connection, err := connectSignalR(t.Context(), client, connectionTestConfig(t, "http://synthetic.test/private-route"))
-	if connection != nil || !errors.Is(err, errInvalidLiveTimingData) || asSetupHTTPError(err) != nil || err.Error() != "invalid F1 live timing data: SignalR WebSocket upgrade response is invalid" {
+	if connection != nil || !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || asSetupHTTPError(err) != nil || err.Error() != "invalid F1 live timing data: SignalR WebSocket upgrade response is invalid" {
 		t.Fatalf("connection=%v error=%v", connection, err)
 	}
 	// The pinned codec owns 101 validation and its failed-handshake cleanup.
@@ -145,7 +146,7 @@ func TestHTTPAcceptedNegotiationRemainsBoundedAndValidated(t *testing.T) {
 			return &http.Response{StatusCode: 200, Header: http.Header{"Retry-After": {"60"}}, Body: body}, nil
 		})}
 		got, cookies, err := negotiate(t.Context(), client, "http://synthetic.test", connectionCredentials{}, nil)
-		if got != (negotiation{}) || cookies != nil || !errors.Is(err, errInvalidLiveTimingData) || asSetupHTTPError(err) != nil || body.closes != 1 || body.bytes > maxNegotiateResponseSize+1 {
+		if got != (negotiation{}) || cookies != nil || !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || asSetupHTTPError(err) != nil || body.closes != 1 || body.bytes > maxNegotiateResponseSize+1 {
 			t.Fatalf("negotiation=%#v cookies=%v error=%v body=%+v", got, cookies, err, body)
 		}
 	}
@@ -221,7 +222,7 @@ func TestHTTPUpgradeTransportNetworkFailure(t *testing.T) {
 		if cause != io.EOF {
 			want = "SignalR WebSocket upgrade: " + cause.Error()
 		}
-		if connection != nil || err == nil || err.Error() != want || asSetupHTTPError(err) != nil || errors.Is(err, errInvalidLiveTimingData) {
+		if connection != nil || err == nil || err.Error() != want || asSetupHTTPError(err) != nil || errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 			t.Fatalf("connection=%v error=%v", connection, err)
 		}
 	}
@@ -248,7 +249,7 @@ func TestHTTPSetupTransportEmptyResponses(t *testing.T) {
 					return test.response, nil
 				})
 				connection, err := connectSignalR(t.Context(), client, connectionTestConfig(t, "http://synthetic.test/private-route"))
-				if connection != nil || err == nil || errors.Is(err, errInvalidLiveTimingData) || errors.Unwrap(err) != nil {
+				if connection != nil || err == nil || errors.Is(err, f1engine.ErrInvalidLiveTimingData) || errors.Unwrap(err) != nil {
 					t.Fatalf("connection=%v error=%v", connection, err)
 				}
 				if test.wantHTTP {

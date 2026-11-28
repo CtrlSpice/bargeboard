@@ -13,6 +13,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 	"github.com/coder/websocket"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componentstatus"
@@ -277,7 +278,7 @@ func TestHTTPOperationalTerminalSetup(t *testing.T) {
 						}
 						message := fmt.Sprintf("Live Timing input stopped: %s returned HTTP %d; Collector can still run.%s Press Ctrl-C to stop the Collector.", stage, status, guidance)
 						failure := asSetupHTTPError(event.Err())
-						if event.Status() != componentstatus.StatusPermanentError || failure == nil || *failure != (setupHTTPError{stage: stage, status: status}) || event.Err().Error() != message || errors.Is(event.Err(), errInvalidLiveTimingData) {
+						if event.Status() != componentstatus.StatusPermanentError || failure == nil || *failure != (setupHTTPError{stage: stage, status: status}) || event.Err().Error() != message || errors.Is(event.Err(), f1engine.ErrInvalidLiveTimingData) {
 							t.Fatalf("terminal=%v / %v", event.Status(), event.Err())
 						}
 						want := operationalState{started: origin, lastUpdate: origin, ready: true, outage: true, outageStarted: origin, outages: 1, attempts: 1, updates: 1, stopped: true, summarized: true}

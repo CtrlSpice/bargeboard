@@ -13,6 +13,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 	"github.com/coder/websocket"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componentstatus"
@@ -67,8 +68,8 @@ func TestReceiverReconnectsAfterLivenessExpiry(t *testing.T) {
 		// Racing observation time deliberately does not advance with liveness.
 		observation := time.Unix(1, 0)
 		r.now = func() time.Time { return observation }
-		var batches []normalizedLiveTimingBatch
-		r.consume = func(_ context.Context, batch normalizedLiveTimingBatch) error {
+		var batches []f1engine.Batch
+		r.consume = func(_ context.Context, batch f1engine.Batch) error {
 			batches = append(batches, batch)
 			return nil
 		}
@@ -95,11 +96,11 @@ func TestReceiverReconnectsAfterLivenessExpiry(t *testing.T) {
 		if err := r.Shutdown(t.Context()); err != nil {
 			t.Fatal(err)
 		}
-		want, err := normalizeLiveTimingBatch(incrementalWantFeed("Started", "2026-08-21T10:30:00Z"), observation)
+		want, err := f1engine.NormalizeBatch(incrementalWantFeed("Started", "2026-08-21T10:30:00Z"), observation)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if connections.Load() != 2 || !reflect.DeepEqual(attempts, []int{0}) || !reflect.DeepEqual(batches, []normalizedLiveTimingBatch{want}) {
+		if connections.Load() != 2 || !reflect.DeepEqual(attempts, []int{0}) || !reflect.DeepEqual(batches, []f1engine.Batch{want}) {
 			t.Fatalf("connections = %d, attempts = %v, batches = %#v", connections.Load(), attempts, batches)
 		}
 		var messages []string
@@ -146,8 +147,8 @@ func TestReceiverReconnectsAndConsumesFeed(t *testing.T) {
 		retryAttempts <- attempt
 		return 0
 	}
-	batches := make(chan normalizedLiveTimingBatch, 1)
-	receiver.consume = func(_ context.Context, batch normalizedLiveTimingBatch) error {
+	batches := make(chan f1engine.Batch, 1)
+	receiver.consume = func(_ context.Context, batch f1engine.Batch) error {
 		batches <- batch
 		return nil
 	}
@@ -163,27 +164,27 @@ func TestReceiverReconnectsAndConsumesFeed(t *testing.T) {
 
 	select {
 	case batch := <-batches:
-		if batch.source != liveTimingUpdateSourceFeed {
-			t.Errorf("batch source = %d, want feed", batch.source)
+		if batch.Source != f1engine.Feed {
+			t.Errorf("batch source = %d, want feed", batch.Source)
 		}
-		if batch.observationTime != observationTime {
-			t.Errorf("batch observation time = %s, want exact input %s", batch.observationTime, observationTime)
+		if batch.ObservationTime != observationTime {
+			t.Errorf("batch observation time = %s, want exact input %s", batch.ObservationTime, observationTime)
 		}
-		if len(batch.updates) != 1 {
-			t.Fatalf("batch update count = %d, want 1", len(batch.updates))
+		if len(batch.Updates) != 1 {
+			t.Fatalf("batch update count = %d, want 1", len(batch.Updates))
 		}
-		update := batch.updates[0]
-		if update.topic != "SessionStatus" {
-			t.Errorf("update topic = %q", update.topic)
+		update := batch.Updates[0]
+		if update.Topic != "SessionStatus" {
+			t.Errorf("update topic = %q", update.Topic)
 		}
-		if string(update.payload) != `{"Status":"Started"}` {
-			t.Errorf("update payload = %s", update.payload)
+		if string(update.Payload) != `{"Status":"Started"}` {
+			t.Errorf("update payload = %s", update.Payload)
 		}
-		if got := update.timestamp.Format(time.RFC3339Nano); got != "2026-08-21T10:30:00.034Z" {
+		if got := update.Timestamp.Format(time.RFC3339Nano); got != "2026-08-21T10:30:00.034Z" {
 			t.Errorf("update timestamp = %q", got)
 		}
-		if update.source != liveTimingUpdateSourceFeed {
-			t.Errorf("update source = %d, want feed", update.source)
+		if update.Source != f1engine.Feed {
+			t.Errorf("update source = %d, want feed", update.Source)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for feed update after reconnect")
@@ -240,12 +241,12 @@ func TestReceiverConsumesEmptySubscriptionSnapshot(t *testing.T) {
 		retryAttempts <- attempt
 		return 0
 	}
-	batches := make(chan normalizedLiveTimingBatch, 1)
-	receiver.consume = func(_ context.Context, batch normalizedLiveTimingBatch) error {
+	batches := make(chan f1engine.Batch, 1)
+	receiver.consume = func(_ context.Context, batch f1engine.Batch) error {
 		batches <- batch
 		return nil
 	}
-	wantRequestedTopics, err := normalizeLiveTimingTopics(subscriptionTopics())
+	wantRequestedTopics, err := f1engine.NormalizeLiveTimingTopics(subscriptionTopics())
 	if err != nil {
 		t.Fatalf("normalizeLiveTimingTopics() error = %v", err)
 	}
@@ -261,17 +262,17 @@ func TestReceiverConsumesEmptySubscriptionSnapshot(t *testing.T) {
 
 	select {
 	case batch := <-batches:
-		if batch.source != liveTimingUpdateSourceSnapshot {
-			t.Errorf("batch source = %d, want snapshot", batch.source)
+		if batch.Source != f1engine.Snapshot {
+			t.Errorf("batch source = %d, want snapshot", batch.Source)
 		}
-		if !reflect.DeepEqual(batch.requestedTopics, wantRequestedTopics) {
-			t.Errorf("requested topics = %q, want %q", batch.requestedTopics, wantRequestedTopics)
+		if !reflect.DeepEqual(batch.RequestedTopics, wantRequestedTopics) {
+			t.Errorf("requested topics = %q, want %q", batch.RequestedTopics, wantRequestedTopics)
 		}
-		if len(batch.presentTopics) != 0 || len(batch.updates) != 0 {
-			t.Errorf("empty snapshot present topics = %q, updates = %#v", batch.presentTopics, batch.updates)
+		if len(batch.PresentTopics) != 0 || len(batch.Updates) != 0 {
+			t.Errorf("empty snapshot present topics = %q, updates = %#v", batch.PresentTopics, batch.Updates)
 		}
-		if !batch.observationTime.Equal(observationTime) {
-			t.Errorf("batch observation time = %s, want %s", batch.observationTime, observationTime)
+		if !batch.ObservationTime.Equal(observationTime) {
+			t.Errorf("batch observation time = %s, want %s", batch.ObservationTime, observationTime)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for empty subscription snapshot")
@@ -320,8 +321,8 @@ func TestReceiverContinuesAfterConsumeFailure(t *testing.T) {
 	}
 	consumed := make(chan string, 2)
 	var consumeCalls atomic.Int32
-	receiver.consume = func(_ context.Context, batch normalizedLiveTimingBatch) error {
-		consumed <- batch.updates[0].topic
+	receiver.consume = func(_ context.Context, batch f1engine.Batch) error {
+		consumed <- batch.Updates[0].Topic
 		if consumeCalls.Add(1) == 1 {
 			return errors.New("sensitive downstream failure")
 		}
@@ -458,8 +459,8 @@ func TestReceiverReportsPermanentInvalidServerData(t *testing.T) {
 			settings := receivertest.NewNopSettings(Type)
 			settings.Logger = zap.New(core)
 			receiver := newLiveTimingReceiver(connectionTestConfig(t, server.URL), settings)
-			var consumed []normalizedLiveTimingBatch
-			receiver.consume = func(_ context.Context, batch normalizedLiveTimingBatch) error {
+			var consumed []f1engine.Batch
+			receiver.consume = func(_ context.Context, batch f1engine.Batch) error {
 				consumed = append(consumed, batch)
 				return nil
 			}
@@ -701,7 +702,7 @@ func TestReceiverSanitizesHandshakeCloseOutcomes(t *testing.T) {
 					if permanent {
 						want = "connect to F1 live timing: invalid F1 live timing data: SignalR handshake WebSocket data is invalid"
 					}
-					if err == nil || err.Error() != want || errors.Is(err, errInvalidLiveTimingData) != permanent {
+					if err == nil || err.Error() != want || errors.Is(err, f1engine.ErrInvalidLiveTimingData) != permanent {
 						t.Errorf("Start() = %v, want %q (permanent=%t)", err, want, permanent)
 					}
 					if r.cancel != nil || r.done != nil || connections.Load() != 1 || logs.Len() != 0 || len(host.events) != 0 {

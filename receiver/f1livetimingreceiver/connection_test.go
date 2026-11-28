@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 	"github.com/coder/websocket"
 )
 
@@ -123,7 +124,7 @@ func TestParseNegotiateResponse(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 					t.Fatalf("parseNegotiateResponse() error = %v, want containing %q", err, test.wantErr)
 				}
-				if !errors.Is(err, errInvalidLiveTimingData) {
+				if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 					t.Errorf("parseNegotiateResponse() error does not wrap errInvalidLiveTimingData")
 				}
 				return
@@ -284,7 +285,7 @@ func TestParseHandshakeResponse(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 				t.Fatalf("parseHandshakeResponse() error = %v, want containing %q", err, test.wantErr)
 			}
-			if !errors.Is(err, errInvalidLiveTimingData) {
+			if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 				t.Errorf("parseHandshakeResponse() error does not wrap errInvalidLiveTimingData")
 			}
 		})
@@ -491,8 +492,8 @@ func TestSetupWebSocketErrorsAreSanitized(t *testing.T) {
 				if err == nil || err.Error() != wantErr {
 					t.Errorf("setup error = %v, want %q", err, wantErr)
 				}
-				if errors.Is(err, errInvalidLiveTimingData) != wantPermanent {
-					t.Errorf("setup error permanent classification = %t, want %t", errors.Is(err, errInvalidLiveTimingData), wantPermanent)
+				if errors.Is(err, f1engine.ErrInvalidLiveTimingData) != wantPermanent {
+					t.Errorf("setup error permanent classification = %t, want %t", errors.Is(err, f1engine.ErrInvalidLiveTimingData), wantPermanent)
 				}
 				var closeErr websocket.CloseError
 				if errors.As(err, &closeErr) {
@@ -696,14 +697,14 @@ func TestSignalRConnectionRejectsDuplicateSubscriptionCompletion(t *testing.T) {
 	}
 
 	consumed := 0
-	err = connection.read(context.Background(), func(_ context.Context, batch liveTimingBatch) error {
+	err = connection.read(context.Background(), func(_ context.Context, batch f1engine.WireBatch) error {
 		consumed++
-		if batch.source != liveTimingUpdateSourceSnapshot {
-			t.Errorf("batch source = %d, want snapshot", batch.source)
+		if batch.Source != f1engine.Snapshot {
+			t.Errorf("batch source = %d, want snapshot", batch.Source)
 		}
 		return nil
 	})
-	if !errors.Is(err, errInvalidLiveTimingData) {
+	if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 		t.Fatalf("read() error = %v, want invalid live timing data", err)
 	}
 	if consumed != 1 {
@@ -731,8 +732,8 @@ func TestSignalRConnectionRejectsMessageOverReadLimit(t *testing.T) {
 		t.Fatalf("subscribe() error = %v", err)
 	}
 
-	err = connection.read(context.Background(), func(context.Context, liveTimingBatch) error { return nil })
-	if !errors.Is(err, errInvalidLiveTimingData) {
+	err = connection.read(context.Background(), func(context.Context, f1engine.WireBatch) error { return nil })
+	if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 		t.Fatalf("read() error = %v, want invalid live timing data", err)
 	}
 }
@@ -758,7 +759,7 @@ func TestConnectSignalRRejectsInapplicableAffinityCookie(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "does not apply") {
 		t.Fatalf("connectSignalR() error = %v, want inapplicable cookie error", err)
 	}
-	if !errors.Is(err, errInvalidLiveTimingData) {
+	if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 		t.Errorf("connectSignalR() error does not wrap errInvalidLiveTimingData")
 	}
 }

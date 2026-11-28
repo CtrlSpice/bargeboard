@@ -4,11 +4,13 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+
+	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
@@ -102,53 +104,51 @@ func TestSharedSingleRun(t *testing.T) {
 		t.Fatal("replayed archive more than once")
 	}
 }
-func reduceFixture(t *testing.T, streams map[string][]StreamRecord) effects {
+
+type replaySignals struct {
+	spans   []ptrace.Span
+	logs    []plog.LogRecord
+	metrics map[string][]pmetric.Metric
+}
+
+func runPlan(t *testing.T, p FrozenReplayPlan) replaySignals {
+	t.Helper()
+	out := replaySignals{metrics: map[string][]pmetric.Metric{}}
+	r := newReceiver(DefaultConfig(), receiver.Settings{})
+	r.traces, _ = consumer.NewTraces(func(_ context.Context, tr ptrace.Traces) error {
+		for _, sp := range tr.ResourceSpans().At(0).ScopeSpans().At(0).Spans().All() {
+			out.spans = append(out.spans, sp)
+		}
+		return nil
+	})
+	r.logs, _ = consumer.NewLogs(func(_ context.Context, logs plog.Logs) error {
+		for _, l := range logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().All() {
+			out.logs = append(out.logs, l)
+		}
+		return nil
+	})
+	r.metrics, _ = consumer.NewMetrics(func(_ context.Context, metrics pmetric.Metrics) error {
+		for _, m := range metrics.ResourceMetrics().At(0).ScopeMetrics().At(0).Metrics().All() {
+			out.metrics[m.Name()] = append(out.metrics[m.Name()], m)
+		}
+		return nil
+	})
+	if err := r.play(t.Context(), p); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+func replayFixture(t *testing.T, streams map[string][]StreamRecord) replaySignals {
 	t.Helper()
 	streams["Heartbeat"] = []StreamRecord{{0, `{"Utc":"2025-03-10T10:00:00Z"}`}}
 	p, err := freeze([]byte(info), []byte(drivers), streams)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var total effects
-	for _, e := range reduce(p) {
-		total.logs = append(total.logs, e.logs...)
-		total.spans = append(total.spans, e.spans...)
-		total.points = append(total.points, e.points...)
-	}
-	return total
-}
-func TestIndexedFactsAndSparseClock(t *testing.T) {
-	e := reduceFixture(t, map[string][]StreamRecord{
-		"SessionData":         {{0, `{"StatusSeries":{"0":{"SessionStatus":"Started"}}}`}, {1e9, `{"StatusSeries":{"0":{"Utc":"2025-03-10T10:00:01Z"}}}`}, {11e9, `{"StatusSeries":{"1":{"Utc":"2025-03-10T10:00:10.500Z","SessionStatus":"Ends"}}}`}},
-		"RaceControlMessages": {{2e9, `{"Messages":{"8":{"Category":"Flag","Scope":"Driver","Flag":"BLUE","RacingNumber":"17"}}}`}, {4e9, `{"Messages":{"8":{"Message":"  API_KEY\nnever emit this"},"9":{"Category":"Flag","Scope":"Driver","Flag":"BLUE","RacingNumber":"17","Message":"Second","Utc":"2025-03-10T10:00:10.500"}}}`}, {5e9, `{"Messages":{"8":{"Message":"duplicate"}}}`}},
-		"TeamRadio":           {{3e9, `{"Captures":{"0":{"RacingNumber":"17","Path":"../unsafe"},"1":{"Path":"TeamRadio/ABC_17_20250310_100003.mp3"}}}`}, {12e9, `{"Captures":{"0":{"Path":"TeamRadio/ABC_17_20250310_100003.mp3"},"1":{"RacingNumber":"17","Utc":"2025-03-10T10:00:04.1Z"}}}`}},
-		"ExtrapolatedClock":   {{0, `{"Utc":"2025-03-10T10:00:00Z","Remaining":"00:00:11"}`}, {1e9, `{"Extrapolating":true}`}, {2e9, `{"Utc":"2025-03-10T10:00:02Z","Remaining":"00:00:08"}`}, {3e9, `{"Utc":"2025-03-10T10:00:02Z","Remaining":"00:00:07"}`}},
-	})
-	var bodies []string
-	for _, l := range e.logs {
-		bodies = append(bodies, l.name)
-	}
-	if !reflect.DeepEqual(bodies, []string{"f1.session.status.changed", "[redacted-message]", "Second", "f1.session.status.changed", "f1.team_radio.available"}) {
-		t.Fatal(bodies)
-	}
-	if e.logs[1].a["f1.race_control.message_redacted"] != true || e.logs[4].owner == nil || e.logs[4].at.Nanosecond() != 100000000 {
-		t.Fatal("log metadata")
-	}
-	if len(e.spans) != 1 || len(e.spans[0].events) != 4 || e.spans[0].a["f1.result.outcome"] != "unresolved" {
-		t.Fatal("root event ownership")
-	}
-	if len(e.points) != 3 || e.points[0].value != int64(8) {
-		t.Fatal(e.points)
-	}
-	for i, p := range e.points[1:] {
-		v := p.value.(sum)
-		if v.temporality != pmetric.AggregationTemporalityDelta || v.value != 1 || p.at.Sub(v.start) != []time.Duration{9 * time.Second, 500 * time.Millisecond}[i] {
-			t.Fatal(p)
-		}
-	}
+	return runPlan(t, p)
 }
 func TestSourceOwnership(t *testing.T) {
-	e := reduceFixture(t, map[string][]StreamRecord{
+	e := replayFixture(t, map[string][]StreamRecord{
 		"SessionData":           {{0, `{"StatusSeries":[{"SessionStatus":"Started","Utc":"2025-03-10T10:00:00Z"}]}`}, {12e9, `{"StatusSeries":{"1":{"SessionStatus":"Ends","Utc":"2025-03-10T10:00:12Z"}}}`}},
 		"TimingAppData":         {{0, `{"Lines":{"17":{"Stints":{"0":{"Compound":" SOFT ","TotalLaps":3}}}}}`}},
 		"TimingData":            {{1e9, `{"Lines":{"17":{"InPit":false,"NumberOfPitStops":0,"NumberOfLaps":1,"Stopped":false}}}`}, {2e9, `{"Lines":{"17":{"InPit":true,"NumberOfPitStops":1}}}`}, {5e9, `{"Lines":{"17":{"NumberOfLaps":2,"InPit":false,"LastLapTime":{"Value":"4.000","PersonalFastest":true}}}}`}, {10e9, `{"Lines":{"17":{"Stopped":true}}}`}},
@@ -156,50 +156,151 @@ func TestSourceOwnership(t *testing.T) {
 		"PitLaneTimeCollection": {{6e9, `{"PitTimes":{"17":{"Duration":"12.3","Lap":"2"}}}`}},
 		"PitStop":               {{7e9, `{"RacingNumber":"17","Lap":"2","PitStopTime":"2.5","PitLaneTime":"12.399"}`}, {8e9, `{"RacingNumber":"17","Lap":"2","PitStopTime":"2.6"}`}},
 	})
-	byName := map[string][]point{}
-	for _, p := range e.points {
-		byName[p.name] = append(byName[p.name], p)
-	}
-	for name, want := range map[string][]any{"f1.driver.tyre.age": {int64(3)}, "f1.session.cars_running": {int64(1), int64(0)}, "f1.driver.current_lap": {int64(1), int64(2)}} {
-		var got []any
-		for _, p := range byName[name] {
-			got = append(got, p.value)
+	for name, want := range map[string][]int64{"f1.driver.tyre.age": {3}, "f1.session.cars_running": {1, 0}, "f1.driver.current_lap": {1, 2}} {
+		var got []int64
+		for _, m := range e.metrics[name] {
+			for _, p := range m.Gauge().DataPoints().All() {
+				got = append(got, p.IntValue())
+			}
 		}
-		if !reflect.DeepEqual(got, want) {
+		if !slices.Equal(want, got) {
 			t.Fatal(name, got)
 		}
 	}
-	for name, v := range map[string]float64{"f1.driver.lap_time": 4, "f1.pit.lane_duration": 12.3, "f1.pit.stop_duration": 2.5} {
-		ps := byName[name]
-		if len(ps) != 1 || ps[0].histogram.sum != v || ps[0].histogram.count != 1 {
-			t.Fatal(name, ps)
+	for name, want := range map[string]float64{"f1.driver.lap_time": 4, "f1.pit.lane_duration": 12.3, "f1.pit.stop_duration": 2.5} {
+		ms := e.metrics[name]
+		if len(ms) != 1 {
+			t.Fatal(name, len(ms))
 		}
-	}
-	if byName["f1.driver.lap_time"][0].a["f1.tyre.compound"] != "soft" {
-		t.Fatal("in-lap used the next stint")
-	}
-	pits := byName["f1.driver.pit_lane_visits"]
-	if len(pits) != 2 || pits[1].value.(sum).value != 1 || pits[0].value.(sum).start != pits[1].value.(sum).start {
-		t.Fatal(pits)
-	}
-	got := map[string]any{}
-	for _, sp := range e.spans {
-		for _, ev := range sp.events {
-			if strings.HasPrefix(ev.name, "f1.pit.") || ev.name == "f1.personal_best" {
-				got[ev.name] = sp.a["f1.lap.number"]
+		p := ms[0].Histogram().DataPoints().At(0)
+		if p.Count() != 1 || p.Sum() != want {
+			t.Fatal(name, p.Count(), p.Sum())
+		}
+		if name == "f1.driver.lap_time" {
+			v, _ := p.Attributes().Get("f1.tyre.compound")
+			if v.Str() != "soft" {
+				t.Fatal(v.Str())
 			}
 		}
 	}
-	if !reflect.DeepEqual(got, map[string]any{"f1.pit.entry": int64(1), "f1.pit.exit": int64(2), "f1.pit.stop": int64(2), "f1.personal_best": int64(1)}) {
-		t.Fatal(got)
+	var owners = map[string]int64{}
+	for _, sp := range e.spans {
+		for _, ev := range sp.Events().All() {
+			if strings.HasPrefix(ev.Name(), "f1.pit.") || ev.Name() == "f1.personal_best" {
+				n, _ := sp.Attributes().Get("f1.lap.number")
+				owners[ev.Name()] = n.Int()
+			}
+		}
+	}
+	if !reflect.DeepEqual(owners, map[string]int64{"f1.pit.entry": 1, "f1.pit.exit": 2, "f1.pit.stop": 2, "f1.personal_best": 1}) {
+		t.Fatal(owners)
 	}
 }
 func TestWeatherContinuity(t *testing.T) {
-	e := reduceFixture(t, map[string][]StreamRecord{"WeatherData": {{0, `{"Rainfall":"0","AirTemp":"-0.1","WindDirection":"360","Pressure":"0.0"}`}, {1e9, `{"Rainfall":"1","WindSpeed":"0.0","Humidity":"100.1"}`}, {1e9, `{"Rainfall":"0"}`}, {2e9, `{"Rainfall":"0"}`}, {127e9, `{"Rainfall":"1"}`}, {128e9, `{"Rainfall":false}`}, {129e9, `{"Rainfall":"0"}`}}})
-	if len(e.points) != 7 || len(e.logs) != 2 {
-		t.Fatal(e.points, e.logs)
+	e := replayFixture(t, map[string][]StreamRecord{"WeatherData": {{0, `{"Rainfall":"0","AirTemp":"-0.1","WindDirection":"360","Pressure":"0.0"}`}, {1e9, `{"Rainfall":"1","WindSpeed":"0.0","Humidity":"100.1"}`}, {1e9, `{"Rainfall":"0"}`}, {2e9, `{"Rainfall":"0"}`}, {127e9, `{"Rainfall":"1"}`}, {128e9, `{"Rainfall":false}`}, {129e9, `{"Rainfall":"0"}`}}})
+	if len(e.logs) != 2 {
+		t.Fatal(len(e.logs))
 	}
-	if e.points[0].value != -0.1 || e.logs[0].a["f1.weather.rainfall_detected"] != true || e.logs[1].a["f1.weather.previous_rainfall_detected"] != true {
-		t.Fatal("weather values")
+	a, _ := e.logs[0].Attributes().Get("f1.weather.rainfall_detected")
+	b, _ := e.logs[1].Attributes().Get("f1.weather.previous_rainfall_detected")
+	if !a.Bool() || !b.Bool() {
+		t.Fatal(a, b)
+	}
+	if v := e.metrics["f1.session.weather.air_temperature"][0].Gauge().DataPoints().At(0).DoubleValue(); v != -0.1 {
+		t.Fatal(v)
+	}
+}
+func TestIndexedFactsAndSparseClock(t *testing.T) {
+	e := replayFixture(t, map[string][]StreamRecord{
+		"SessionData":         {{0, `{"StatusSeries":{"0":{"SessionStatus":"Started"}}}`}, {1e9, `{"StatusSeries":{"0":{"Utc":"2025-03-10T10:00:01Z"}}}`}, {11e9, `{"StatusSeries":{"1":{"Utc":"2025-03-10T10:00:10.500Z","SessionStatus":"Ends"}}}`}},
+		"RaceControlMessages": {{2e9, `{"Messages":{"8":{"Category":"Flag","Scope":"Driver","Flag":"BLUE","RacingNumber":"17"}}}`}, {4e9, `{"Messages":{"8":{"Message":"  API_KEY\nnever emit this"},"9":{"Category":"Flag","Scope":"Driver","Flag":"BLUE","RacingNumber":"17","Message":"Second","Utc":"2025-03-10T10:00:10.500"}}}`}, {5e9, `{"Messages":{"8":{"Message":"duplicate"}}}`}},
+		"TeamRadio":           {{3e9, `{"Captures":{"0":{"RacingNumber":"17","Path":"../unsafe"},"1":{"Path":"TeamRadio/ABC_17_20250310_100003.mp3"}}}`}, {12e9, `{"Captures":{"0":{"Path":"TeamRadio/ABC_17_20250310_100003.mp3"},"1":{"RacingNumber":"17","Utc":"2025-03-10T10:00:04.1Z"}}}`}},
+		"ExtrapolatedClock":   {{0, `{"Utc":"2025-03-10T10:00:00Z","Remaining":"00:00:11"}`}, {1e9, `{"Extrapolating":true}`}, {2e9, `{"Utc":"2025-03-10T10:00:02Z","Remaining":"00:00:08"}`}, {3e9, `{"Utc":"2025-03-10T10:00:02Z","Remaining":"00:00:07"}`}},
+	})
+	var bodies []string
+	for _, l := range e.logs {
+		bodies = append(bodies, l.Body().Str())
+	}
+	if !slices.Equal(bodies, []string{"f1.session.status.changed", "[redacted-message]", "Second", "f1.session.status.changed", "f1.team_radio.available"}) {
+		t.Fatal(bodies)
+	}
+	radio := e.logs[4]
+	if radio.TraceID().IsEmpty() || radio.SpanID().IsEmpty() || radio.Timestamp().AsTime().Nanosecond() != 100000000 {
+		t.Fatal("radio correlation")
+	}
+	if len(e.spans) != 1 || e.spans[0].Events().Len() != 4 {
+		t.Fatal("root event ownership")
+	}
+}
+func TestConflictingLapKeepsSectorMeasurements(t *testing.T) {
+	for _, boundary := range []int64{2e9, 6e9} {
+		e := replayFixture(t, map[string][]StreamRecord{
+			"SessionData": {{0, `{"StatusSeries":[{"Utc":"2025-03-10T10:00:00Z","SessionStatus":"Started"}]}`}},
+			"TimingData":  {{0, `{"Lines":{"17":{"NumberOfLaps":1}}}`}, {boundary, `{"Lines":{"17":{"NumberOfLaps":2,"LastLapTime":{"Value":"5.999"},"Sectors":[{"Value":"1.000"},{"Value":"2.000"},{"Value":"3.000"}]}}}`}},
+		})
+		if len(e.metrics["f1.driver.lap_time"]) != 0 || len(e.metrics["f1.driver.last_lap_time"]) != 0 {
+			t.Fatal("accepted conflicting lap")
+		}
+		var gauges, hist []float64
+		for _, m := range e.metrics["f1.driver.last_sector_time"] {
+			for _, p := range m.Gauge().DataPoints().All() {
+				gauges = append(gauges, p.DoubleValue())
+			}
+		}
+		for _, m := range e.metrics["f1.driver.sector_time"] {
+			for _, p := range m.Histogram().DataPoints().All() {
+				if p.Count() != 1 {
+					t.Fatal(p.Count())
+				}
+				hist = append(hist, p.Sum())
+			}
+		}
+		for _, got := range [][]float64{gauges, hist} {
+			if !slices.Equal(got, []float64{1, 2, 3}) {
+				t.Fatal(boundary, got)
+			}
+		}
+	}
+}
+func TestPendingLapCutoff(t *testing.T) {
+	for _, tc := range []struct {
+		offset int64
+		want   bool
+	}{{5e9 - 1, true}, {5e9, true}, {5e9 + 1, false}} {
+		t.Run(fmt.Sprint(tc.offset), func(t *testing.T) {
+			e := replayFixture(t, map[string][]StreamRecord{"SessionData": {{0, `{"StatusSeries":[{"Utc":"2025-03-10T10:00:00Z","SessionStatus":"Started"}]}`}}, "TimingData": {{0, `{"Lines":{"17":{"NumberOfLaps":1}}}`}, {3e9, `{"Lines":{"17":{"NumberOfLaps":2}}}`}, {3e9 + tc.offset, `{"Lines":{"17":{"LastLapTime":{"Value":"3.000"}}}}`}}})
+			ms := e.metrics["f1.driver.lap_time"]
+			if (len(ms) != 0) != tc.want {
+				t.Fatal(tc, len(ms))
+			}
+			if tc.want && ms[0].Histogram().DataPoints().At(0).Sum() != 3 {
+				t.Fatal("wrong lap duration")
+			}
+		})
+	}
+}
+func TestHistoricalRepairDecisions(t *testing.T) {
+	e := replayFixture(t, map[string][]StreamRecord{"SessionData": {{0, `{"StatusSeries":[{"Utc":"2025-03-10T10:00:00Z","SessionStatus":"Started"}]}`}}, "TimingData": {{0, `{"Lines":{"17":{"NumberOfLaps":1}}}`}, {6e9, `{"Lines":{"17":{"NumberOfLaps":2,"LastLapTime":{"Value":"6.000"},"Sectors":[{"Value":"1.000"},{"Value":"2.000"},{"Value":"3.000"}]}}}`}, {12e9, `{"Lines":{"17":{"NumberOfLaps":3,"LastLapTime":{"Value":"6.000"},"Sectors":{"0":{"Value":"1.000"},"2":{"Value":"3.000"}}}}}`}, {18e9, `{"Lines":{"17":{"NumberOfLaps":4,"LastLapTime":{"Value":"5.999","OverallFastest":true},"Sectors":[{"Value":"1.000"},{"Value":"2.000"},{"Value":"3.000"}]}}}`}},
+		"RaceControlMessages": {{13e9, `{"Messages":[{"Category":"Other","Message":"CAR 17 (FIG) TIME 0:06.000 DELETED - TRACK LIMITS AT TURN 9 LAP 3 10:00:12"},{"Category":"Other","Message":"CAR 17 (FIG) LAP 3 WILL BE REINSTATED"}]}`}}})
+	var qualities []any
+	var decisions []string
+	for _, sp := range e.spans {
+		if strings.HasPrefix(sp.Name(), "lap ") {
+			qualities = append(qualities, sp.Attributes().AsRaw()["f1.timing.value_quality"])
+		}
+		for _, ev := range sp.Events().All() {
+			switch ev.Name() {
+			case "f1.fastest_lap":
+				t.Fatal("conflicting duration created fastest lap")
+			case "f1.lap_time.deleted", "f1.lap_time.reinstated":
+				decisions = append(decisions, ev.Name())
+				if sp.Attributes().AsRaw()["f1.lap.number"] != int64(2) || ev.Attributes().AsRaw()["f1.race_control.reason_lap"] != int64(3) {
+					t.Fatal(ev.Name())
+				}
+			}
+		}
+	}
+	if !reflect.DeepEqual(qualities, []any{"reported", "reported", "conflict", nil}) || !slices.Equal(decisions, []string{"f1.lap_time.deleted", "f1.lap_time.reinstated"}) {
+		t.Fatal(qualities, decisions)
 	}
 }

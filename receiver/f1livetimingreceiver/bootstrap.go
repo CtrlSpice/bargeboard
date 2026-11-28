@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 )
 
 const (
@@ -122,7 +124,7 @@ func credentialsFromPreflight(
 	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
 		return connectionCredentials{}, setupHTTPFailure(stagePreflight, statusCode, "", time.Time{})
 	}
-	return connectionCredentials{}, invalidLiveTimingData(
+	return connectionCredentials{}, f1engine.InvalidLiveTimingData(
 		fmt.Sprintf("negotiation preflight did not return %s cookie", affinityCookieName),
 	)
 }

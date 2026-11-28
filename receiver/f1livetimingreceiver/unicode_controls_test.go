@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 )
 
 // Synthetic JSON/SignalR fixtures; these are boundary probes, not live F1 samples.
@@ -26,7 +28,7 @@ func TestUnicodeControlsRejectBeforeRouting(t *testing.T) {
 	} {
 		input := []byte(record)
 		batch, err := decodeHubRecord(input, []string{"SessionInfo", "�"})
-		if batch != nil || !errors.Is(err, errInvalidLiveTimingData) || string(input) != record {
+		if batch != nil || !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || string(input) != record {
 			t.Errorf("control probe %q: batch=%#v, err=%v, input preserved=%t", record, batch, err, string(input) == record)
 		}
 	}
@@ -44,11 +46,11 @@ func TestUnicodeControlsNegotiationAssignments(t *testing.T) {
 		input := []byte("{" + valid + "," + member + "}")
 		before := bytes.Clone(input)
 		got, err := parseNegotiateResponse(input)
-		if got != (negotiation{}) || !errors.Is(err, errInvalidLiveTimingData) || !bytes.Equal(input, before) {
+		if got != (negotiation{}) || !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || !bytes.Equal(input, before) {
 			t.Errorf("assignment probe %s: result=%#v, err=%v", member, got, err)
 		}
 	}
-	if err := parseHandshakeResponse([]byte(`{"\uD800":true}`)); !errors.Is(err, errInvalidLiveTimingData) {
+	if err := parseHandshakeResponse([]byte(`{"\uD800":true}`)); !errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 		t.Errorf("malformed handshake key: %v", err)
 	}
 }
@@ -74,7 +76,7 @@ func TestUnicodeControlsErrorDescriptions(t *testing.T) {
 			},
 		} {
 			err := parse([]byte(`{"error":` + description + `}`))
-			if !errors.Is(err, errInvalidLiveTimingData) || !strings.Contains(err.Error(), "rejected") || strings.Contains(err.Error(), description) {
+			if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || !strings.Contains(err.Error(), "rejected") || strings.Contains(err.Error(), description) {
 				t.Errorf("description changed rejection: %v", err)
 			}
 		}
@@ -87,8 +89,8 @@ func TestUnicodeControlsOpaqueExtensions(t *testing.T) {
 	record := []byte(`{"type":1,"target":"feed","extension":` + extension + `,"arguments":["SessionInfo",` + payload + `,"2026-08-21T10:30:00Z"]}`)
 	before := bytes.Clone(record)
 	got, err := decodeHubRecord(record, nil)
-	want := &liveTimingBatch{source: liveTimingUpdateSourceFeed, updates: []liveTimingUpdate{{
-		topic: "SessionInfo", payload: json.RawMessage(payload), timestamp: "2026-08-21T10:30:00Z", source: liveTimingUpdateSourceFeed,
+	want := &f1engine.WireBatch{Source: f1engine.Feed, Updates: []f1engine.WireUpdate{{
+		Topic: "SessionInfo", Payload: json.RawMessage(payload), Timestamp: "2026-08-21T10:30:00Z", Source: f1engine.Feed,
 	}}}
 	if err != nil || !reflect.DeepEqual(got, want) || !bytes.Equal(record, before) {
 		t.Fatalf("opaque payload: %#v, %v", got, err)
@@ -110,12 +112,12 @@ func TestUnicodeControlsValidTokens(t *testing.T) {
 		// Feed topic grammar is currently nonempty, without an ASCII allowlist.
 		record := []byte(`{"ty\u0070e":1,"tar\u0067et":"f\u0065ed","arguments":[` + test.token + `,{},"2026-08-21T10:30:00Z"],` + test.token + `:null}`)
 		got, err := decodeHubRecord(record, nil)
-		want := &liveTimingBatch{source: liveTimingUpdateSourceFeed, updates: []liveTimingUpdate{{topic: test.decoded, payload: json.RawMessage(`{}`), timestamp: "2026-08-21T10:30:00Z", source: liveTimingUpdateSourceFeed}}}
+		want := &f1engine.WireBatch{Source: f1engine.Feed, Updates: []f1engine.WireUpdate{{Topic: test.decoded, Payload: json.RawMessage(`{}`), Timestamp: "2026-08-21T10:30:00Z", Source: f1engine.Feed}}}
 		if err != nil || !reflect.DeepEqual(got, want) {
 			t.Errorf("valid feed %s: %#v, %v", test.token, got, err)
 		}
 		got, err = decodeHubRecord([]byte(`{"type":3,"invocationId":"\u0030","result":{`+test.token+`:{}}}`), []string{test.decoded})
-		want = &liveTimingBatch{source: liveTimingUpdateSourceSnapshot, requestedTopics: []string{test.decoded}, presentTopics: []string{test.decoded}, updates: []liveTimingUpdate{{topic: test.decoded, payload: json.RawMessage(`{}`), source: liveTimingUpdateSourceSnapshot}}}
+		want = &f1engine.WireBatch{Source: f1engine.Snapshot, RequestedTopics: []string{test.decoded}, PresentTopics: []string{test.decoded}, Updates: []f1engine.WireUpdate{{Topic: test.decoded, Payload: json.RawMessage(`{}`), Source: f1engine.Snapshot}}}
 		if err != nil || !reflect.DeepEqual(got, want) {
 			t.Errorf("valid manifest %s: %#v, %v", test.token, got, err)
 		}
@@ -127,10 +129,10 @@ func TestUnicodeControlsValidTokens(t *testing.T) {
 			t.Errorf("valid handshake key: %v", err)
 		}
 		// Unicode acceptance is separate from timestamp and base64 grammar.
-		if _, err := normalizeLiveTimingTimestamp(liveTimingUpdateSourceFeed, test.decoded); err == nil {
+		if _, err := f1engine.NormalizeLiveTimingTimestamp(f1engine.Feed, test.decoded); err == nil {
 			t.Error("Unicode validity bypassed timestamp grammar")
 		}
-		if got, err := decompressLiveTimingPayload([]byte(test.token)); got != nil || err == nil {
+		if got, err := f1engine.DecompressLiveTimingPayload([]byte(test.token)); got != nil || err == nil {
 			t.Error("Unicode validity bypassed base64 grammar")
 		}
 	}
@@ -146,7 +148,7 @@ func TestUnicodeControlsOwningKeyPolicies(t *testing.T) {
 		{`{"type":3,"invocationId":"0","result":{"�":1,"\uD800":2}}`, "snapshot manifest"},
 	} {
 		got, err := decodeHubRecord([]byte(test.record), []string{"SessionInfo", "�"})
-		if got != nil || !errors.Is(err, errInvalidLiveTimingData) || !strings.Contains(err.Error(), test.reason) {
+		if got != nil || !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || !strings.Contains(err.Error(), test.reason) {
 			t.Errorf("key policy %s: %#v, %v", test.record, got, err)
 		}
 	}
@@ -164,7 +166,7 @@ func TestUnicodeControlsOwningKeyPolicies(t *testing.T) {
 			if err != nil {
 				t.Errorf("handshake %s: %v", test.record, err)
 			}
-		} else if !errors.Is(err, errInvalidLiveTimingData) || err.Error() != "invalid F1 live timing data: "+test.reason {
+		} else if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || err.Error() != "invalid F1 live timing data: "+test.reason {
 			t.Errorf("handshake %s: %v", test.record, err)
 		}
 	}
@@ -200,7 +202,7 @@ func TestUnicodeControlsHubMessageCompleteResult(t *testing.T) {
 		`{"type":6,"type":7}`, `{"type":6,"arguments":false}`, `{"type":6,"allowReconnect":"true"}`,
 	} {
 		got, err := decodeHubMessage([]byte(raw))
-		if !reflect.DeepEqual(got, hubMessage{}) || !errors.Is(err, errInvalidLiveTimingData) {
+		if !reflect.DeepEqual(got, hubMessage{}) || !errors.Is(err, f1engine.ErrInvalidLiveTimingData) {
 			t.Errorf("failed message returns partial state: %#v, %v", got, err)
 		}
 	}
@@ -240,7 +242,7 @@ func TestUnicodeControlsNegotiationCompatibility(t *testing.T) {
 			if err != nil {
 				t.Errorf("compatibility %s: %v", test.members, err)
 			}
-		} else if !errors.Is(err, errInvalidLiveTimingData) || !strings.Contains(err.Error(), test.reason) {
+		} else if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || !strings.Contains(err.Error(), test.reason) {
 			t.Errorf("compatibility %s: %v, want %s", test.members, err, test.reason)
 		}
 	}
@@ -251,7 +253,7 @@ func TestUnicodeControlsNegotiationCompatibility(t *testing.T) {
 		{`null {}`, "decode SignalR negotiation response"},
 	} {
 		got, err := parseNegotiateResponse([]byte(test.raw))
-		if got != (negotiation{}) || !errors.Is(err, errInvalidLiveTimingData) || err.Error() != "invalid F1 live timing data: "+test.reason {
+		if got != (negotiation{}) || !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || err.Error() != "invalid F1 live timing data: "+test.reason {
 			t.Errorf("top-level null policy: %#v, %v", got, err)
 		}
 	}
@@ -278,7 +280,7 @@ func TestUnicodeControlsConnectionTokenNeverReachesUpgrade(t *testing.T) {
 	})}
 	connection, err := connectSignalR(t.Context(), client, cfg)
 	wantRequests := []string{"OPTIONS " + cfg.NegotiateEndpoint, "POST " + cfg.NegotiateEndpoint + "?negotiateVersion=1"}
-	if connection != nil || !errors.Is(err, errInvalidLiveTimingData) || err.Error() != "invalid F1 live timing data: decode SignalR negotiation response" || !reflect.DeepEqual(requests, wantRequests) {
+	if connection != nil || !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || err.Error() != "invalid F1 live timing data: decode SignalR negotiation response" || !reflect.DeepEqual(requests, wantRequests) {
 		t.Fatalf("setup: connection=%v, err=%v, requests=%v", connection, err, requests)
 	}
 }
@@ -299,25 +301,25 @@ func TestUnicodeControlsOrderedBatches(t *testing.T) {
 			before := bytes.Clone(pending)
 			connection := &signalRConnection{pending: pending, requestedTopics: []string{"SessionStatus"}}
 			observation := time.Date(2026, 8, 21, 10, 32, 0, 0, time.UTC)
-			var wire []liveTimingBatch
-			var normalized []normalizedLiveTimingBatch
-			err := connection.read(t.Context(), func(_ context.Context, batch liveTimingBatch) error {
+			var wire []f1engine.WireBatch
+			var normalized []f1engine.Batch
+			err := connection.read(t.Context(), func(_ context.Context, batch f1engine.WireBatch) error {
 				wire = append(wire, batch)
-				result, err := normalizeLiveTimingBatch(batch, observation)
+				result, err := f1engine.NormalizeBatch(batch, observation)
 				if err == nil {
 					normalized = append(normalized, result)
 				}
 				return err
 			})
-			wantWire := []liveTimingBatch{incrementalWantFeed("Started", "2026-08-21T10:30:00Z")}
-			wantNormalized := []normalizedLiveTimingBatch{{source: liveTimingUpdateSourceFeed, requestedTopics: []string{}, presentTopics: []string{}, observationTime: observation, updates: []normalizedLiveTimingUpdate{{topic: "SessionStatus", payload: json.RawMessage(`{"Status":"Started"}`), timestamp: time.Date(2026, 8, 21, 10, 30, 0, 0, time.UTC), source: liveTimingUpdateSourceFeed}}}}
-			wantErr := errInvalidLiveTimingData
+			wantWire := []f1engine.WireBatch{incrementalWantFeed("Started", "2026-08-21T10:30:00Z")}
+			wantNormalized := []f1engine.Batch{{Source: f1engine.Feed, RequestedTopics: []string{}, PresentTopics: []string{}, ObservationTime: observation, Updates: []f1engine.Update{{Topic: "SessionStatus", Payload: json.RawMessage(`{"Status":"Started"}`), Timestamp: time.Date(2026, 8, 21, 10, 30, 0, 0, time.UTC), Source: f1engine.Feed}}}}
+			wantErr := f1engine.ErrInvalidLiveTimingData
 			if !badControl {
 				wantErr = errSignalRClosed
-				wantWire = append(wantWire, liveTimingBatch{source: liveTimingUpdateSourceFeed, updates: []liveTimingUpdate{{topic: topic, payload: wirePayload, timestamp: "2026-08-21T10:30:30Z", source: liveTimingUpdateSourceFeed}}}, incrementalWantFeed("Finished", "2026-08-21T10:31:00Z"))
+				wantWire = append(wantWire, f1engine.WireBatch{Source: f1engine.Feed, Updates: []f1engine.WireUpdate{{Topic: topic, Payload: wirePayload, Timestamp: "2026-08-21T10:30:30Z", Source: f1engine.Feed}}}, incrementalWantFeed("Finished", "2026-08-21T10:31:00Z"))
 				wantNormalized = append(wantNormalized,
-					normalizedLiveTimingBatch{source: liveTimingUpdateSourceFeed, requestedTopics: []string{}, presentTopics: []string{}, observationTime: observation, invalidUnicodeUpdates: 1, updates: []normalizedLiveTimingUpdate{{topic: strings.TrimSuffix(topic, ".z"), payload: json.RawMessage(payload), timestamp: time.Date(2026, 8, 21, 10, 30, 30, 0, time.UTC), source: liveTimingUpdateSourceFeed}}},
-					normalizedLiveTimingBatch{source: liveTimingUpdateSourceFeed, requestedTopics: []string{}, presentTopics: []string{}, observationTime: observation, updates: []normalizedLiveTimingUpdate{{topic: "SessionStatus", payload: json.RawMessage(`{"Status":"Finished"}`), timestamp: time.Date(2026, 8, 21, 10, 31, 0, 0, time.UTC), source: liveTimingUpdateSourceFeed}}})
+					f1engine.Batch{Source: f1engine.Feed, RequestedTopics: []string{}, PresentTopics: []string{}, ObservationTime: observation, InvalidUnicodeUpdates: 1, Updates: []f1engine.Update{{Topic: strings.TrimSuffix(topic, ".z"), Payload: json.RawMessage(payload), Timestamp: time.Date(2026, 8, 21, 10, 30, 30, 0, time.UTC), Source: f1engine.Feed}}},
+					f1engine.Batch{Source: f1engine.Feed, RequestedTopics: []string{}, PresentTopics: []string{}, ObservationTime: observation, Updates: []f1engine.Update{{Topic: "SessionStatus", Payload: json.RawMessage(`{"Status":"Finished"}`), Timestamp: time.Date(2026, 8, 21, 10, 31, 0, 0, time.UTC), Source: f1engine.Feed}}})
 			}
 			if !errors.Is(err, wantErr) || !reflect.DeepEqual(wire, wantWire) || !reflect.DeepEqual(normalized, wantNormalized) {
 				t.Errorf("compressed=%t badControl=%t: wire=%#v, normalized=%#v, err=%v", compressed, badControl, wire, normalized, err)
@@ -342,28 +344,28 @@ func TestUnicodeControlsSnapshotAtomicity(t *testing.T) {
 		requested := []string{"SessionInfo", "CarData.z", "�"}
 		connection := &signalRConnection{pending: pending, requestedTopics: append([]string(nil), requested...)}
 		observation := time.Date(2026, 8, 21, 10, 30, 0, 0, time.UTC)
-		var wire []liveTimingBatch
-		var normalized []normalizedLiveTimingBatch
-		err := connection.read(t.Context(), func(_ context.Context, batch liveTimingBatch) error {
+		var wire []f1engine.WireBatch
+		var normalized []f1engine.Batch
+		err := connection.read(t.Context(), func(_ context.Context, batch f1engine.WireBatch) error {
 			wire = append(wire, batch)
-			result, err := normalizeLiveTimingBatch(batch, observation)
+			result, err := f1engine.NormalizeBatch(batch, observation)
 			if err == nil {
 				normalized = append(normalized, result)
 			}
 			return err
 		})
-		var wantWire []liveTimingBatch
-		var wantNormalized []normalizedLiveTimingBatch
-		wantTopics, wantErr := requested, errInvalidLiveTimingData
+		var wantWire []f1engine.WireBatch
+		var wantNormalized []f1engine.Batch
+		wantTopics, wantErr := requested, f1engine.ErrInvalidLiveTimingData
 		if !badKey {
 			wantTopics, wantErr = nil, errSignalRClosed
-			wantWire = []liveTimingBatch{{source: liveTimingUpdateSourceSnapshot, requestedTopics: requested, presentTopics: []string{"CarData.z", "SessionInfo"}, updates: []liveTimingUpdate{
-				{topic: "CarData.z", payload: compressed, source: liveTimingUpdateSourceSnapshot},
-				{topic: "SessionInfo", payload: json.RawMessage(payload), source: liveTimingUpdateSourceSnapshot},
+			wantWire = []f1engine.WireBatch{{Source: f1engine.Snapshot, RequestedTopics: requested, PresentTopics: []string{"CarData.z", "SessionInfo"}, Updates: []f1engine.WireUpdate{
+				{Topic: "CarData.z", Payload: compressed, Source: f1engine.Snapshot},
+				{Topic: "SessionInfo", Payload: json.RawMessage(payload), Source: f1engine.Snapshot},
 			}}}
-			wantNormalized = []normalizedLiveTimingBatch{{source: liveTimingUpdateSourceSnapshot, requestedTopics: []string{"SessionInfo", "CarData", "�"}, presentTopics: []string{"CarData", "SessionInfo"}, observationTime: observation, invalidUnicodeUpdates: 2, updates: []normalizedLiveTimingUpdate{
-				{topic: "CarData", payload: json.RawMessage(payload), source: liveTimingUpdateSourceSnapshot},
-				{topic: "SessionInfo", payload: json.RawMessage(payload), source: liveTimingUpdateSourceSnapshot},
+			wantNormalized = []f1engine.Batch{{Source: f1engine.Snapshot, RequestedTopics: []string{"SessionInfo", "CarData", "�"}, PresentTopics: []string{"CarData", "SessionInfo"}, ObservationTime: observation, InvalidUnicodeUpdates: 2, Updates: []f1engine.Update{
+				{Topic: "CarData", Payload: json.RawMessage(payload), Source: f1engine.Snapshot},
+				{Topic: "SessionInfo", Payload: json.RawMessage(payload), Source: f1engine.Snapshot},
 			}}}
 		}
 		if !errors.Is(err, wantErr) || !reflect.DeepEqual(wire, wantWire) || !reflect.DeepEqual(normalized, wantNormalized) || !reflect.DeepEqual(connection.requestedTopics, wantTopics) || connection.pending != nil || !bytes.Equal(pending, before) {

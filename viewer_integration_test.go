@@ -698,13 +698,16 @@ func verifyViewerRace(t *testing.T, viewerURL string, viewer *duckdbextension.Du
 			for _, sm := range rm.ScopeMetrics().All() {
 				for _, m := range sm.Metrics().All() {
 					metrics[m.Name()] = true
+					if m.Name() == "f1.field.speed" || m.Name() == "f1.field.engine_speed" {
+						checkViewerCarHistogram(t, m, spans[root].TraceID(), func(id pcommon.SpanID) bool { return id == spans[root].SpanID() || id == spans["lap 1"].SpanID() })
+					}
 				}
 			}
 		}
 	}
 	for _, name := range []string{"f1.session.current_lap", "f1.session.intended_total_laps", "f1.session.cars_running",
 		"f1.session.weather.air_temperature", "f1.session.weather.rainfall_detected", "f1.driver.tyre.age",
-		"f1.driver.last_lap_time", "f1.driver.lap_time", "f1.driver.sector_time", "f1.field.speed", "f1.field.drs.active_time_ratio"} {
+		"f1.driver.last_lap_time", "f1.driver.lap_time", "f1.driver.sector_time", "f1.field.speed", "f1.field.engine_speed", "f1.field.drs.active_time_ratio"} {
 		if !metrics[name] {
 			t.Errorf("missing metric %s", name)
 		}
@@ -729,6 +732,27 @@ func verifyViewerRace(t *testing.T, viewerURL string, viewer *duckdbextension.Du
 	for _, body := range []string{viewerIncident, "f1.weather.rainfall.changed", "f1.session.status.changed"} {
 		if !logs[body] {
 			t.Errorf("missing log %q", body)
+		}
+	}
+}
+
+func checkViewerCarHistogram(t *testing.T, m pmetric.Metric, trace pcommon.TraceID, validSpan func(pcommon.SpanID) bool) {
+	t.Helper()
+	if m.Type() != pmetric.MetricTypeExponentialHistogram {
+		t.Fatal(m.Name(), m.Type())
+	}
+	h := m.ExponentialHistogram()
+	if h.AggregationTemporality() != pmetric.AggregationTemporalityDelta || h.DataPoints().Len() == 0 {
+		t.Fatal(m.Name(), "missing delta histogram")
+	}
+	for _, p := range h.DataPoints().All() {
+		if p.Scale() != 4 || p.ZeroThreshold() != 0 || p.Exemplars().Len() < 1 || p.Exemplars().Len() > 2 {
+			t.Fatal(m.Name(), "invalid scale or exemplars")
+		}
+		for _, x := range p.Exemplars().All() {
+			if x.ValueType() != pmetric.ExemplarValueTypeInt || x.TraceID() != trace || !validSpan(x.SpanID()) || x.SpanID().IsEmpty() {
+				t.Fatal(m.Name(), x.TraceID(), x.SpanID(), x.ValueType())
+			}
 		}
 	}
 }

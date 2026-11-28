@@ -257,6 +257,14 @@ establish provider permission for third-party clients or device-limit treatment.
 
 ## Historical replay and companion receivers
 
+Live timing and static replay share a session engine. Both produce 10-second
+Delta ExponentialHistograms for field speed and engine speed from `CarData.z`.
+Each window pools measurements across drivers. Its lowest and highest readings
+link to the driver's lap, or to the driver session root if no lap is known.
+Replay applies all source batches at a historical timestamp before the virtual
+tick at that time. Ticks are one second apart. Playback speed changes the wait
+between batches, not their timestamps.
+
 The shipped `config.yaml` keeps `[f1livetiming, otlp]` as the active default
 receivers so startup never requires a static archive path or unapproved
 third-party egress. To load a finished session and post-session context into the
@@ -323,10 +331,10 @@ service:
       exporters: [desktop]
 ```
 
-Each receiver owns a non-overlapping domain: `f1static` replays finished static
-archives offline; `openf1` emits Race/Sprint result observation logs; `jolpica`
-emits official FIA final classifications and WDC/WCC standings; and MultiViewer
-circuit geometry enriches eligible coordinate-bearing trace events in place.
+`f1static` downloads a finished archive before replay. `openf1` emits Race/Sprint
+result observation logs, and `jolpica` emits official FIA final classifications
+and WDC/WCC standings. MultiViewer circuit geometry enriches eligible trace
+events with coordinates.
 
 ## Test data
 
@@ -334,7 +342,7 @@ Public F1 payload fixtures are independently authored synthetic inputs. Source
 references and observations establish the evidence for source-dependent rules;
 synthetic cases exercise those rules without publishing captured race records.
 The provenance files under `receiver/*/testdata/SOURCES.md` and
-`internal/circuitmap/testdata/SOURCES.md` distinguish
+`internal/{circuitmap,f1engine}/testdata` distinguish
 those roles. Public CI uses invented credentials and local HTTP/WebSocket servers
 and must not contact F1, OpenF1, Jolpica, or MultiViewer services or receive F1
 account credentials.

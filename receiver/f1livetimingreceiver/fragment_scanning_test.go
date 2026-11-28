@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/CtrlSpice/bargeboard/internal/f1engine"
 	"github.com/coder/websocket"
 )
 
@@ -108,7 +109,7 @@ func TestHubRecordBufferFragmentedSizeBoundary(t *testing.T) {
 			want := hubRecordBuffer{contents: before, scanned: maxHubRecordSize}
 			record, complete, err = buffer.next()
 			if strings.HasPrefix(extra, "x") {
-				if !errors.Is(err, errInvalidLiveTimingData) || record != nil || complete ||
+				if !errors.Is(err, f1engine.ErrInvalidLiveTimingData) || record != nil || complete ||
 					!reflect.DeepEqual(buffer, want) || &buffer.contents[0] != storage || cap(buffer.contents) != capacity {
 					t.Fatalf("overflow changed buffer: length %d, %v, %v; cursor %d", len(record), complete, err, buffer.scanned)
 				}
@@ -167,7 +168,7 @@ func TestHandshakeFragmentFailuresDiscardPending(t *testing.T) {
 			socket.reads <- livenessRead{err: errors.New("unexpected extra read")}
 			pending, err := readHandshakeResponse(t.Context(), socket)
 			wantInvalid := strings.HasPrefix(test.want, "invalid F1 live timing data:")
-			if err == nil || err.Error() != test.want || errors.Is(err, errInvalidLiveTimingData) != wantInvalid ||
+			if err == nil || err.Error() != test.want || errors.Is(err, f1engine.ErrInvalidLiveTimingData) != wantInvalid ||
 				pending != nil || len(socket.reads) != 1 || socket.written() != nil {
 				t.Fatalf("handshake = %q, %v; unread messages %d", pending, err, len(socket.reads))
 			}
@@ -195,14 +196,14 @@ func TestIncrementalTinyFragmentsStopAtFailure(t *testing.T) {
 			socket.reads <- test.last
 			socket.reads <- livenessRead{err: errors.New("unexpected extra read")}
 			connection := &signalRConnection{conn: socket, requestedTopics: []string{"SessionStatus"}}
-			var batches []liveTimingBatch
-			err := connection.read(t.Context(), func(_ context.Context, batch liveTimingBatch) error {
+			var batches []f1engine.WireBatch
+			err := connection.read(t.Context(), func(_ context.Context, batch f1engine.WireBatch) error {
 				batches = append(batches, batch)
 				return nil
 			})
 			wantInvalid := strings.HasPrefix(test.want, "invalid F1 live timing data:")
-			if err == nil || err.Error() != test.want || errors.Is(err, errInvalidLiveTimingData) != wantInvalid ||
-				!reflect.DeepEqual(batches, []liveTimingBatch{incrementalWantFeed("Started", "2026-08-21T10:30:00Z")}) ||
+			if err == nil || err.Error() != test.want || errors.Is(err, f1engine.ErrInvalidLiveTimingData) != wantInvalid ||
+				!reflect.DeepEqual(batches, []f1engine.WireBatch{incrementalWantFeed("Started", "2026-08-21T10:30:00Z")}) ||
 				!reflect.DeepEqual(connection.requestedTopics, []string{"SessionStatus"}) || connection.pending != nil || len(socket.reads) != 1 {
 				t.Fatalf("read = %#v, %v; state = %#v; unread messages %d", batches, err, connection, len(socket.reads))
 			}
