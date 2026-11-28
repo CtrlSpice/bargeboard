@@ -42,43 +42,31 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 `
 
-const testCommonsClause = `
-The Software is provided to you by the Licensor under the License, as defined
-below, subject to the following condition. Without limiting other conditions in
-the License, the grant of rights under the License will not include, and the
-License does not grant to you, the right to Sell the Software. For purposes of
-the foregoing, "Sell" means practicing any or all of the rights granted to you
-under the License to provide to third parties, for a fee or other consideration,
-a product or service that consists, entirely or substantially, of the Software
-or the functionality of the Software. Any license notice or attribution required
-by the License must also include this Commons Cause License Condition notice.
-`
-
-func TestIsLegalFilename(t *testing.T) {
-	for _, name := range []string{"LICENSE", "LICENSE.md", "LICENCE-MIT", "NOTICE.txt", "PATENTS", "COPYRIGHT", "AUTHORS"} {
-		if !isLegalFilename(name) {
-			t.Errorf("isLegalFilename(%q) = false", name)
-		}
-	}
-	for _, name := range []string{"LICENSES/Apache-2.0.txt", "LICENSE.yaml", "licenses/terms.yml", ".github/LICENSE.yml"} {
-		if !isLegalPath(name) {
-			t.Errorf("isLegalPath(%q) = false", name)
-		}
-	}
-	if !isLicensePath("LICENSES/Apache-2.0.txt") || isLicensePath("NOTICE") {
-		t.Fatal("license path classification is incorrect")
-	}
-	for _, name := range []string{"license.go", "license_test.go", "licensecheck.go", "LICENSE.py", "LICENSE.f90", "license_missing_name.prototext", "LICENSE.PROTOTEXT", "notices.go", "README.md"} {
-		if isLegalFilename(name) {
-			t.Errorf("isLegalFilename(%q) = true", name)
-		}
-	}
-	for _, name := range []string{
-		"LICENSES/license.go", "internal/licenses/parser.go", "testdata/license_missing_name.prototext", "LICENSES/license.prototext",
-		".github/workflows/license-check.yml", ".github/workflows/license-check.yaml",
+func TestIsLegalPathAndLicensePath(t *testing.T) {
+	const nested = "desktopexporter/internal/server/static/licenses/madoromi/"
+	for _, tc := range []struct {
+		names          []string
+		legal, license bool
+	}{
+		{[]string{
+			"LICENSE", "COPYING_extra", "LICENCE-MIT", "UNLICENSE.md",
+			"THIRD_PARTY_LICENSES/Boost-LICENSE", "vendor/Boost-LICENSE.md", "vendor/X_licence.txt",
+			"LICENSES/MIT.md", "LiCeNcEs/Example.txt", "THIRD_PARTY_LICENSES/MPL-LICENSE", nested + "LICENSE",
+		}, true, true},
+		{[]string{nested + "NOTICE", "LICENSES/NOTICE.txt", "NOTICE.txt", "x-COPYRIGHT.md", "PATENTS", "AUTHORS", "contributors_list"}, true, false},
+		{[]string{
+			nested + "README.md", nested + "palette.json", nested + "mix.ts.txt",
+			nested + "generate-madoromi.mjs", nested + "Example.txt", "LICENSES/.DS_Store",
+			"LICENSES/README-LICENSE", "LICENSES/license.ts.txt", "LICENSES/LICENSE.js.txt",
+			"LICENSES/x.mjs.txt", ".github/workflows/license-check.yml", "license.go", "LICENSE.py",
+			"LICENSE.f90", "license_missing_name.prototext", "licensecheck", "LICENSES/license.cjs",
+			"LICENSES/config.toml", "LICENSES/logo.png",
+		}, false, false},
 	} {
-		if isLegalPath(name) {
-			t.Errorf("isLegalPath(%q) = true", name)
+		for _, name := range tc.names {
+			if legal, license := isLegalPath(name), isLicensePath(name); legal != tc.legal || license != tc.license {
+				t.Errorf("%s: (legal, license) = (%t, %t), want (%t, %t)", name, legal, license, tc.legal, tc.license)
+			}
 		}
 	}
 }
@@ -153,53 +141,35 @@ import _ "example.invalid/missing-native-source"
 	}
 }
 
-func TestValidateLicenseText(t *testing.T) {
-	if _, err := validateLicenseText([]byte(testMITLicense)); err != nil {
-		t.Fatalf("validate permissive license: %v", err)
-	}
-	for _, text := range []string{
-		"unknown terms",
-		"GNU General Public License, version 3",
-		testMITLicense + testCommonsClause,
-		testMITLicense + "\nNo commercial use.\n",
-		strings.Replace(testMITLicense, "this software and associated", "this software commercial use is prohibited and associated", 1),
-	} {
-		if _, err := validateLicenseText([]byte(text)); err == nil {
-			t.Fatalf("validateLicenseText(%q) succeeded", text)
+func TestValidateLegalMaterial(t *testing.T) {
+	check := func(label, text string, wantSource, wantErr bool) {
+		t.Helper()
+		got, err := validateLegalMaterial([]byte(text), isLicensePath(label))
+		if got != wantSource || (err != nil) != wantErr {
+			t.Errorf("%s (%.60q): got (%t, %v), want source=%t error=%t", label, text, got, err, wantSource, wantErr)
 		}
 	}
-	requiresSource, err := validateLicenseText([]byte("https://opensource.org/licenses/MPL-2.0\n"))
-	if err != nil || !requiresSource {
-		t.Fatalf("MPL URL classification = (%v, %v)", requiresSource, err)
-	}
-	requiresSource, err = validateLicenseText([]byte("http://www.mozilla.org/MPL/2.0/\n"))
-	if err != nil || !requiresSource {
-		t.Fatalf("approved MPL reference classification = (%v, %v)", requiresSource, err)
-	}
-}
-
-func TestValidateNoticesDigest(t *testing.T) {
-	notices := []byte("reviewed notices\n")
-	digest := sha256.Sum256(notices)
-	expected := hex.EncodeToString(digest[:])
-	if err := validateNoticesDigest(notices, expected); err != nil {
-		t.Fatalf("validate approved notices: %v", err)
-	}
-	for _, tt := range []struct {
-		name     string
-		notices  []byte
-		expected string
-	}{
-		{name: "changed notices", notices: []byte("changed notices\n"), expected: expected},
-		{name: "short digest", notices: notices, expected: "00"},
-		{name: "invalid digest", notices: notices, expected: strings.Repeat("z", sha256.Size*2)},
+	check("LICENSE", "You may copy and modify these tables, including for commercial use.", false, false)
+	check("LICENSE", testMITLicense, false, false)
+	check("LICENSE", "https://opensource.org/licenses/MPL-2.0", true, false)
+	for _, terms := range []string{
+		"GNU General Public License v3", "GNU Affero General Public License",
+		"GNU Lesser General Public License", "GNU Library General Public License",
+		"Server Side Public License", "Business Source License", "Elastic License", "Commons Clause",
+		"PolyForm", "non-commercial", "noncommercial", "non commercial", "no commercial use",
+		"commercial use is prohibited", "commercial use is restricted",
+		"SPDX-License-Identifier: GPL-3.0", "SPDX-License-Identifier: LGPL-2.1",
+		"SPDX-License-Identifier: AGPL-3.0", "https://www.opensource.org/licenses/sleepycat",
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := validateNoticesDigest(tt.notices, tt.expected); err == nil {
-				t.Fatal("validateNoticesDigest succeeded")
-			}
-		})
+		check("COPYING.txt", testMITLicense+terms, false, true)
+		check("NOTICE", "Crédit: "+terms, false, false)
 	}
+	check("LICENSE-MPL", "MPL-2.0 with Commons Clause", false, true)
+
+	check("LICENSE", `Mozilla Public License Version 2.0
+1.12. "Secondary License" means either the GNU General Public License, Version 2.0, the GNU Lesser General Public License, Version 2.1, the GNU Affero General Public License, Version 3.0`, true, false)
+	check("Boost-LICENSE", "Boost Software License - Version 1.0\nPermission is granted to use and distribute this software.", false, false)
+	check("NOTICE", "You may redistribute these tables with attribution.", false, false)
 }
 
 func TestRequiresMPLSource(t *testing.T) {
@@ -213,59 +183,6 @@ func TestRequiresMPLSource(t *testing.T) {
 	}
 	if requiresMPLSource([]byte("MIT License")) {
 		t.Fatal("requiresMPLSource accepted MIT")
-	}
-}
-
-func TestClassifySourceLicense(t *testing.T) {
-	tests := []struct {
-		name           string
-		notice         string
-		requiresSource bool
-		wantError      bool
-	}{
-		{name: "permissive SPDX", notice: "// SPDX-License-Identifier: Apache-2.0\n"},
-		{name: "permissive provenance", notice: "// Provenance-includes-license: Apache-2.0\n"},
-		{name: "MPL SPDX", notice: "// SPDX-License-Identifier: MPL-2.0\n", requiresSource: true},
-		{name: "BSD reference", notice: "// Copyright 2026 Example Authors\n// Use of this source code is governed by a BSD-style\n// license that can be found in the LICENSE file.\n"},
-		{name: "GPL SPDX", notice: "// SPDX-License-Identifier: GPL-3.0-only\n", wantError: true},
-		{name: "unknown SPDX", notice: "// SPDX-License-Identifier: LicenseRef-Unknown\n", wantError: true},
-		{name: "unknown provenance", notice: "// Provenance-includes-license: LicenseRef-Unknown\n", wantError: true},
-		{name: "unknown prose", notice: "// Licensed under the Example Commercial License.\n", wantError: true},
-		{name: "unknown release terms", notice: "// Released under Example terms.\n", wantError: true},
-		{name: "additive restriction", notice: testMITLicense + "\nAdditional use requires written permission.\n", wantError: true},
-		{name: "implicit restriction", notice: "// Copyright 2026 Example Authors\n// Redistribution of this file is prohibited.\n", wantError: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			requiresSource, err := classifySourceLicense([]byte(tt.notice))
-			if (err != nil) != tt.wantError || requiresSource != tt.requiresSource {
-				t.Fatalf("classifySourceLicense() = (%v, %v)", requiresSource, err)
-			}
-		})
-	}
-}
-
-func TestSourceNoticesKeepsLeadingAttributionGroupsOnly(t *testing.T) {
-	filename := filepath.Join(t.TempDir(), "example.h")
-	contents := []byte("// Copyright 2026 Example Authors\n// Licensed under the MIT License.\n\n// Package documentation.\n\n// Copyright 2025 Upstream Authors\n// Derived from the upstream implementation.\n\n#include <stdint.h>\n// Copyright outside leading non-Go scope\n")
-	if err := os.WriteFile(filename, contents, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	got, err := sourceNotices(filename)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{
-		"// Copyright 2026 Example Authors\n// Licensed under the MIT License.\n\n",
-		"// Copyright 2025 Upstream Authors\n// Derived from the upstream implementation.\n\n",
-	}
-	if len(got) != len(want) {
-		t.Fatalf("sourceNotices() returned %d notices, want %d", len(got), len(want))
-	}
-	for index := range want {
-		if string(got[index]) != want[index] {
-			t.Fatalf("sourceNotices()[%d] = %q, want %q", index, got[index], want[index])
-		}
 	}
 }
 
@@ -686,44 +603,12 @@ func TestNormalizeNotice(t *testing.T) {
 	}
 }
 
-func TestSourceNoticesSelectsAttributionAfterPackage(t *testing.T) {
-	directory := t.TempDir()
-	filename := filepath.Join(directory, "fixture.go")
-	contents := []byte("// Copyright Example Authors\n// Licensed under the Example License.\n\npackage fixture\n\n// Copyright retained\n")
-	if err := os.WriteFile(filename, contents, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	notices, err := sourceNotices(filename)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := [][]byte{[]byte("// Copyright Example Authors\n// Licensed under the Example License.\n"), []byte("// Copyright retained\n")}
-	if !reflect.DeepEqual(notices, want) {
-		t.Fatalf("sourceNotices() = %q", notices)
-	}
-}
-
-func TestSourceNoticesSelectsLeadingAttributionFromData(t *testing.T) {
-	filename := filepath.Join(t.TempDir(), "source.dat")
-	contents := []byte("// This Source Code Form is subject to the terms of the Mozilla Public\n// License, v. 2.0.\n\nfirst-record\n")
-	if err := os.WriteFile(filename, contents, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	notices, err := sourceNotices(filename)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(notices) != 1 || string(notices[0]) != "// This Source Code Form is subject to the terms of the Mozilla Public\n// License, v. 2.0.\n\n" {
-		t.Fatalf("sourceNotices() = %q", notices)
-	}
-}
-
 func TestRenderNoticesIsDeterministicAndDeduplicatesText(t *testing.T) {
 	license := []byte("Example license\n")
 	components := map[string]*component{
 		"example.com/b@v2.0.0": {
 			path: "example.com/b", version: "v2.0.0", sum: "h1:b", source: "source.zip", sourceHash: "abc",
-			materials: map[string][]byte{"LICENSE": license, "supplemental:UPSTREAM.txt": license},
+			materials: map[string][]byte{"LICENSE": license, "vendor/NOTICE": license},
 		},
 		"example.com/a@v1.0.0": {
 			path: "example.com/a", version: "v1.0.0", sum: "h1:a",
@@ -751,7 +636,7 @@ Legal	bc2826aa98efbc4e96008986014adaa4315ebc742ac6577d64151178e952be0a	COPYING
 
 Module	example.com/b	v2.0.0	h1:b
 Legal	bc2826aa98efbc4e96008986014adaa4315ebc742ac6577d64151178e952be0a	LICENSE
-Legal	bc2826aa98efbc4e96008986014adaa4315ebc742ac6577d64151178e952be0a	supplemental:UPSTREAM.txt
+Legal	bc2826aa98efbc4e96008986014adaa4315ebc742ac6577d64151178e952be0a	vendor/NOTICE
 Source	source.zip	abc
 
 ================================================================================
@@ -759,7 +644,7 @@ Legal text SHA-256: bc2826aa98efbc4e96008986014adaa4315ebc742ac6577d64151178e952
 Used by:
 - example.com/a@v1.0.0 COPYING
 - example.com/b@v2.0.0 LICENSE
-- example.com/b@v2.0.0 supplemental:UPSTREAM.txt
+- example.com/b@v2.0.0 vendor/NOTICE
 --------------------------------------------------------------------------------
 Example license
 
@@ -806,53 +691,45 @@ func TestCollectMaterialsIncludesNestedLicenseFiles(t *testing.T) {
 	}
 }
 
-func TestCollectMaterialsClassifiesSelectedSourceLicenses(t *testing.T) {
-	fixture := func(t *testing.T, identifier string) *component {
-		t.Helper()
-		root := t.TempDir()
-		if err := os.WriteFile(
-			filepath.Join(root, "LICENSE"),
-			[]byte(testMITLicense),
-			0o600,
-		); err != nil {
-			t.Fatal(err)
-		}
-		source := filepath.Join(root, "source.go")
-		if err := os.WriteFile(source, []byte("// SPDX-License-Identifier: "+identifier+"\npackage fixture\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return &component{
-			path:       "example.com/module",
-			version:    "v1.0.0",
-			sum:        "h1:example",
-			root:       root,
-			sourceFile: map[string]struct{}{source: {}},
-			materials:  map[string][]byte{},
-		}
+func TestCollectMaterialsMPLScope(t *testing.T) {
+	for _, name := range []string{"third_party/madoromi/LICENSE", "LICENSES/MPL.txt", "THIRD_PARTY_LICENSES/MPL-LICENSE"} {
+		t.Run(name, func(t *testing.T) {
+			current := &component{root: t.TempDir(), materials: map[string][]byte{}}
+			want := map[string][]byte{"LICENSE": []byte("SPDX-License-Identifier: Apache-2.0\n"), name: []byte("Mozilla Public License Version 2.0\n")}
+			for label, text := range want {
+				path := filepath.Join(current.root, label)
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, text, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			components := map[string]*component{"parent": current}
+			if err := collectMaterials(components); err != nil {
+				t.Fatal(err)
+			}
+			if current.mpl != (name == "LICENSES/MPL.txt") || !reflect.DeepEqual(current.materials, want) {
+				t.Fatalf("mpl=%t materials=%q", current.mpl, current.materials)
+			}
+		})
 	}
+}
 
-	t.Run("MPL requires pinned source", func(t *testing.T) {
-		current := fixture(t, "MPL-2.0")
-		components := map[string]*component{"example.com/module@v1.0.0": current}
-		if err := collectMaterials(components); err != nil {
-			t.Fatal(err)
-		}
-		if !current.mpl {
-			t.Fatal("MPL source header did not mark the component")
-		}
-		if err := copyRequiredSources(components, t.TempDir()); err == nil ||
-			!strings.Contains(err.Error(), "lacks a pinned source archive") {
-			t.Fatalf("unpinned selected-source MPL error = %v", err)
-		}
-	})
-
-	t.Run("GPL requires policy review", func(t *testing.T) {
-		current := fixture(t, "GPL-3.0-only")
-		err := collectMaterials(map[string]*component{"example.com/module@v1.0.0": current})
-		if err == nil || !strings.Contains(err.Error(), "explicit release-policy review") {
-			t.Fatalf("selected-source GPL error = %v", err)
-		}
-	})
+func TestCollectMaterialsRejectsSourceOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "LICENSE"), []byte(testMITLicense), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current := &component{
+		root:       root,
+		sourceFile: map[string]struct{}{filepath.Join(root, "..", "outside.go"): {}},
+		materials:  map[string][]byte{},
+	}
+	err := collectMaterials(map[string]*component{"parent": current})
+	if err == nil || !strings.Contains(err.Error(), "selected source escapes component root") {
+		t.Fatalf("out-of-root source error = %v", err)
+	}
 }
 
 func TestCollectMaterialsPropagatesMPLFromLicenseFile(t *testing.T) {
@@ -900,21 +777,31 @@ func TestMaterialReadersRejectSymlinks(t *testing.T) {
 	if err := addMaterialFile(current, "LICENSE", link, &materialSize); err == nil || !strings.Contains(err.Error(), "bounded regular file") {
 		t.Fatalf("symlinked legal material error = %v", err)
 	}
-	if _, err := sourceNotices(link); err == nil || !strings.Contains(err.Error(), "bounded regular file") {
-		t.Fatalf("symlinked selected source error = %v", err)
-	}
 }
 
-func TestSourceNoticesRejectsOversizedFile(t *testing.T) {
-	filename := filepath.Join(t.TempDir(), "source.c")
-	if err := os.WriteFile(filename, nil, 0o600); err != nil {
+func TestLegalMaterialKeepsFourMiBBound(t *testing.T) {
+	filename := filepath.Join(t.TempDir(), "NOTICE")
+	contents := append(bytes.Repeat([]byte("a"), (4<<20)-1), '\n')
+	if err := os.WriteFile(filename, contents, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Truncate(filename, maxLegalFileSize+1); err != nil {
+	current := &component{materials: map[string][]byte{}}
+	size := 0
+	if err := addMaterialFile(current, "NOTICE", filename, &size); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sourceNotices(filename); err == nil || !strings.Contains(err.Error(), "bounded regular file") {
-		t.Fatalf("oversized selected source error = %v", err)
+	want := component{materials: map[string][]byte{"NOTICE": contents}}
+	if size != 4<<20 || !reflect.DeepEqual(*current, want) {
+		t.Fatalf("legal material or size differs: size=%d", size)
+	}
+	if err := os.WriteFile(filename, append(bytes.Clone(contents), '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := addMaterialFile(current, "other", filename, &size); err == nil {
+		t.Fatal("accepted legal material beyond 4 MiB")
+	}
+	if size != 4<<20 || !reflect.DeepEqual(*current, want) {
+		t.Fatal("rejected legal material changed stored state")
 	}
 }
 

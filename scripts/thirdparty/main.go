@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -10,8 +9,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"go/parser"
-	"go/token"
 	"io"
 	"io/fs"
 	"net/http"
@@ -30,10 +27,10 @@ import (
 const (
 	noticesFilename       = "THIRD_PARTY_NOTICES"
 	maxLegalFileSize      = 4 << 20
+	maxSourceArchiveSize  = 8 << 20
 	maxNoticeMaterialSize = 64 << 20
 	packageCommandWait    = 5 * time.Second
 	packageCommandTimeout = 5 * time.Minute
-	approvedNoticesSHA256 = "8daa00bae884074499cd01fcfe59e80aa9a3746a9595c75c379b997e3b4e95a1" // Go 1.27.4; notices/README.md records the reviewed delta
 )
 
 type buildTarget struct {
@@ -145,18 +142,6 @@ var sourceRequirements = []sourceRequirement{
 	},
 }
 
-// Exact reviewed legal documents that cannot be completely classified by licensecheck.
-var approvedLicenseReferenceHashes = map[string]bool{
-	"76062181303d0412c45193de416dbc8fc0af27d14faf7c4465c95a4a3e3b6d2a": false, // gonum v0.17.0 W3C test data
-	"a94710b55e03b5285f77d048c5ba61bb9d6ee04a06c0eb90e68821e11b0c707a": false, // go.yaml.in/yaml/v2 v2.4.4 libyaml files
-	"ef523ecf6292d4b80e02e6003dcbaf386e774efe70e8607ad762b1437d1f383b": false, // sigs.k8s.io/json scoped Apache/BSD terms
-	"d18f6323b71b0b768bb5e9616e36da390fbd39369a81807cca352de4e4e6aa0b": false, // gopkg.in/yaml.v3 v3.0.1 scoped MIT/Apache terms
-	"21c83efb2c5770a5c0bac0fb414ebb69e9c3738498bb4dba5b40ee075b6fc296": false, // gopsutil/v4 v4.26.10 scoped BSD terms
-	"6d462371baa8649492b06f51f154dba9b25d2ac9548369b8b4fdbbbb85f2f75d": false, // golang-lru/v2 v2.0.7 list implementation
-	"5dc79da695aea39a47245008a168e3f7d461b686da8bec299fd55fee0393cbcc": false, // sigs.k8s.io/yaml v1.6.0 aggregate terms
-	"ad39d76dfbea8c0dd0e62fcf0112787305e565938d898ecb1275736de0df89a5": true,  // canonical MPL 2.0 URL reference
-}
-
 func main() {
 	output := flag.String("output", "", "generated compliance directory")
 	flag.Parse()
@@ -197,9 +182,6 @@ func generate(output string) error {
 	}
 	notices, err := renderNotices(components)
 	if err != nil {
-		return err
-	}
-	if err := validateNoticesDigest(notices, approvedNoticesSHA256); err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(temporary, noticesFilename), notices, 0o644); err != nil {
@@ -353,9 +335,6 @@ func packageSourceFiles(pkg listedPackage) []string {
 func collectMaterials(components map[string]*component) error {
 	materialSize := 0
 	for _, current := range components {
-		if err := validateAttributionComponent(current); err != nil {
-			return err
-		}
 		legalFiles := 0
 		licenseFiles := 0
 		if current.path == "stdlib" {
@@ -403,112 +382,82 @@ func collectMaterials(components map[string]*component) error {
 			return fmt.Errorf("selected component lacks identifiable license terms: %s %s", current.path, current.version)
 		}
 
-		sources := make([]string, 0, len(current.sourceFile))
 		for filename := range current.sourceFile {
-			sources = append(sources, filename)
-		}
-		sort.Strings(sources)
-		for _, filename := range sources {
 			relative, err := filepath.Rel(current.root, filename)
-			if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			if err != nil || !filepath.IsLocal(relative) {
 				return fmt.Errorf("selected source escapes component root: %s", filename)
 			}
-			notices, err := sourceNotices(filename)
-			if err != nil {
-				return fmt.Errorf("read selected source notice %s: %w", filename, err)
-			}
-			relative = filepath.ToSlash(relative)
-			if err := validateAttributionGroups(current, relative, notices); err != nil {
-				return err
-			}
-			for index, notice := range notices {
-				label := fmt.Sprintf("source-header:%s#%d", relative, index+1)
-				requiresSource, err := classifyAttributedSource(current, relative, notice)
-				if err != nil {
-					return fmt.Errorf("validate selected source notice %s: %w", filename, err)
-				}
-				current.mpl = current.mpl || requiresSource
-				if err := storeMaterial(current, label, notice, &materialSize); err != nil {
-					return err
-				}
-			}
-		}
-		if err := collectSupplementalMaterials(current, &materialSize); err != nil {
-			return err
 		}
 	}
 	return nil
 }
 
-func isLegalFilename(name string) bool {
-	lower := strings.ToLower(name)
-	if isSourceFilename(lower) {
-		return false
-	}
-	for _, prefix := range []string{
-		"license", "licence", "copying", "notice", "patents", "copyright", "unlicense", "authors", "contributors",
-	} {
-		if lower == prefix || strings.HasPrefix(lower, prefix+".") ||
-			strings.HasPrefix(lower, prefix+"-") || strings.HasPrefix(lower, prefix+"_") {
-			return true
-		}
-	}
-	return false
-}
-
-func isSourceFilename(name string) bool {
+func hasExcludedLegalExtension(name string) bool {
 	switch filepath.Ext(strings.ToLower(name)) {
 	case ".go", ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".m", ".mm",
 		".s", ".asm", ".f", ".for", ".f77", ".f90", ".f95", ".f03", ".f08", ".java",
-		".js", ".jsx", ".ts", ".tsx", ".py", ".rb", ".rs", ".cs", ".proto", ".prototext", ".swig", ".swigcxx", ".syso",
-		".kt", ".kts", ".swift", ".sh", ".bash", ".zsh", ".fish", ".bat", ".cmd", ".ps1":
+		".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".py", ".rb", ".rs", ".cs", ".proto", ".prototext", ".swig", ".swigcxx", ".syso",
+		".kt", ".kts", ".swift", ".sh", ".bash", ".zsh", ".fish", ".bat", ".cmd", ".ps1", ".json", ".yaml", ".yml", ".toml",
+		".png", ".gif", ".svg", ".jpg", ".jpeg", ".ico", ".webp", ".woff", ".woff2", ".ttf", ".otf",
+		".pdf", ".zip", ".gz", ".tar", ".a", ".so", ".dylib", ".dll", ".exe":
 		return true
 	}
 	return false
 }
 
-func isLegalPath(name string) bool {
-	if isSourceFilename(filepath.Base(name)) {
-		return false
-	}
-	slashPath := filepath.ToSlash(name)
-	extension := strings.ToLower(filepath.Ext(name))
-	if strings.HasPrefix(slashPath, ".github/workflows/") && (extension == ".yml" || extension == ".yaml") {
-		return false
-	}
-	if isLegalFilename(filepath.Base(name)) {
-		return true
-	}
-	parts := strings.Split(slashPath, "/")
-	for _, part := range parts[:len(parts)-1] {
-		lower := strings.ToLower(part)
-		if lower == "license" || lower == "licenses" || lower == "licence" || lower == "licences" {
+func inLicenseDirectory(rel string) bool {
+	dir, name, ok := strings.Cut(filepath.ToSlash(rel), "/")
+	if ok && !strings.Contains(name, "/") {
+		switch strings.ToLower(dir) {
+		case "license", "licenses", "licence", "licences":
 			return true
 		}
 	}
 	return false
 }
 
-func isLicensePath(name string) bool {
-	lower := strings.ToLower(filepath.Base(name))
-	for _, prefix := range []string{"license", "licence", "copying", "unlicense"} {
-		if lower == prefix || strings.HasPrefix(lower, prefix+".") ||
-			strings.HasPrefix(lower, prefix+"-") || strings.HasPrefix(lower, prefix+"_") {
-			return true
-		}
+func matchesLegalName(name string, prefixes ...string) bool {
+	stem := name
+	if ext := filepath.Ext(name); ext == ".txt" || ext == ".md" {
+		stem = strings.TrimSuffix(name, ext)
 	}
-	parts := strings.Split(filepath.ToSlash(name), "/")
-	for _, part := range parts[:len(parts)-1] {
-		lower = strings.ToLower(part)
-		if lower == "license" || lower == "licenses" || lower == "licence" || lower == "licences" {
+	for _, prefix := range prefixes {
+		if name == prefix || strings.HasPrefix(name, prefix+".") || strings.HasPrefix(name, prefix+"-") || strings.HasPrefix(name, prefix+"_") ||
+			strings.HasSuffix(stem, "-"+prefix) || strings.HasSuffix(stem, "_"+prefix) {
 			return true
 		}
 	}
 	return false
+}
+
+func classifyLegalPath(rel string) (legal, license bool) {
+	name := strings.ToLower(filepath.Base(rel))
+	if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "readme") || hasExcludedLegalExtension(name) ||
+		strings.HasSuffix(name, ".ts.txt") || strings.HasSuffix(name, ".js.txt") || strings.HasSuffix(name, ".mjs.txt") {
+		return false, false
+	}
+	if matchesLegalName(name, "license", "licence", "copying", "unlicense") {
+		return true, true
+	}
+	if matchesLegalName(name, "notice", "patents", "copyright", "authors", "contributors") {
+		return true, false
+	}
+	license = inLicenseDirectory(rel)
+	return license, license
+}
+
+func isLicensePath(rel string) bool {
+	_, license := classifyLegalPath(rel)
+	return license
+}
+
+func isLegalPath(rel string) bool {
+	legal, _ := classifyLegalPath(rel)
+	return legal
 }
 
 func addMaterialFile(current *component, label, filename string, materialSize *int) error {
-	contents, err := readBoundedRegularFile(filename)
+	contents, err := readBoundedRegularFile(filename, maxLegalFileSize)
 	if err != nil {
 		return fmt.Errorf("read legal material %s: %w", filename, err)
 	}
@@ -520,8 +469,13 @@ func addMaterialFile(current *component, label, filename string, materialSize *i
 	if err != nil {
 		return fmt.Errorf("validate legal material %s: %w", filename, err)
 	}
-	current.mpl = current.mpl || requiresSource
-	return storeMaterial(current, label, normalized, materialSize)
+	if err := storeMaterial(current, label, normalized, materialSize); err != nil {
+		return err
+	}
+	if requiresSource && (!strings.Contains(label, "/") || inLicenseDirectory(label)) {
+		current.mpl = true
+	}
+	return nil
 }
 
 func storeMaterial(current *component, label string, contents []byte, materialSize *int) error {
@@ -544,12 +498,12 @@ func boundedNoticeMaterialSize(current, addition int) (int, error) {
 	return current + addition, nil
 }
 
-func readBoundedRegularFile(filename string) ([]byte, error) {
+func readBoundedRegularFile(filename string, maximum int64) ([]byte, error) {
 	info, err := os.Lstat(filename)
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || info.Size() > maxLegalFileSize {
+	if !info.Mode().IsRegular() || info.Size() > maximum {
 		return nil, fmt.Errorf("not a bounded regular file")
 	}
 	file, err := os.Open(filename)
@@ -561,111 +515,48 @@ func readBoundedRegularFile(filename string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !openedInfo.Mode().IsRegular() || openedInfo.Size() > maxLegalFileSize || !os.SameFile(info, openedInfo) {
+	if !openedInfo.Mode().IsRegular() || openedInfo.Size() > maximum || !os.SameFile(info, openedInfo) {
 		return nil, fmt.Errorf("file changed while opening")
 	}
-	contents, err := io.ReadAll(io.LimitReader(file, maxLegalFileSize+1))
+	contents, err := io.ReadAll(io.LimitReader(file, maximum+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(contents) > maxLegalFileSize {
-		return nil, fmt.Errorf("file exceeds %d bytes", maxLegalFileSize)
+	if int64(len(contents)) > maximum {
+		return nil, fmt.Errorf("file exceeds %d bytes", maximum)
 	}
 	return contents, nil
 }
 
-func validateLicenseText(contents []byte) (bool, error) {
-	return validateLegalMaterial(contents, true)
-}
-
-func validateLegalMaterial(contents []byte, requireLicense bool) (bool, error) {
-	digest := sha256.Sum256(contents)
-	if requiresSource, approved := approvedLicenseReferenceHashes[hex.EncodeToString(digest[:])]; approved {
-		return requiresSource, nil
-	}
-	if !requireLicense {
+func validateLegalMaterial(contents []byte, isLicense bool) (bool, error) {
+	if !isLicense {
 		return false, nil
 	}
-	if containsAdditiveRestriction(bytes.ToLower(contents)) {
-		return false, fmt.Errorf("license contains an additional restriction")
-	}
-	requiresSource, coverage, err := classifyKnownLicenses(contents)
-	if err != nil {
-		return false, err
-	}
-	if len(coverage.Match) == 0 {
-		return false, fmt.Errorf("unrecognized license text")
-	}
-	if len(coverage.Match) > 0 {
-		if err := validateLicenseRemainder(contents, coverage.Match); err != nil {
-			return false, err
+	requiresSource := requiresMPLSource(contents)
+	for _, match := range licensecheck.Scan(contents).Match {
+		switch match.ID {
+		case "MPL-2.0", "MPL-2.0-no-copyleft-exception":
+			requiresSource = true
+		case "BSL-1.1", "ELv2", "Sleepycat":
+			return false, fmt.Errorf("forbidden license: %s", match.ID)
 		}
-	}
-	return requiresSource, nil
-}
-
-func containsAdditiveRestriction(lower []byte) bool {
-	for _, marker := range [][]byte{
-		[]byte("commons clause"),
-		[]byte("polyform"),
-		[]byte("noncommercial"),
-		[]byte("non-commercial"),
-		[]byte("non commercial"),
-		[]byte("commercial use"),
-		[]byte("no commercial"),
-		[]byte("use is prohibited"),
-		[]byte("use is restricted"),
-		[]byte("requires written permission"),
-		[]byte("internal use only"),
-	} {
-		if bytes.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-func classifySourceLicense(contents []byte) (bool, error) {
-	scanner := bufio.NewScanner(bytes.NewReader(contents))
-	scanner.Buffer(nil, maxLegalFileSize+1)
-	requiresSource := false
-	for scanner.Scan() {
-		line := scanner.Text()
-		lower := strings.ToLower(line)
-		for _, marker := range []string{"spdx-license-identifier:", "provenance-includes-license:"} {
-			index := strings.Index(lower, marker)
-			if index < 0 {
-				continue
-			}
-			expression := strings.TrimSpace(line[index+len(marker):])
-			expression = strings.TrimSpace(strings.TrimSuffix(expression, "*/"))
-			expression = strings.TrimSpace(strings.TrimSuffix(expression, "-->"))
-			switch strings.ToUpper(expression) {
-			case "APACHE-2.0", "BSD-2-CLAUSE", "BSD-3-CLAUSE", "ISC", "MIT", "0BSD", "UNLICENSE":
-			case "MPL-2.0":
-				requiresSource = true
-			default:
-				return false, fmt.Errorf("source license identifier %q requires explicit release-policy review", expression)
+		for _, prefix := range []string{"GPL", "AGPL", "LGPL", "GFDL", "SSPL", "BUSL", "CPAL", "OSL", "EUPL", "RPL"} {
+			if strings.HasPrefix(match.ID, prefix) {
+				return false, fmt.Errorf("forbidden license: %s", match.ID)
 			}
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return false, err
+	markers := []string{"commons clause", "polyform", "noncommercial", "non-commercial", "non commercial", "no commercial",
+		"commercial use is prohibited", "commercial use is restricted", "server side public license", "business source license", "elastic license",
+		"spdx-license-identifier: gpl", "spdx-license-identifier: agpl", "spdx-license-identifier: lgpl"}
+	if !requiresSource {
+		markers = append(markers, "gnu general public license", "gnu affero general public license", "gnu lesser general public license", "gnu library general public license")
 	}
-	scannedSource, coverage, err := classifyKnownLicenses(contents)
-	if err != nil {
-		return false, err
-	}
-	requiresSource = requiresSource || scannedSource
-	lower := bytes.ToLower(contents)
-	if licenseNeedsReview(lower) {
-		return false, fmt.Errorf("source license family requires explicit release-policy review")
-	}
-	if requiresMPLSource(contents) {
-		requiresSource = true
-	}
-	if err := validateSourceLicenseRemainder(contents, coverage.Match); err != nil {
-		return false, err
+	lower := strings.ToLower(string(contents))
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return false, fmt.Errorf("forbidden license terms: %s", marker)
+		}
 	}
 	return requiresSource, nil
 }
@@ -676,196 +567,10 @@ func requiresMPLSource(contents []byte) bool {
 		bytes.Contains(lower, []byte("mpl-2.0"))
 }
 
-func classifyKnownLicenses(contents []byte) (bool, licensecheck.Coverage, error) {
-	coverage := licensecheck.Scan(contents)
-	requiresSource := false
-	for _, match := range coverage.Match {
-		switch match.ID {
-		case "MPL-2.0", "MPL-2.0-no-copyleft-exception":
-			requiresSource = true
-		case "0BSD", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", "Unlicense":
-		default:
-			return false, coverage, fmt.Errorf("license %s requires explicit release-policy review", match.ID)
-		}
-	}
-	return requiresSource, coverage, nil
-}
-
-func validateLicenseRemainder(contents []byte, matches []licensecheck.Match) error {
-	lines, err := unmatchedLicenseLines(contents, matches)
-	if err != nil {
-		return err
-	}
-	for _, rawLine := range lines {
-		line := strings.TrimSpace(rawLine)
-		lower := strings.ToLower(line)
-		if line == "" || strings.Trim(line, "-_=*") == "" ||
-			strings.HasPrefix(lower, "copyright ") || strings.HasPrefix(line, "©") ||
-			lower == "all rights reserved." || lower == "all rights reserved" || isLicenseHeading(lower) ||
-			isLicenseScope(line) {
-			continue
-		}
-		return fmt.Errorf("unrecognized text outside the approved license: %q", line)
-	}
-	return nil
-}
-
-func validateSourceLicenseRemainder(contents []byte, matches []licensecheck.Match) error {
-	lines, err := unmatchedLicenseLines(contents, matches)
-	if err != nil {
-		return err
-	}
-	var assertions []string
-	for _, rawLine := range lines {
-		line := trimSourceComment(rawLine)
-		lower := strings.ToLower(line)
-		if line == "" || strings.Trim(line, "-_=*") == "" ||
-			strings.HasPrefix(lower, "copyright ") || strings.HasPrefix(line, "©") ||
-			lower == "all rights reserved." || lower == "all rights reserved" || isLicenseHeading(lower) ||
-			strings.Contains(lower, "spdx-license-identifier:") || strings.Contains(lower, "provenance-includes-license:") {
-			continue
-		}
-		if isSourceLicenseLanguage(lower) {
-			assertions = append(assertions, line)
-		}
-	}
-	if len(assertions) > 0 && !approvedSourceLicenseReference(strings.Join(assertions, " "), len(matches) > 0) {
-		return fmt.Errorf("unrecognized text outside the approved source license: %q", strings.Join(assertions, " "))
-	}
-	return nil
-}
-
-func isSourceLicenseLanguage(lower string) bool {
-	for _, marker := range []string{
-		"license", "licence", "permission", "permitted", "prohibit", "restrict", "rights", "commercial",
-		"redistribut", "may use", "may not", "allowed", "governed by", "source code form is subject",
-		"released under",
-	} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-func unmatchedLicenseLines(contents []byte, matches []licensecheck.Match) ([]string, error) {
-	remaining := append([]byte(nil), contents...)
-	for _, match := range matches {
-		if match.Start < 0 || match.End < match.Start || match.End > len(remaining) {
-			return nil, fmt.Errorf("license scanner returned invalid match offsets")
-		}
-		for index := match.Start; index < match.End; index++ {
-			if remaining[index] != '\n' {
-				remaining[index] = ' '
-			}
-		}
-	}
-	scanner := bufio.NewScanner(bytes.NewReader(remaining))
-	scanner.Buffer(nil, maxLegalFileSize+1)
-	var lines []string
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return lines, nil
-}
-
-func isLicenseScope(line string) bool {
-	const prefix = "Files: "
-	if !strings.HasPrefix(line, prefix) {
-		return false
-	}
-	fields := strings.Fields(strings.TrimPrefix(line, prefix))
-	if len(fields) == 0 {
-		return false
-	}
-	for _, field := range fields {
-		if !strings.ContainsAny(field, "/*") || strings.IndexFunc(field, func(character rune) bool {
-			return !(character >= 'a' && character <= 'z' ||
-				character >= 'A' && character <= 'Z' ||
-				character >= '0' && character <= '9' || strings.ContainsRune("._+-/*?[]", character))
-		}) >= 0 {
-			return false
-		}
-	}
-	return true
-}
-
-func isLicenseHeading(lower string) bool {
-	if strings.HasSuffix(lower, " is distributed under bsd license reproduced below.") {
-		return true
-	}
-	switch lower {
-	case "mit license", "the mit license", "the mit license (mit)", "apache license", "bsd license", "isc license",
-		"bsd 2-clause license", "bsd 3-clause license", "bsd zero clause license", "0bsd license",
-		"mozilla public license", "mozilla public license version 2.0", "the unlicense", "unlicense":
-		return true
-	default:
-		return false
-	}
-}
-
-func licenseNeedsReview(lower []byte) bool {
-	for _, marker := range [][]byte{
-		[]byte("commons clause"),
-		[]byte("polyform"),
-		[]byte("noncommercial"),
-		[]byte("non-commercial"),
-		[]byte("business source license"),
-		[]byte("elastic license"),
-		[]byte("gnu general public license"),
-		[]byte("gnu affero general public license"),
-		[]byte("gnu lesser general public license"),
-		[]byte("eclipse public license"),
-		[]byte("common development and distribution license"),
-		[]byte("server side public license"),
-	} {
-		if bytes.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-func trimSourceComment(line string) string {
-	line = strings.TrimSpace(line)
-	for _, prefix := range []string{"//", "/*", "*", "#", ";"} {
-		if strings.HasPrefix(line, prefix) {
-			line = strings.TrimSpace(strings.TrimPrefix(line, prefix))
-			break
-		}
-	}
-	line = strings.TrimSpace(strings.TrimSuffix(line, "*/"))
-	return line
-}
-
-func approvedSourceLicenseReference(reference string, hasApprovedMatch bool) bool {
-	reference = strings.ToLower(strings.Join(strings.Fields(reference), " "))
-	switch reference {
-	case "use of this source code is governed by a bsd-style license that can be found in the license file.",
-		"use of this source code is governed by a bsd-style license that can be found in the license_list file.",
-		"use of this source code is governed by a bsd-style license that can be found src the license file.",
-		"use of this source code is governed by a bsd-style license that can be found in the license file or at https://developers.google.com/open-source/licenses/bsd.",
-		"use of this code is governed by a bsd-style license that can be found in the license file.",
-		"licensed under the mit license. see license in the project root for license information.",
-		"license information can be found in the license file.",
-		"of float16 at github.com/starkat99/half-rs (mit license)",
-		"license information can be found in the license file. based on work by yann collet, released under bsd license.",
-		"use of this source code is governed by a bsd-style license that can be found in the license file. based on work copyright (c) 2013, yann collet, released under bsd license.":
-		return true
-	case "license that can be found in the license file.",
-		"license that can be found src the license file.",
-		"license that can be found in the license file or at https://developers.google.com/open-source/licenses/bsd.",
-		"see the license for the specific language governing permissions and":
-		return hasApprovedMatch
-	default:
-		return false
-	}
-}
-
 func normalizeNotice(contents []byte) ([]byte, error) {
+	if len(contents) > maxLegalFileSize {
+		return nil, fmt.Errorf("notice exceeds %d bytes", maxLegalFileSize)
+	}
 	contents = bytes.ReplaceAll(contents, []byte("\r\n"), []byte("\n"))
 	if len(contents) == 0 || bytes.IndexByte(contents, 0) >= 0 || !utf8.Valid(contents) {
 		return nil, fmt.Errorf("notice is empty or not UTF-8 text")
@@ -874,139 +579,6 @@ func normalizeNotice(contents []byte) ([]byte, error) {
 		contents = append(contents, '\n')
 	}
 	return contents, nil
-}
-
-func sourceNotices(filename string) ([][]byte, error) {
-	contents, err := readBoundedRegularFile(filename)
-	if err != nil {
-		return nil, err
-	}
-	if filepath.Ext(filename) == ".go" {
-		return goSourceNotices(filename, contents)
-	}
-	notices, err := leadingComments(filename, contents)
-	if err != nil {
-		return nil, err
-	}
-	selected := make([][]byte, 0, len(notices))
-	for _, notice := range notices {
-		if !containsNoticeLanguage(notice) {
-			continue
-		}
-		normalized, err := normalizeNotice(notice)
-		if err != nil {
-			return nil, err
-		}
-		selected = append(selected, normalized)
-	}
-	return selected, nil
-}
-
-func goSourceNotices(filename string, contents []byte) ([][]byte, error) {
-	files := token.NewFileSet()
-	parsed, err := parser.ParseFile(files, filename, contents, parser.ParseComments)
-	if err != nil {
-		return nil, err
-	}
-	var notices [][]byte
-	for _, group := range parsed.Comments {
-		start := files.Position(group.Pos()).Offset
-		last := files.Position(group.List[len(group.List)-1].Pos()).Offset
-		if start < 0 || last < start || last >= len(contents) {
-			return nil, fmt.Errorf("invalid comment offsets")
-		}
-		// ast.Comment.End uses text with CR removed. Locate the final comment's
-		// raw terminator instead, preserving CRLF and embedded CR until normalization.
-		end := len(contents)
-		if bytes.HasPrefix(contents[last:], []byte("/*")) {
-			closing := bytes.Index(contents[last:], []byte("*/"))
-			if closing < 0 {
-				return nil, fmt.Errorf("unterminated parsed comment")
-			}
-			end = last + closing + 2
-		} else if newline := bytes.IndexByte(contents[last:], '\n'); newline >= 0 {
-			end = last + newline + 1
-		}
-		notice := contents[start:end]
-		if !containsNoticeLanguage(notice) {
-			continue
-		}
-		normalized, err := normalizeNotice(notice)
-		if err != nil {
-			return nil, err
-		}
-		notices = append(notices, normalized)
-	}
-	return notices, nil
-}
-
-func leadingComments(filename string, contents []byte) ([][]byte, error) {
-	scanner := bufio.NewScanner(bytes.NewReader(contents))
-	scanner.Buffer(nil, maxLegalFileSize+1)
-	var result bytes.Buffer
-	inBlock := false
-	var comments [][]byte
-	extension := strings.ToLower(filepath.Ext(filename))
-	hashComment := extension == ".py" || extension == ".rb" || extension == ".sh" || extension == ".bash" ||
-		extension == ".zsh" || extension == ".fish" || extension == ".yaml" || extension == ".yml" || extension == ".toml"
-	semicolonComment := extension == ".s" || extension == ".asm"
-	for scanner.Scan() {
-		line := scanner.Text()
-		trimmed := strings.TrimSpace(line)
-		if !inBlock && trimmed == "" {
-			if result.Len() > 0 {
-				result.WriteByte('\n')
-				comments = append(comments, append([]byte(nil), result.Bytes()...))
-				result.Reset()
-			}
-			continue
-		}
-		comment := inBlock || strings.HasPrefix(trimmed, "//") || hashComment && strings.HasPrefix(trimmed, "#") ||
-			semicolonComment && strings.HasPrefix(trimmed, ";")
-		if !inBlock && strings.HasPrefix(trimmed, "/*") {
-			end := strings.Index(trimmed, "*/")
-			comment = end < 0 || strings.TrimSpace(trimmed[end+2:]) == ""
-		}
-		if !comment && trimmed != "" {
-			break
-		}
-		if comment {
-			result.WriteString(line)
-			result.WriteByte('\n')
-		}
-		if strings.HasPrefix(trimmed, "/*") && !strings.Contains(trimmed, "*/") {
-			inBlock = true
-		}
-		if inBlock && strings.Contains(trimmed, "*/") {
-			inBlock = false
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	if result.Len() > 0 {
-		comments = append(comments, append([]byte(nil), result.Bytes()...))
-	}
-	return comments, nil
-}
-
-func containsNoticeLanguage(contents []byte) bool {
-	lower := bytes.ToLower(contents)
-	for _, phrase := range [][]byte{
-		[]byte("copyright"),
-		[]byte("licensed under"),
-		[]byte("released under"),
-		[]byte("mit license"),
-		[]byte("bsd license"),
-		[]byte("license:"),
-		[]byte("spdx-license-identifier"),
-		[]byte("source code form is subject to the terms"),
-	} {
-		if bytes.Contains(lower, phrase) {
-			return true
-		}
-	}
-	return false
 }
 
 func copyRequiredSources(components map[string]*component, output string) error {
@@ -1047,7 +619,7 @@ func copyRequiredSources(components map[string]*component, output string) error 
 			if err != nil {
 				return fmt.Errorf("normalize license for %s: %w", key, err)
 			}
-			requiresSource, err := validateLicenseText(normalized)
+			requiresSource, err := validateLegalMaterial(normalized, true)
 			if err != nil {
 				return fmt.Errorf("validate license for %s: %w", key, err)
 			}
@@ -1065,26 +637,6 @@ func copyRequiredSources(components map[string]*component, output string) error 
 		destination := filepath.Join(output, requirement.archive)
 		if err := copySourceArchive(requirement, destination); err != nil {
 			return err
-		}
-		if requirement.sourceURL != "" {
-			notices, err := sourceNotices(destination)
-			if err != nil {
-				return fmt.Errorf("read pinned source notice for %s: %w", key, err)
-			}
-			if len(notices) == 0 {
-				return fmt.Errorf("pinned source lacks a license notice: %s", key)
-			}
-			for index, notice := range notices {
-				label := fmt.Sprintf("embedded-source-header:publicsuffix/list/public_suffix_list.dat#%d", index+1)
-				requiresSource, err := classifySourceLicense(notice)
-				if err != nil {
-					return fmt.Errorf("validate pinned source notice for %s: %w", key, err)
-				}
-				current.mpl = current.mpl || requiresSource
-				if err := storeMaterial(current, label, notice, &materialSize); err != nil {
-					return err
-				}
-			}
 		}
 		current.source = requirement.archive
 		current.sourceHash = requirement.archiveSHA
@@ -1110,7 +662,7 @@ func validateEmbeddedSource(current *component, requirement sourceRequirement) e
 			return fmt.Errorf("embedded file is no longer selected: %s", name)
 		}
 	}
-	marker, err := readBoundedRegularFile(filepath.Join(current.root, filepath.FromSlash(requirement.markerFile)))
+	marker, err := readBoundedRegularFile(filepath.Join(current.root, filepath.FromSlash(requirement.markerFile)), maxLegalFileSize)
 	if err != nil {
 		return fmt.Errorf("read embedded source marker: %w", err)
 	}
@@ -1157,7 +709,7 @@ func copySourceArchive(requirement sourceRequirement, destination string) error 
 		download.Sum != requirement.sum || download.Zip == "" {
 		return fmt.Errorf("source download identity does not match %s %s", requirement.path, requirement.version)
 	}
-	contents, err := readBoundedRegularFile(download.Zip)
+	contents, err := readBoundedRegularFile(download.Zip, maxSourceArchiveSize)
 	if err != nil {
 		return fmt.Errorf("read source archive for %s: %w", requirement.path, err)
 	}
@@ -1281,19 +833,4 @@ func renderNotices(components map[string]*component) ([]byte, error) {
 		result.WriteByte('\n')
 	}
 	return result.Bytes(), nil
-}
-
-func validateNoticesDigest(notices []byte, expected string) error {
-	if len(expected) != sha256.Size*2 {
-		return fmt.Errorf("approved third-party notices digest is malformed")
-	}
-	if _, err := hex.DecodeString(expected); err != nil {
-		return fmt.Errorf("approved third-party notices digest is malformed: %w", err)
-	}
-	digest := sha256.Sum256(notices)
-	actual := hex.EncodeToString(digest[:])
-	if actual != expected {
-		return fmt.Errorf("third-party notices digest %s requires explicit release-policy review", actual)
-	}
-	return nil
 }

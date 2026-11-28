@@ -14,7 +14,7 @@ The canonical design is the evolving [Bargeboard architecture](docs/architecture
 
 Development requires Go 1.27.0 or newer and a native C/C++ toolchain with CGO
 enabled for DuckDB. CI authenticates and verifies Go 1.27.4. Native CGO release
-packaging is in progress and must use the same pinned version.
+archives use the same pinned version.
 Before `make run`, prepare your [F1 token file](#f1-live-timing).
 
 The commands below require GNU Make and a POSIX shell, such as Git Bash on
@@ -44,9 +44,8 @@ that connection, follow [Live Timing connectivity](https://github.com/CtrlSpice/
 
 ## Releases
 
-Release packaging for the embedded viewer is in progress. The approved targets
-are Linux on amd64 and arm64, macOS on arm64, and Windows on amd64. The required
-archive contents and publication procedure are described below.
+Native CGO release archives target Linux on amd64 and arm64, macOS on arm64,
+and Windows on amd64.
 Each `bargeboard` archive must include the binary,
 `config.yaml`, this README, and the Apache 2.0 license. The release must also include
 SHA-256 checksums and an SPDX SBOM for every archive.
@@ -101,26 +100,16 @@ pinned in the repository before extracting or executing them. Tags are limited
 to 131 ASCII characters so every wrapped archive path has one canonical USTAR
 representation.
 
-Every archive must also contain `THIRD_PARTY_NOTICES`, generated from the union of
-packages selected for all supported targets, and exact pinned source payloads
-for MPL-covered module and embedded data dependencies. That includes the Public
-Suffix List revision compiled into `golang.org/x/net/publicsuffix`. The
-generator includes nested license, notice, patent, and selected-source
-attribution text, classifies complete legal texts and selected-source license
-assertions against an explicit release policy, and enforces a 64 MiB aggregate
-material limit while collecting it. The complete canonical notices output is
-bound to a reviewed SHA-256 value, so any dependency, attribution, or legal-text
-change requires explicit review. Generation also fails on recognized additional
-license terms, when a selected module lacks legal material, when a source license
-needs explicit policy review, or when an MPL dependency lacks pinned corresponding
-source.
+Each archive includes a deterministic `THIRD_PARTY_NOTICES` inventory of the Go
+standard library and dependency modules selected across the four targets. The
+generator records legal documents by path and SHA-256 and includes each distinct
+normalized text once. It rejects forbidden license families and restrictive
+terms in license files. Notice and attribution files are preserved as text.
 
-Go attribution is collected from comment groups throughout each selected file,
-including after declarations. Reviewed source exceptions and supplemental notices
-are pinned to their owning module and source path; changed or missing attribution
-fails generation. The [attribution record](scripts/thirdparty/notices/README.md)
-documents the upstream evidence, including LINPACK's recorded BSD-3-Clause
-confirmation, and the attribution texts approved for the pinned dependencies.
+Archives include the pinned MPL-2.0 source for `go-version`, `golang-lru`, and
+the Public Suffix List compiled into `golang.org/x/net/publicsuffix`, plus the
+list's license. The embedded viewer serves Madoromi's bundled MPL-2.0 source at
+`/licenses/madoromi/`.
 
 The final verified read of `main` immediately before publication is the release
 decision point. A later branch update does not invalidate that decision. A

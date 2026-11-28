@@ -561,8 +561,8 @@ diff, CI, and independent-review gates.
 
 ## Local Runtime and Verification Boundaries
 
-**Decision status: GREEN (approved). Embedded OTLP storage is implemented;
-native packaging verification and racing projection are pending.**
+**Decision status: GREEN (approved). Embedded OTLP storage and native packaging are
+implemented; racing projection is pending.**
 
 Bargeboard is the credential-owning local F1 client. Each user supplies their own
 F1 TV `subscriptionToken` through `f1livetiming.token_file`, configured as
@@ -616,7 +616,8 @@ v7.0.2 and `actions/download-artifact` v8.0.2. Central GoReleaser prebuilt
 packaging MUST package each set independently and compare the complete archives,
 SBOMs, and checksums. Verification MUST require exactly the four target binaries
 in each set, reject missing or mismatched inputs, and retain canonical archive
-validation, deterministic notices, and required corresponding source.
+validation, deterministic `THIRD_PARTY_NOTICES`, and the pinned MPL source
+payloads described in the [release policy](../README.md#releases).
 Native checks MUST inspect build metadata and runtime-library requirements and
 execute the binary's version and configuration checks on its matching runner.
 The deployment target alone does not prove runtime compatibility on macOS 13.
