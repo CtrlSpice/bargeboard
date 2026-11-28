@@ -14,11 +14,17 @@ func TestComponents(t *testing.T) {
 
 	assertRegistered(t, "receiver", factories.Receivers, "otlp")
 	assertRegistered(t, "receiver", factories.Receivers, "f1livetiming")
+	assertRegistered(t, "receiver", factories.Receivers, "f1static")
+	assertRegistered(t, "receiver", factories.Receivers, "openf1")
+	assertRegistered(t, "receiver", factories.Receivers, "jolpica")
 	assertRegistered(t, "processor", factories.Processors, "batch")
 	assertRegistered(t, "exporter", factories.Exporters, "debug")
 	assertRegistered(t, "exporter", factories.Exporters, "desktop")
 	assertRegistered(t, "extension", factories.Extensions, "duckdb")
 
+	if len(factories.Receivers) != 5 {
+		t.Fatalf("receivers = %d, want 5", len(factories.Receivers))
+	}
 	if len(factories.Extensions) != 1 {
 		t.Fatalf("extensions = %d, want 1", len(factories.Extensions))
 	}

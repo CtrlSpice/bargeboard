@@ -6,7 +6,12 @@ A custom OpenTelemetry Collector distribution for Formula 1 telemetry. Designed 
 
 ## Implementation
 
-The Go Collector distribution accepts OTLP traces, metrics, and logs, batches them, and stores them through the embedded viewer's `desktop` exporter. The F1 Live Timing receiver connects to the live feed, validates updates, and reports input activity and interruptions. **F1 race export is not implemented:** the receiver currently maintains session identity and scheduling information, but produces no racing telemetry. Processing other feed topics and converting them to OTLP remain pending. An OpenF1 receiver does not exist yet.
+The Go Collector distribution accepts OTLP traces, metrics, and logs, batches them, and stores them through the embedded viewer's `desktop` exporter. Alongside standard OTLP ingress, the distribution compiles four non-overlapping F1 receivers:
+
+- `f1livetiming` connects to the live SignalR feed, validates updates, and reports input activity and interruptions. **Live F1 race export is not yet implemented:** `f1livetiming` maintains session identity and scheduling information, while live multi-topic reduction and OTLP projection remain pending.
+- `f1static` (`enabled: false` by default) replays finished F1 `/static/<session_path>/` archives once per Collector run at original historical timestamps, emitting `driver.session -> stint -> lap -> sector` waterfall traces (with optional MultiViewer circuit corner and marshal-sector event enrichment), session/driver metrics, and curated race-control and team-radio logs.
+- `openf1` (`enabled: false` by default) polls OpenF1 `/v1/sessions` and `/v1/session_result` for post-session Race and Sprint observed result snapshots (`f1.driver.result.observed` / `f1.driver.result.revised` logs) without re-emitting laps, stints, weather, or car telemetry.
+- `jolpica` (`enabled: false` by default) polls Jolpica-F1 for official FIA post-round classification causes, grid slots, awarded points, and WDC/WCC championship standings logs and Gauges.
 
 The canonical design is the evolving [Bargeboard architecture](docs/architecture.md). It records accepted decisions, source limitations, pending candidates, implementation seams, and the required checks for future human and agent contributors.
 
@@ -35,7 +40,7 @@ Open [the embedded viewer](http://127.0.0.1:8000) after startup. The `duckdb`
 extension stores telemetry in `./bargeboard.duckdb`, relative to the process
 working directory. Data survives shutdown and restart. `db_max_size: "0"`
 disables automatic pruning.
-The viewer displays incoming OTLP; the F1 receiver does not yet emit racing telemetry.
+The viewer displays incoming OTLP and any enabled historical replay or companion receivers; the live `f1livetiming` receiver does not yet emit racing telemetry.
 The incoming OTLP ports and the viewer belong to the same Bargeboard process.
 
 `make check` uses synthetic F1 inputs and local test servers. `make run` starts
@@ -255,14 +260,91 @@ The client consumes an existing token; it does not implement account login,
 token refresh, or explicit device registration. A successful connection does not
 establish provider permission for third-party clients or device-limit treatment.
 
+## Historical replay and companion receivers
+
+The shipped `config.yaml` keeps `[f1livetiming, otlp]` as the active default
+receivers so startup never requires a static archive path or unapproved
+third-party egress. To load a finished session and post-session context into the
+embedded viewer without duplicating live SignalR telemetry, enable `f1static`
+(instead of `f1livetiming`) and optional `openf1` / `jolpica` receivers in a
+local configuration:
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: localhost:4317
+      http:
+        endpoint: localhost:4318
+  f1static:
+    enabled: true
+    session_path: "2025/2025-05-04_Miami_Grand_Prix/2025-05-04_Race"
+    pace: instant # or 1x..1000x; OTLP timestamps stay on the historical timeline
+    circuit_enrichment:
+      enabled: true
+  openf1:
+    enabled: true
+    season: 2025
+    meeting_key: 1259
+    session_key: 9998
+    session_name: race
+    drivers:
+      - { number: 4, acronym: NOR }
+    root_drivers: [4]
+  jolpica:
+    enabled: true
+    season: 2025
+    round: 6
+    meeting_key: 1259
+    include_sprint: true
+    include_standings: true
+    correlate_traces: true
+
+processors:
+  batch: {}
+
+exporters:
+  desktop: {}
+
+extensions:
+  duckdb:
+    endpoint: 127.0.0.1:8000
+    db: ./bargeboard.duckdb
+    db_max_size: "0"
+
+service:
+  extensions: [duckdb]
+  pipelines:
+    traces:
+      receivers: [f1static, otlp]
+      processors: [batch]
+      exporters: [desktop]
+    metrics:
+      receivers: [f1static, jolpica, otlp]
+      processors: [batch]
+      exporters: [desktop]
+    logs:
+      receivers: [f1static, openf1, jolpica, otlp]
+      processors: [batch]
+      exporters: [desktop]
+```
+
+Each receiver owns a non-overlapping domain: `f1static` replays finished static
+archives offline; `openf1` emits Race/Sprint result observation logs; `jolpica`
+emits official FIA final classifications and WDC/WCC standings; and MultiViewer
+circuit geometry enriches eligible coordinate-bearing trace events in place.
+
 ## Test data
 
 Public F1 payload fixtures are independently authored synthetic inputs. Source
 references and observations establish the evidence for source-dependent rules;
 synthetic cases exercise those rules without publishing captured race records.
-The provenance files under `receiver/f1livetimingreceiver/testdata/` distinguish
+The provenance files under `receiver/*/testdata/SOURCES.md` and
+`internal/circuitmap/testdata/SOURCES.md` distinguish
 those roles. Public CI uses invented credentials and local HTTP/WebSocket servers
-and must not contact F1 services or receive F1 account credentials.
+and must not contact F1, OpenF1, Jolpica, or MultiViewer services or receive F1
+account credentials.
 
 ## Security
 

@@ -561,8 +561,9 @@ diff, CI, and independent-review gates.
 
 ## Local Runtime and Verification Boundaries
 
-**Decision status: GREEN (approved). Embedded OTLP storage and native packaging are
-implemented; racing projection is pending.**
+**Decision status: GREEN (approved). Embedded OTLP storage, native packaging, and
+opt-in historical/companion receivers are implemented; live SignalR racing
+projection is pending.**
 
 Bargeboard is the credential-owning local F1 client. Each user supplies their own
 F1 TV `subscriptionToken` through `f1livetiming.token_file`, configured as
@@ -572,9 +573,11 @@ The local viewer arrangement is:
 
 ```text
 F1 service <-> f1livetiming receiver -> session state
-                       ^              (racing OTLP projection pending)
+                       ^              (live racing OTLP projection pending)
                 local token file
 
+f1static / openf1 / jolpica (opt-in, disabled by default) -+
+                                                           v
 OTLP receiver -> Collector pipelines -> desktop exporter -> duckdb extension
                                                             persistent store + UI
 ```
@@ -637,8 +640,10 @@ metadata. The complete archive verifier compares each packaged binary with that
 target's transferred reference. It MUST NOT substitute a cross-compiled or
 CGO-disabled reference.
 
-Accepted racing mappings still require implementation. Pending source mappings
-remain non-binding. Normal OTLP ingress already reaches persistent viewer storage.
+Live SignalR racing mappings still require implementation; `f1static`, `openf1`,
+and `jolpica` already project their accepted domains when explicitly enabled.
+Pending source mappings remain non-binding. Normal OTLP ingress already reaches
+persistent viewer storage.
 
 Verification MUST check the complete shipped extension configuration and all
 three pipeline routes. A local integration test MUST send independently authored
@@ -646,8 +651,14 @@ OTLP through the real receiver, batch processor and desktop exporter, stop the
 Collector, reopen the same database, and compare complete viewer exports with
 the original signals. It MUST verify stored row counts, nanosecond timestamps,
 integer precision, resource/scope association, typed bodies and attributes, and
-disabled pruning. Test-only readiness notifications and shutdown provide the
-synchronization; elapsed sleeps are not evidence of completed writes.
+disabled pruning. A synthetic `f1static` replay integration test MUST also run
+the full Collector with `f1static`, `batch`, `desktop`, and `duckdb` against
+local synthetic archive and circuit servers, synchronize on `StatusOK` replay
+completion without sleeps, reopen the database after shutdown, and verify the
+persisted `driver.session -> stint -> lap -> sector` waterfall (including corner
+and marshal-sector enrichment), racing metrics, and race-control logs. Test-only
+readiness and status notifications plus shutdown provide the synchronization;
+elapsed sleeps are not evidence of completed writes.
 Tests MUST also verify that unusable database paths fail startup and that an
 existing invalid database file remains unchanged.
 
@@ -697,9 +708,10 @@ published-history disposition, including the prior PR #47 branch ancestor.
 
 Public CI MUST exercise pure transformations and the real HTTP/WebSocket stack
 against local synthetic servers with invented credentials. F1 account secrets,
-authenticated or public F1 service requests, and downloaded F1 payload artifacts
-MUST NOT be inputs to these jobs. Toolchain and dependency downloads are separate
-build operations; this is not an air-gapped-build claim.
+authenticated or public F1, OpenF1, Jolpica, or MultiViewer service requests,
+and downloaded F1 payload artifacts MUST NOT be inputs to these jobs. Toolchain
+and dependency downloads are separate build operations; this is not an
+air-gapped-build claim.
 
 The existing setup, cookie, subscription, framing, normalization, HTTP failure,
 retry, liveness, redaction, and Collector-process tests remain required. When
@@ -732,13 +744,18 @@ synthetic regression or this documentation.
 The Go distribution currently compiles:
 
 - The `f1livetiming` traces, metrics, and logs receiver factory.
+- The `f1static` historical static archive replay traces, metrics, and logs receiver factory (`enabled: false` by default).
+- The `openf1` Race/Sprint result-observation logs receiver factory (`enabled: false` by default).
+- The `jolpica` official FIA classifications and standings metrics and logs receiver factory (`enabled: false` by default).
 - The standard OTLP receiver.
 - The batch processor.
 - The debug exporter.
 - The viewer's `desktop` exporter and `duckdb` extension.
 
 The shipped `config.yaml` runs both the F1 Live Timing and standard OTLP
-receivers. It contains no credentials: the F1 receiver resolves each user's
+receivers while leaving `f1static`, `openf1`, and `jolpica` opt-in so default
+startup requires neither a static archive URL nor third-party HTTP egress. It
+contains no credentials: the F1 receiver resolves each user's
 token file through `${env:HOME}/.config/bargeboard/f1tv-token`.
 
 The F1 Live Timing receiver currently authenticates, negotiates SignalR,
@@ -766,8 +783,9 @@ racing-signal delivery.
 
 The companion packages (`internal/f1id`, `internal/circuitmap`,
 `receiver/f1staticreceiver`, `receiver/openf1receiver`, and
-`receiver/jolpicareceiver`) are implemented as modular Go packages and remain
-unregistered in `components.go` until the Collector integration slice lands.
+`receiver/jolpicareceiver`) are registered in `components.go` and verified
+end-to-end against the persistent DuckDB desktop viewer using local synthetic
+servers.
 
 ### Live Timing Setup Boundaries
 
@@ -2127,7 +2145,11 @@ input:
    Playback `pace` changes host sleeps between ordinals
    only; reducer outcomes, deterministic IDs, metric windows, and OTLP racing
    timestamps are invariant across `instant` and `1x..1000x`, while racing log
-   `ObservedTimestamp` uses actual process wall time.
+   `ObservedTimestamp` uses actual process wall time. Enabled `f1static`
+   instances report `StatusRecoverableError` across attached signal hosts while
+   materialization and replay are in progress, `StatusOK` on clean completion,
+   and `StatusPermanentError` if materialization, replay, or downstream delivery
+   fails without caller cancellation.
 
 A deleted pre-completion replay prototype was not conforming: it grouped events
 by endpoint and globally sorted them by relative event time; a coarse tick could
@@ -5098,10 +5120,9 @@ snapshot, and root-outcome reducer, the bounded single-flight HTTP adapter, and
 an opt-in standalone companion `openf1` logs receiver (`enabled: false` by
 default) for post-session result observation logs (`f1.driver.result.observed`
 and `f1.driver.result.revised`, attaching `bargeboard.otlp.id/v1` correlation
-only for driver numbers explicitly listed in `root_drivers`). Standalone
-`openf1` never emits or mutates `driver.session` spans, metrics, or telemetry.
-Wiring `openf1receiver` into `f1livetimingreceiver` and `components.go` remains
-pending the separate Collector integration slice.
+only for driver numbers explicitly listed in `root_drivers`). Standalone `openf1` is registered in `components.go` and never emits or mutates
+`driver.session` spans, metrics, or telemetry; embedding `openf1_results` inside
+`f1livetimingreceiver` remains pending live racing projection.
 
 ### Adapter And Fetch Boundary
 

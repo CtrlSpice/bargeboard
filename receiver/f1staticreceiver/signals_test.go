@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/CtrlSpice/bargeboard/internal/f1id"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/component/componentstatus"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
@@ -238,5 +240,78 @@ func TestPacingDoesNotEnterReducer(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(reference, s) || !reflect.DeepEqual(want, got) {
 			t.Fatal("reducer state or per-ordinal effects differ", pace, err)
 		}
+	}
+}
+
+type recordingStatusHost struct {
+	events chan componentstatus.Status
+}
+
+func (*recordingStatusHost) GetExtensions() map[component.ID]component.Component { return nil }
+func (h *recordingStatusHost) Report(event *componentstatus.Event) {
+	h.events <- event.Status()
+}
+
+func TestReceiverLifecycleStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ok/SessionInfo.json":
+			fmt.Fprint(w, info)
+		case "/ok/DriverList.json":
+			fmt.Fprint(w, drivers)
+		case "/ok/Heartbeat.jsonStream":
+			fmt.Fprint(w, `00:00:00.000{"Utc":"2025-03-10T10:00:00Z"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	disabled := newReceiver(DefaultConfig(), receiver.Settings{})
+	host := &recordingStatusHost{events: make(chan componentstatus.Status, 4)}
+	if err := disabled.Start(t.Context(), host); err != nil {
+		t.Fatal(err)
+	}
+	if len(host.events) != 0 {
+		t.Fatalf("disabled receiver reported status: %d", len(host.events))
+	}
+	if err := disabled.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		path string
+		want componentstatus.Status
+	}{
+		{"ok", componentstatus.StatusOK},
+		{"missing", componentstatus.StatusPermanentError},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Enabled = true
+			cfg.Endpoint = server.URL
+			cfg.SessionPath = tc.path
+			r := newReceiver(cfg, receiver.Settings{})
+			h1 := &recordingStatusHost{events: make(chan componentstatus.Status, 4)}
+			h2 := &recordingStatusHost{events: make(chan componentstatus.Status, 4)}
+			if err := r.Start(t.Context(), h1); err != nil {
+				t.Fatal(err)
+			}
+			if got := <-h1.events; got != componentstatus.StatusRecoverableError {
+				t.Fatalf("initial status = %v, want RecoverableError", got)
+			}
+			if got := <-h1.events; got != tc.want {
+				t.Fatalf("terminal status = %v, want %v", got, tc.want)
+			}
+			if err := r.Start(t.Context(), h2); err != nil {
+				t.Fatal(err)
+			}
+			if got := <-h2.events; got != tc.want {
+				t.Fatalf("late pipeline status = %v, want %v", got, tc.want)
+			}
+			if err := r.Shutdown(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

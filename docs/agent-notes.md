@@ -45,8 +45,8 @@ verification commands and review outcomes.
 
 ### EMBEDDED-VIEWER — Configure the persistent local viewer
 
-**Approved; implementation in draft [PR #71](https://github.com/CtrlSpice/bargeboard/pull/71)
-on `feature/persistent-viewer`.** The user
+**Landed in [PR #71](https://github.com/CtrlSpice/bargeboard/pull/71) at
+`ea1c26c3bb060bdb93a6d7d5cf709aeefea45061`.** The user
 requested the viewer as Bargeboard's configured exporter and approved using
 [its v0.8.1 distribution](https://github.com/CtrlSpice/otel-desktop-viewer/tree/v0.8.1)
 as the integration reference. The accepted setup is viewer
@@ -94,6 +94,33 @@ This explains why the DuckDB Go bindings include extensions that those targets o
 The audit has not established a blanket redistribution prohibition or a need for
 custom linkage. The user approved investigation only; changing linked extensions
 still needs approval. No custom linkage has been implemented.
+
+### F1-COMPANION-RECEIVERS — Add non-duplicating historical replay, OpenF1, Jolpica, and circuit enrichment
+
+**Approved; implemented on `feat/f1-companion-receivers`.** The distribution
+registers three opt-in (`enabled: false`) receivers alongside `f1livetiming` and
+`otlp` in `components.go` while preserving `[f1livetiming, otlp]` in the shipped
+`config.yaml`:
+
+- `internal/f1id`: canonical session/phase identity, `bargeboard.otlp.id/v1`
+  deterministic trace and span IDs, shared OTLP resource/scope helpers, lossless
+  JSON decoding, and redirect-disabled bounded HTTP helpers.
+- `internal/circuitmap`: pure MultiViewer circuit parser and exact decimal
+  `big.Rat` Euclidean corner and marshal-sector coordinate enrichment on
+  eligible driver trace events, emitting zero standalone spans, metrics, or logs.
+- `receiver/f1staticreceiver` (`f1static`): single-run original-time replay of
+  finished `/static/<session_path>/` archives across traces, metrics, and logs,
+  reporting `StatusRecoverableError` until completion and `StatusOK` once frozen
+  delivery finishes.
+- `receiver/openf1receiver` (`openf1`): post-session Race and Sprint result
+  observation logs (`f1.driver.result.observed`, `f1.driver.result.revised`) and
+  pure root-outcome handoff reducer, with zero lap/stint/telemetry duplication.
+- `receiver/jolpicareceiver` (`jolpica`): official FIA Race and Sprint
+  classifications (`f1.driver.classification.official` logs and classification
+  Gauges) and post-round WDC/WCC standings Gauges.
+
+All unit and end-to-end DuckDB viewer tests use synthetic fixtures and local
+`httptest` servers with zero live external requests.
 
 ### DEL-TS — Remove the obsolete replay implementation
 
@@ -393,6 +420,9 @@ It groups the implementation work; issue text links back to the canonical policy
 | [GO127-COMPAT / #46](https://github.com/CtrlSpice/bargeboard/issues/46) | Landed in PR #59 at `ca7580d` | Preserve explicit hub, snapshot, setup, and negotiation depth profiles independently of mixed standard-library decoder accounting; run full quality/race checks with authenticated Go 1.26.8 and Go 1.27.1 while releases remain pinned to Go 1.26.8. |
 | SESSION-OWNER | Landed in PR #56 at `bf7772c` | Own aggregate SessionInfo state on the read goroutine across reconnects, contain reducer failures, and retain the no-export boundary. |
 | DRIVER-REGISTRY-PURE | Landed in PR #57 at `87d8cef` | Parse and reduce bounded DriverList identity state with synthetic fixtures while leaving aggregate/runtime integration, diagnostics, and projection disabled. |
+| DEPENDENCY-REFRESH | Landed in PR #70 at `c207e18` | Refresh dependencies to Collector v0.166.0/v1.72.0, viewer v0.8.1, and Go 1.27.4 CI/release toolchain. |
+| EMBEDDED-VIEWER | Landed in PR #71 at `ea1c26c` | Embed `otel-desktop-viewer v0.8.1` (`desktop` exporter and `duckdb` extension), native CGO four-target release builds, and persistent OTLP restart verification. |
+| F1-COMPANION-RECEIVERS | Implemented on `feat/f1-companion-receivers` | Register non-duplicating `f1static`, `openf1`, and `jolpica` receivers plus `internal/f1id` and `internal/circuitmap`, verified end-to-end into persistent DuckDB viewer storage. |
 
 U1 landed in PR #38 at `e2afacb0d6071f0a8e6a5c790c9039a3f52070d2`, the base of
 the U2 implementation. U2 landed in PR #39 at `0284a62`, the U3 implementation base.

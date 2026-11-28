@@ -9,44 +9,110 @@ import (
 	"time"
 
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/component/componentstatus"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/receiver"
 	"go.uber.org/zap"
 )
 
-type staticReceiver struct {
-	cfg      Config
-	settings receiver.Settings
-	metrics  consumer.Metrics
-	logs     consumer.Logs
-	traces   consumer.Traces
-	clock    Clock
+type statusBroadcaster struct {
+	delivery sync.Mutex
 	mu       sync.Mutex
-	cancel   context.CancelFunc
-	done     chan struct{}
-	stopped  bool
-	remove   func()
+	hosts    []component.Host
+	current  *componentstatus.Event
+}
+
+func (b *statusBroadcaster) register(host component.Host) {
+	if host == nil {
+		return
+	}
+	b.delivery.Lock()
+	defer b.delivery.Unlock()
+	b.mu.Lock()
+	b.hosts = append(b.hosts, host)
+	current := b.current
+	b.mu.Unlock()
+	if current != nil {
+		componentstatus.ReportStatus(host, current)
+	}
+}
+
+func (b *statusBroadcaster) Report(event *componentstatus.Event) {
+	b.delivery.Lock()
+	defer b.delivery.Unlock()
+	b.mu.Lock()
+	b.current = event
+	hosts := append([]component.Host(nil), b.hosts...)
+	b.mu.Unlock()
+	for _, host := range hosts {
+		componentstatus.ReportStatus(host, event)
+	}
+}
+
+type staticReceiver struct {
+	cfg        Config
+	settings   receiver.Settings
+	metrics    consumer.Metrics
+	logs       consumer.Logs
+	traces     consumer.Traces
+	clock      Clock
+	status     statusBroadcaster
+	statusInit sync.Once
+	mu         sync.Mutex
+	cancel     context.CancelFunc
+	done       chan struct{}
+	stopped    bool
+	remove     func()
 }
 
 func newReceiver(cfg Config, settings receiver.Settings) *staticReceiver {
 	return &staticReceiver{cfg: cfg, settings: settings, clock: ProcessClock{}}
 }
-func (r *staticReceiver) Start(ctx context.Context, _ component.Host) error {
+func (r *staticReceiver) Start(ctx context.Context, host component.Host) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.stopped {
+	stopped := r.stopped
+	r.mu.Unlock()
+	if stopped {
 		return errors.New("static replay receiver stopped")
 	}
-	if !r.cfg.Enabled || r.done != nil {
+	if !r.cfg.Enabled {
 		return nil
 	}
-	ctx, r.cancel = context.WithCancel(context.WithoutCancel(ctx))
-	r.done = make(chan struct{})
+	r.statusInit.Do(func() {
+		r.status.Report(componentstatus.NewRecoverableErrorEvent(errors.New("static archive replay in progress")))
+	})
+	r.status.register(host)
+
+	r.mu.Lock()
+	if r.stopped {
+		r.mu.Unlock()
+		return errors.New("static replay receiver stopped")
+	}
+	if r.done != nil {
+		r.mu.Unlock()
+		return nil
+	}
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	done := make(chan struct{})
+	r.cancel = cancel
+	r.done = done
+	r.mu.Unlock()
+
 	go func() {
-		defer close(r.done)
-		if err := r.run(ctx); err != nil && ctx.Err() == nil && r.settings.Logger != nil {
-			r.settings.Logger.Error("static replay collection stopped", zap.Error(err))
+		defer close(done)
+		if err := r.run(runCtx); err != nil {
+			if runCtx.Err() == nil {
+				if r.settings.Logger != nil {
+					r.settings.Logger.Error("static replay collection stopped", zap.Error(err))
+				}
+				r.status.Report(componentstatus.NewPermanentErrorEvent(errors.New("static archive replay failed")))
+			}
+			return
 		}
+		if r.settings.Logger != nil {
+			r.settings.Logger.Info("Static archive replay completed")
+		}
+		r.status.Report(componentstatus.NewEvent(componentstatus.StatusOK))
 	}()
 	return nil
 }
