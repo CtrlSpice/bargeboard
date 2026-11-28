@@ -5,8 +5,9 @@ using your existing F1 TV token file. It answers whether the current connection,
 subscription, and normalization path works with the source. Public CI covers
 implementation behavior with synthetic inputs and local servers instead.
 
-**Racing OTLP export is not implemented.** An empty desktop viewer is expected
-today, even when this input check succeeds. The
+**Racing OTLP export is not implemented.** This input check produces no F1 racing
+records. The viewer can display previously stored records and telemetry from other
+OTLP clients. The
 [canonical boundary](architecture.md#local-runtime-and-verification-boundaries)
 keeps F1 credentials in Bargeboard and the viewer a generic OTLP destination.
 
@@ -25,12 +26,13 @@ keeps F1 credentials in Bargeboard and the viewer a generic OTLP destination.
    Windows users should follow the README's HOME setup and restrict file access
    to their account. The reader currently does not enforce file permissions.
 
-2. Run this input-only check with the viewer stopped. The shipped configuration
-   needs `localhost:4317`, `localhost:4318`, and `127.0.0.1:8888` free. If another
+2. The shipped configuration starts its own embedded viewer. It needs
+   `localhost:4317`, `localhost:4318`, `127.0.0.1:8000`, and `127.0.0.1:8888` free. If another
    service owns those ports, stop the check and resolve the local configuration
    conflict; a bind failure says nothing about F1 access. A user-controlled
-   configuration may instead omit Bargeboard's incoming OTLP receiver and use
-   a free loopback operational-metrics port.
+   configuration may use other free local ports. If you change receiver ports,
+   set `extensions.duckdb.otlp_http_port` and
+   `extensions.duckdb.otlp_grpc_port` to the corresponding new ports.
 
 3. From the repository root, validate the configuration:
 

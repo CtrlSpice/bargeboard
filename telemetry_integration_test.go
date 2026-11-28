@@ -58,12 +58,12 @@ func syntheticCollectorComponents() (otelcol.Factories, error) {
 		return factories, err
 	}
 	kind := component.MustNewType("syntheticstatus")
-	factories.Extensions = map[component.Type]extension.Factory{kind: extension.NewFactory(kind,
+	factories.Extensions[kind] = extension.NewFactory(kind,
 		func() component.Config { return &struct{}{} },
 		func(_ context.Context, settings extension.Settings, _ component.Config) (extension.Extension, error) {
 			return &syntheticStatusWatcher{settings.Logger}, nil
 		},
-		component.StabilityLevelDevelopment)}
+		component.StabilityLevelDevelopment)
 	return factories, nil
 }
 
@@ -265,8 +265,11 @@ func TestForegroundCollectorOperationalTelemetry(t *testing.T) {
 				"${env:HOME}/.config/bargeboard/f1tv-token", token,
 				"  f1livetiming:\n", fmt.Sprintf("  f1livetiming:\n    endpoint: %s\n    negotiate_endpoint: %s/negotiate\n", "ws"+strings.TrimPrefix(server.URL, "http"), server.URL),
 				"localhost:4317", "127.0.0.1:0", "localhost:4318", "127.0.0.1:0",
+				"endpoint: 127.0.0.1:8000", "endpoint: 127.0.0.1:0",
+				"db: ./bargeboard.duckdb", fmt.Sprintf("db: %q", filepath.Join(dir, "telemetry.duckdb")),
 				"level: basic", "level: "+level, "port: 8888", fmt.Sprintf("port: %d", port),
-				"service:\n", "extensions:\n  syntheticstatus: {}\n\nservice:\n  extensions: [syntheticstatus]\n",
+				"extensions:\n", "extensions:\n  syntheticstatus: {}\n",
+				"extensions: [duckdb]", "extensions: [duckdb, syntheticstatus]",
 			).Replace(string(shipped))
 			path := filepath.Join(dir, "config.yaml")
 			if err := os.WriteFile(path, []byte(config), 0o600); err != nil {

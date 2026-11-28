@@ -1,0 +1,93 @@
+name: Build and verify native binaries
+description: Compare a native binary with a rebuild from separate source and Go caches
+
+inputs:
+  target:
+    description: Approved native release target
+    required: true
+  version:
+    description: Version resolved for this workflow run
+    required: true
+  release-tag:
+    description: Validated signed release tag, or empty for a snapshot
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Select binary paths
+      id: paths
+      shell: bash
+      env:
+        BUILD_TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        extension=''
+        if [[ "$BUILD_TARGET" == windows_* ]]; then
+          extension=.exe
+        fi
+        printf 'candidate=%s/native-candidate/bargeboard-native-candidate-%s%s\n' \
+          "$RUNNER_TEMP" "$BUILD_TARGET" "$extension" >>"$GITHUB_OUTPUT"
+        printf 'reference=%s/native-reference/bargeboard-native-reference-%s%s\n' \
+          "$RUNNER_TEMP" "$BUILD_TARGET" "$extension" >>"$GITHUB_OUTPUT"
+
+    - name: Build and inspect native candidate
+      shell: bash
+      env:
+        BUILD_TARGET: ${{ inputs.target }}
+        BUILD_VERSION: ${{ inputs.version }}
+        EXPECTED_TAG: ${{ inputs.release-tag }}
+        CANDIDATE_BINARY: ${{ steps.paths.outputs.candidate }}
+      run: bash scripts/build-native-release.sh "$BUILD_TARGET" "$BUILD_VERSION" "$CANDIDATE_BINARY"
+
+    - name: Test persistent viewer on native target
+      shell: bash
+      env:
+        CGO_ENABLED: "1"
+      run: |
+        set -euo pipefail
+        if [[ "$RUNNER_OS" == Windows ]]; then
+          export CC='C:/mingw64/bin/gcc.exe' CXX='C:/mingw64/bin/g++.exe'
+        fi
+        go test -mod=readonly -count=1 -timeout=5m -run 'TestViewer|TestShippedConfig|TestComponents' .
+
+    - name: Clone independent native source
+      shell: bash
+      run: |
+        set -euo pipefail
+        git clone --no-hardlinks --no-checkout "$GITHUB_WORKSPACE" "$RUNNER_TEMP/native-source"
+        git -C "$RUNNER_TEMP/native-source" checkout --detach "$GITHUB_SHA"
+
+    - name: Build and inspect native reference
+      shell: bash
+      working-directory: ${{ runner.temp }}/native-source
+      env:
+        BUILD_TARGET: ${{ inputs.target }}
+        BUILD_VERSION: ${{ inputs.version }}
+        EXPECTED_TAG: ${{ inputs.release-tag }}
+        REFERENCE_BINARY: ${{ steps.paths.outputs.reference }}
+        GOCACHE: ${{ runner.temp }}/native-reference-go-build
+        GOMODCACHE: ${{ runner.temp }}/native-reference-go-mod
+      run: bash scripts/build-native-release.sh "$BUILD_TARGET" "$BUILD_VERSION" "$REFERENCE_BINARY"
+
+    - name: Compare native binaries
+      shell: bash
+      env:
+        CANDIDATE_BINARY: ${{ steps.paths.outputs.candidate }}
+        REFERENCE_BINARY: ${{ steps.paths.outputs.reference }}
+      run: cmp "$CANDIDATE_BINARY" "$REFERENCE_BINARY"
+
+    - name: Transfer native candidate
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        path: ${{ steps.paths.outputs.candidate }}
+        archive: false
+        if-no-files-found: error
+
+    - name: Transfer native reference
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        path: ${{ steps.paths.outputs.reference }}
+        archive: false
+        if-no-files-found: error

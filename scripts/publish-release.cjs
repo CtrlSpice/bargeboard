@@ -57,8 +57,8 @@ function expectedAssets(releaseDir) {
     digest: `sha256:${sha256(checksumPath)}`,
     size: fs.statSync(checksumPath).size,
   });
-  if (expected.size !== 11) {
-    throw new Error(`expected 11 release assets, found ${expected.size}`);
+  if (expected.size !== 9) {
+    throw new Error(`expected 9 release assets, found ${expected.size}`);
   }
   return expected;
 }

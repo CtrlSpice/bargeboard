@@ -37,7 +37,7 @@ if ! jq -e \
     (.Deps | type) == "array" and
     $settings["-buildmode"] == "exe" and
     $settings["-trimpath"] == "true" and
-    $settings.CGO_ENABLED == "0" and
+    $settings.CGO_ENABLED == "1" and
     $settings.GOOS == $goos and
     $settings.GOARCH == $goarch and
     $settings[$tuning_key] == $tuning and

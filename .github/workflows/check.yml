@@ -65,8 +65,35 @@ jobs:
           git diff --exit-code
           git diff --cached --exit-code
 
+  version:
+    name: resolve snapshot version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Go
+        uses: ./.github/actions/setup-go
+      - name: Install release tools
+        uses: ./.github/actions/setup-release-tools
+      - name: Resolve snapshot version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(bash scripts/resolve-release-version.sh)"
+          printf 'version=%s\n' "$version" >>"$GITHUB_OUTPUT"
+
   release_build:
-    name: release build (${{ matrix.goos }}/${{ matrix.goarch }})
+    name: release build (${{ matrix.target }})
+    needs: version
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     permissions:
@@ -76,50 +103,47 @@ jobs:
       matrix:
         include:
           - runner: ubuntu-24.04
-            goos: linux
-            goarch: amd64
-          - runner: ubuntu-24.04
-            goos: linux
-            goarch: arm64
+            target: linux_amd64_v1
+          - runner: ubuntu-24.04-arm
+            target: linux_arm64_v8.0
           - runner: macos-15
-            goos: darwin
-            goarch: amd64
-          - runner: macos-15
-            goos: darwin
-            goarch: arm64
+            target: darwin_arm64_v8.0
           - runner: windows-2025
-            goos: windows
-            goarch: amd64
+            target: windows_amd64_v1
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Go
         uses: ./.github/actions/setup-go
 
-      - name: Build distribution
-        env:
-          CGO_ENABLED: 0
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-        run: go build -mod=readonly -trimpath .
+      - name: Build independent native binaries
+        uses: ./.github/actions/build-native
+        with:
+          target: ${{ matrix.target }}
+          version: ${{ needs.version.outputs.version }}
 
       - name: Validate Windows configuration
-        if: matrix.goos == 'windows'
+        if: matrix.target == 'windows_amd64_v1'
         shell: pwsh
+        env:
+          CC: C:/mingw64/bin/gcc.exe
+          CXX: C:/mingw64/bin/g++.exe
         run: |
           $profileHome = $HOME
           Remove-Item Env:HOME -ErrorAction SilentlyContinue
           $env:HOME = $profileHome
           go test -mod=readonly -run '^TestShippedConfigResolvesTokenFileFromHome$' .
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          .\bargeboard.exe validate --config config.yaml
+          & "$env:RUNNER_TEMP/native-candidate/bargeboard-native-candidate-windows_amd64_v1.exe" validate --config config.yaml
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   package:
     name: release package
+    needs: [version, release_build]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -163,6 +187,9 @@ jobs:
       - name: Test release-ref validation
         run: |
           bash scripts/build-release_test.sh
+          bash scripts/build-native-release_test.sh
+          bash scripts/verify-native-release-inputs_test.sh
+          bash scripts/resolve-release-version_test.sh
           bash scripts/generate-release-sbom_test.sh
           bash scripts/go-toolchain_test.sh
           bash scripts/release-workflow_test.sh
@@ -183,8 +210,32 @@ jobs:
       - name: Check GoReleaser configuration
         run: goreleaser check
 
+      - name: Download native binaries from this run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: bargeboard-native-*
+          path: ${{ runner.temp }}/bargeboard-native-inputs
+          merge-multiple: true
+          skip-decompress: true
+          digest-mismatch: error
+
+      - name: Verify native inputs
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+          EXPECTED_VCS_MODIFIED: "false"
+        run: |
+          set -euo pipefail
+          native_binaries="$RUNNER_TEMP/bargeboard-native-inputs"
+          bash scripts/verify-native-release-inputs.sh "$native_binaries"
+          printf 'NATIVE_BINARIES=%s\nNATIVE_BUILD_SET=candidate\n' "$native_binaries" >>"$GITHUB_ENV"
+
       - name: Build release snapshot
-        run: goreleaser release --snapshot --clean --skip=publish
+        env:
+          EXPECTED_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          goreleaser release --snapshot --clean --skip=publish
+          jq -e --arg version "$EXPECTED_VERSION" '.version == $version' build/release/metadata.json
 
       - name: Record release subject digests
         id: first_build
@@ -212,6 +263,7 @@ jobs:
         env:
           GOCACHE: ${{ runner.temp }}/bargeboard-repro-go-build
           GOMODCACHE: ${{ runner.temp }}/bargeboard-repro-go-mod
+          NATIVE_BUILD_SET: reference
         working-directory: ${{ runner.temp }}/bargeboard-repro-source
         run: |
           touch -t 200001010000 LICENSE README.md config.yaml
@@ -247,6 +299,7 @@ jobs:
     name: check
     needs:
       - quality
+      - version
       - release_build
       - package
     if: ${{ always() }}
@@ -256,10 +309,11 @@ jobs:
       - name: Require successful prerequisite jobs
         env:
           QUALITY_RESULT: ${{ needs.quality.result }}
+          VERSION_RESULT: ${{ needs.version.result }}
           RELEASE_BUILD_RESULT: ${{ needs.release_build.result }}
           PACKAGE_RESULT: ${{ needs.package.result }}
         run: |
-          if [ "$QUALITY_RESULT" != "success" ] || [ "$RELEASE_BUILD_RESULT" != "success" ] || [ "$PACKAGE_RESULT" != "success" ]; then
-            printf 'quality=%s\nrelease_build=%s\npackage=%s\n' "$QUALITY_RESULT" "$RELEASE_BUILD_RESULT" "$PACKAGE_RESULT"
+          if [ "$QUALITY_RESULT" != "success" ] || [ "$VERSION_RESULT" != "success" ] || [ "$RELEASE_BUILD_RESULT" != "success" ] || [ "$PACKAGE_RESULT" != "success" ]; then
+            printf 'quality=%s\nversion=%s\nrelease_build=%s\npackage=%s\n' "$QUALITY_RESULT" "$VERSION_RESULT" "$RELEASE_BUILD_RESULT" "$PACKAGE_RESULT"
             exit 1
           fi

@@ -6,14 +6,21 @@ A custom OpenTelemetry Collector distribution for Formula 1 telemetry. Designed 
 
 ## Implementation
 
-The Go Collector distribution is the sole implementation. Its baseline accepts OTLP traces, metrics, and logs, batches them, and writes them to the Collector's `debug` exporter. The compiled F1 Live Timing receiver authenticates, subscribes, reconnects, decodes, validates, and normalizes the live feed. It reports input activity and interruptions in the terminal and through Collector internal metrics. **F1 race export is not implemented:** normalized batches update receiver-owned SessionInfo state, but the post-reduction consumer remains a no-op. Multi-topic reduction and OTLP projection are the next behavior slices. An OpenF1 receiver does not exist yet.
+The Go Collector distribution accepts OTLP traces, metrics, and logs, batches them, and stores them through the embedded viewer's `desktop` exporter. The F1 Live Timing receiver connects to the live feed, validates updates, and reports input activity and interruptions. **F1 race export is not implemented:** the receiver currently maintains session identity and scheduling information, but produces no racing telemetry. Processing other feed topics and converting them to OTLP remain pending. An OpenF1 receiver does not exist yet.
 
 The canonical design is the evolving [Bargeboard architecture](docs/architecture.md). It records accepted decisions, source limitations, pending candidates, implementation seams, and the required checks for future human and agent contributors.
 
 ## Quick start
 
-Development requires Go 1.27.0 or newer. CI authenticates and verifies Go 1.27.4;
-release archives use the same pinned version.
+Development requires Go 1.27.0 or newer and a native C/C++ toolchain with CGO
+enabled for DuckDB. CI authenticates and verifies Go 1.27.4. Native CGO release
+archives use the same pinned version.
+Before `make run`, prepare your [F1 token file](#f1-live-timing).
+
+The commands below require GNU Make and a POSIX shell, such as Git Bash on
+Windows. Use Xcode Command Line Tools on macOS, GCC/G++ on Linux, or MinGW-w64
+GCC/G++ on Windows. `go env CGO_ENABLED CC CXX` reports whether CGO is enabled
+and which compilers Go uses; `CGO_ENABLED` must be `1`.
 
 ```bash
 make check
@@ -24,22 +31,32 @@ The shipped `config.yaml` enables F1 Live Timing and listens for OTLP/gRPC on
 `localhost:4317` and OTLP/HTTP on `localhost:4318`. Run `make components` to
 inspect the components compiled into the distribution.
 
+Open [the embedded viewer](http://127.0.0.1:8000) after startup. The `duckdb`
+extension stores telemetry in `./bargeboard.duckdb`, relative to the process
+working directory. Data survives shutdown and restart. `db_max_size: "0"`
+disables automatic pruning.
+The viewer displays incoming OTLP; the F1 receiver does not yet emit racing telemetry.
+The incoming OTLP ports and the viewer belong to the same Bargeboard process.
+
 `make check` uses synthetic F1 inputs and local test servers. `make run` starts
 the real client using the user's token file. For an optional private check of
 that connection, follow [Live Timing connectivity](https://github.com/CtrlSpice/bargeboard/blob/main/docs/live-connectivity.md).
 
 ## Releases
 
-GitHub releases provide native `bargeboard` archives for Linux and macOS on
-amd64 and arm64, and for Windows on amd64. Each archive includes the binary,
-`config.yaml`, this README, and the Apache 2.0 license. The release also includes
+Native CGO release archives target Linux on amd64 and arm64, macOS on arm64,
+and Windows on amd64.
+Each `bargeboard` archive must include the binary,
+`config.yaml`, this README, and the Apache 2.0 license. The release must also include
 SHA-256 checksums and an SPDX SBOM for every archive.
 
-After downloading all assets for a release, verify them before running the
-binary:
+When a version is available on the [release page](https://github.com/CtrlSpice/bargeboard/releases),
+download and verify its assets before running the binary. Replace `v1.2.3` with
+that version:
 
 ```bash
 tag=v1.2.3
+gh release download "$tag" --repo CtrlSpice/bargeboard
 gh release verify "$tag" --repo CtrlSpice/bargeboard
 for asset in checksums.txt bargeboard_*; do
   gh release verify-asset "$tag" "$asset" --repo CtrlSpice/bargeboard
@@ -51,15 +68,29 @@ else
 fi
 ```
 
+Extract the archive for your platform, then run its binary from the extracted
+directory with `--config config.yaml`. Prepare the [F1 token file](#f1-live-timing)
+first. For example, the Linux amd64 archive for `v1.2.3` would use:
+
+```bash
+tar -xzf bargeboard_1.2.3_linux_amd64.tar.gz
+cd bargeboard_1.2.3_linux_amd64
+./bargeboard --config config.yaml
+```
+
+On Windows, extract the ZIP and run `.\bargeboard.exe --config config.yaml`
+from its directory.
+
 The release workflow runs trusted code from `main` after a maintainer dispatches
 a signed annotated `v0` or `v1` SemVer tag such as `v1.2.3`. Build metadata is
 not accepted because Go cannot represent it in this module's embedded version.
 The tag must point to the current `main` commit, that commit must have passed the
 protected `check` workflow, and the configured release controls must still match
-repository policy. A required reviewer then approves the protected `release`
-environment. GoReleaser builds the release subjects without uploading them. The
-workflow independently reproduces and verifies every subject, and only then does
-it upload, reverify, and publish the draft. GitHub immutability then locks the tag
+repository policy. Native jobs build each binary twice using separate source and
+Go cache directories. A required reviewer approves the protected `release`
+environment before GoReleaser packages both sets without uploading them. The
+workflow compares and verifies every archive, SBOM, and checksum manifest before
+it uploads, reverifies, and publishes the draft. GitHub immutability then locks the tag
 and assets. At publication, the workflow also requires the tag as the title,
 empty notes, and the expected prerelease state. It sends `make_latest: "false"`
 to opt out of promoting the release to latest. GitHub still allows maintainers
@@ -69,26 +100,16 @@ pinned in the repository before extracting or executing them. Tags are limited
 to 131 ASCII characters so every wrapped archive path has one canonical USTAR
 representation.
 
-Every archive also contains `THIRD_PARTY_NOTICES`, generated from the union of
-packages selected for all supported targets, and exact pinned source payloads
-for MPL-covered module and embedded data dependencies. That includes the Public
-Suffix List revision compiled into `golang.org/x/net/publicsuffix`. The
-generator includes nested license, notice, patent, and selected-source
-attribution text, classifies complete legal texts and selected-source license
-assertions against an explicit release policy, and enforces a 64 MiB aggregate
-material limit while collecting it. The complete canonical notices output is
-bound to a reviewed SHA-256 value, so any dependency, attribution, or legal-text
-change requires explicit review. Generation also fails on recognized additional
-license terms, when a selected module lacks legal material, when a source license
-needs explicit policy review, or when an MPL dependency lacks pinned corresponding
-source.
+Each archive includes a deterministic `THIRD_PARTY_NOTICES` inventory of the Go
+standard library and dependency modules selected across the four targets. The
+generator records legal documents by path and SHA-256 and includes each distinct
+normalized text once. It rejects forbidden license families and restrictive
+terms in license files. Notice and attribution files are preserved as text.
 
-Go attribution is collected from comment groups throughout each selected file,
-including after declarations. Reviewed source exceptions and supplemental notices
-are pinned to their owning module and source path; changed or missing attribution
-fails generation. The [attribution record](scripts/thirdparty/notices/README.md)
-documents the upstream evidence, including LINPACK's recorded BSD-3-Clause
-confirmation, and the complete reviewed notices-output delta.
+Archives include the pinned MPL-2.0 source for `go-version`, `golang-lru`, and
+the Public Suffix List compiled into `golang.org/x/net/publicsuffix`, plus the
+list's license. The embedded viewer serves Madoromi's bundled MPL-2.0 source at
+`/licenses/madoromi/`.
 
 The final verified read of `main` immediately before publication is the release
 decision point. A later branch update does not invalidate that decision. A
@@ -127,16 +148,18 @@ requested release tag is validated as data inside that trusted workflow.
 
 ## F1 Live Timing
 
-Bargeboard owns the F1 credentials and connection. The intended local pipeline is
-F1 → Bargeboard → OTLP over loopback → `otel-desktop-viewer`; the viewer receives
-telemetry only and has no F1 credential handling. Racing OTLP projection and an
-outgoing OTLP exporter remain unimplemented. The current incoming OTLP ports are
-not export destinations.
+Bargeboard owns the F1 credentials and connection. Its local Collector pipelines
+deliver telemetry to the embedded `otel-desktop-viewer v0.8.1` exporter and
+DuckDB store. Viewer components receive telemetry only and have no F1 credential
+handling. Racing OTLP projection remains unimplemented; the incoming OTLP ports
+already accept telemetry from other local clients.
 
 The Collector reads each user's own F1 TV `subscriptionToken` from
 `$HOME/.config/bargeboard/f1tv-token`. The repository configuration contains
 only that file reference, never a token. Create the file with owner-only
-permissions before running the Collector. After storing the token:
+permissions before running the Collector. Store the token itself as plain text,
+not a JSON response or an `Authorization` header. Bargeboard does not acquire or
+refresh tokens. After storing the token:
 
 ```bash
 chmod 600 "$HOME/.config/bargeboard/f1tv-token"

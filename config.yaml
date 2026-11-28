@@ -16,10 +16,18 @@ processors:
     timeout: 1s
 
 exporters:
-  debug:
-    verbosity: basic
+  desktop:
+
+extensions:
+  duckdb:
+    endpoint: 127.0.0.1:8000
+    otlp_http_port: 4318
+    otlp_grpc_port: 4317
+    db: ./bargeboard.duckdb
+    db_max_size: "0"
 
 service:
+  extensions: [duckdb]
   telemetry:
     metrics:
       level: basic
@@ -36,12 +44,12 @@ service:
     traces:
       receivers: [f1livetiming, otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [desktop]
     metrics:
       receivers: [f1livetiming, otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [desktop]
     logs:
       receivers: [f1livetiming, otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [desktop]

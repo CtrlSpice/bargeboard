@@ -84,6 +84,7 @@ readonly expected_commit="${EXPECTED_COMMIT:-$(git rev-parse --verify 'HEAD^{com
 readonly expected_go_version="${EXPECTED_GO_VERSION:-$(go env GOVERSION)}"
 readonly expected_tag="${EXPECTED_TAG:-}"
 readonly expected_vcs_modified="${EXPECTED_VCS_MODIFIED:-}"
+readonly native_binaries="${NATIVE_BINARIES:?NATIVE_BINARIES must identify the verified native candidate and reference directory}"
 if [[ -n "$expected_tag" ]]; then
   bash "$script_dir/validate-release-tag.sh" "$expected_tag"
   if [[ "$version" != "${expected_tag#v}" ]]; then
@@ -92,7 +93,6 @@ if [[ -n "$expected_tag" ]]; then
   fi
 fi
 readonly archives=(
-  "bargeboard_${version}_darwin_amd64.tar.gz"
   "bargeboard_${version}_darwin_arm64.tar.gz"
   "bargeboard_${version}_linux_amd64.tar.gz"
   "bargeboard_${version}_linux_arm64.tar.gz"
@@ -141,7 +141,7 @@ if [[ "$expected_root_files" != "$actual_root_files" ]]; then
   exit 1
 fi
 
-readonly expected_targets=$'darwin_amd64_v1\ndarwin_arm64_v8.0\nlinux_amd64_v1\nlinux_arm64_v8.0\nwindows_amd64_v1'
+readonly expected_targets=$'darwin_arm64_v8.0\nlinux_amd64_v1\nlinux_arm64_v8.0\nwindows_amd64_v1'
 actual_targets="$(jq -r '.[] | select(.type == "Archive") | .target' "$artifacts" | LC_ALL=C sort)"
 readonly actual_targets
 if [[ "$actual_targets" != "$expected_targets" ]]; then
@@ -150,12 +150,12 @@ if [[ "$actual_targets" != "$expected_targets" ]]; then
 fi
 
 if ! jq -e '
-  length == 17 and
-  ([.[] | select(.type == "Archive")] | length == 5) and
-  ([.[] | select(.type == "Binary")] | length == 5) and
+  length == 14 and
+  ([.[] | select(.type == "Archive")] | length == 4) and
+  ([.[] | select(.type == "Binary")] | length == 4) and
   ([.[] | select(.type == "Checksum")] | length == 1) and
   ([.[] | select(.type == "Metadata")] | length == 1) and
-  ([.[] | select(.type == "SBOM")] | length == 5)
+  ([.[] | select(.type == "SBOM")] | length == 4)
 ' "$artifacts" >/dev/null; then
   printf 'artifacts.json does not contain the expected release artifacts\n' >&2
   exit 1
@@ -166,37 +166,11 @@ readonly payload_dir
 trap 'rm -rf "$payload_dir"' EXIT
 repository_root="$(git rev-parse --show-toplevel)"
 readonly repository_root
-reference_binary="$payload_dir/reference-bargeboard"
-(
-  cd "$repository_root"
-  CGO_ENABLED=0 go build -buildvcs=true -mod=readonly -trimpath -o "$reference_binary" .
-)
-reference_module_version="$(go version -m -json "$reference_binary" | jq -er \
-  --arg package "$project_package" '
-    select(.Path == $package and .Main.Path == $package) |
-    .Main.Version | select(type == "string" and length > 0)
-  ')"
-readonly reference_module_version
-if [[ -n "$expected_tag" ]]; then
-  readonly expected_module_version="$expected_tag"
-  if [[ "$reference_module_version" != "$expected_module_version" ]]; then
-    printf 'source module version %s does not match release tag %s\n' \
-      "$reference_module_version" "$expected_module_version" >&2
-    exit 1
-  fi
-else
-  readonly expected_module_version="$reference_module_version"
-fi
+expected_module_version="$(bash "$script_dir/verify-native-release-inputs.sh" "$native_binaries")"
+readonly expected_module_version
 
 for archive in "${archives[@]}"; do
   case "$archive" in
-    *_darwin_amd64.tar.gz)
-      expected_goos=darwin
-      expected_goarch=amd64
-      expected_tuning_key=GOAMD64
-      expected_tuning=v1
-      expected_target=darwin_amd64_v1
-      ;;
     *_darwin_arm64.tar.gz)
       expected_goos=darwin
       expected_goarch=arm64
@@ -359,22 +333,11 @@ for archive in "${archives[@]}"; do
     exit 1
   fi
 
-  reference_target_binary="$payload_dir/reference-$expected_target"
-  (
-    cd "$repository_root"
-    env \
-      CGO_ENABLED=0 \
-      GOOS="$expected_goos" \
-      GOARCH="$expected_goarch" \
-      "$expected_tuning_key=$expected_tuning" \
-      go build \
-        -buildvcs=true \
-        -mod=readonly \
-        -trimpath \
-        -ldflags "-s -w -X main.version=$version" \
-        -o "$reference_target_binary" \
-        .
-  )
+  extension=''
+  if [[ "$expected_goos" == windows ]]; then
+    extension=.exe
+  fi
+  reference_target_binary="$native_binaries/bargeboard-native-reference-$expected_target$extension"
   if ! cmp -s "$binary_path" "$reference_target_binary"; then
     printf 'archive binary does not match reproducible reference build: %s\n' "$archive" >&2
     exit 1
@@ -567,9 +530,6 @@ done
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)
     readonly native_archive="bargeboard_${version}_darwin_arm64.tar.gz"
-    ;;
-  Darwin-x86_64)
-    readonly native_archive="bargeboard_${version}_darwin_amd64.tar.gz"
     ;;
   Linux-aarch64)
     readonly native_archive="bargeboard_${version}_linux_arm64.tar.gz"

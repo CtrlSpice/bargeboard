@@ -11,9 +11,9 @@ case "$version/$runner_os/$runner_arch" in
     archive="go${version}.linux-amd64.tar.gz"
     checksum=7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840
     ;;
-  1.27.4/macOS/X64)
-    archive="go${version}.darwin-amd64.tar.gz"
-    checksum=2b799377704ef12db39bd254995d5c348c9cc8d86562ca817724390e56c38f43
+  1.27.4/Linux/ARM64)
+    archive="go${version}.linux-arm64.tar.gz"
+    checksum=3392582988a273a87ab5043ee1b2c9c17a2c3c00580bf9326c47a2e0aaaeac92
     ;;
   1.27.4/macOS/ARM64)
     archive="go${version}.darwin-arm64.tar.gz"

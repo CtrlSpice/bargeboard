@@ -3,6 +3,8 @@ bargeboard
 *.test
 coverage.out
 *.log
+*.duckdb
+*.duckdb.wal
 .env
 .env.local
 .DS_Store

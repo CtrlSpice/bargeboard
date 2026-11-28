@@ -498,7 +498,7 @@ mkdir "$work/mismatched-reference-bin"
 real_cmp="$(command -v cmp)"
 cat >"$work/mismatched-reference-bin/cmp" <<EOF
 #!/usr/bin/env bash
-if [[ "\${*: -1}" == */reference-* ]]; then
+if [[ "\${2:-}" == */bargeboard_*/bargeboard* && "\${*: -1}" == */bargeboard-native-reference-* ]]; then
   exit 1
 fi
 exec "$real_cmp" "\$@"

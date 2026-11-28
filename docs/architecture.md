@@ -561,31 +561,95 @@ diff, CI, and independent-review gates.
 
 ## Local Runtime and Verification Boundaries
 
-**Status: GREEN policy; viewer delivery remains unimplemented**
+**Decision status: GREEN (approved). Embedded OTLP storage and native packaging are
+implemented; racing projection is pending.**
 
 Bargeboard is the credential-owning local F1 client. Each user supplies their own
-F1 TV `subscriptionToken` through the existing local token-file reference.
+F1 TV `subscriptionToken` through `f1livetiming.token_file`, configured as
+`$HOME/.config/bargeboard/f1tv-token`.
 Bargeboard processes that user's real input; synthetic data belongs to tests.
-The intended viewer arrangement is:
+The local viewer arrangement is:
 
 ```text
-F1 service <-> Bargeboard -> OTLP over loopback -> otel-desktop-viewer
-                 ^
-          local token file
+F1 service <-> f1livetiming receiver -> session state
+                       ^              (racing OTLP projection pending)
+                local token file
+
+OTLP receiver -> Collector pipelines -> desktop exporter -> duckdb extension
+                                                            persistent store + UI
 ```
 
-The viewer MUST remain a generic OTLP receiver and dashboard. It MUST NOT accept,
+The embedded viewer MUST remain a generic telemetry store and dashboard. It MUST NOT accept,
 read, store, log, or forward F1 credentials. Bargeboard MUST NOT place credentials,
 cookies, or connection tokens in outgoing telemetry. The project provides no
 hosted feed relay or shared account. The supported local viewer arrangement keeps
 the user's feed and derived telemetry on their machine.
 
-This topology requires the approved racing reducers/projector and a standard
-Collector OTLP exporter. Neither racing projection nor that exporter is wired
-today. A future F1-only configuration SHOULD omit Bargeboard's incoming OTLP
-receiver so the separate viewer can own the normal ingest ports. It MUST NOT
-mistake Bargeboard's current OTLP listening endpoints for export destinations.
-Exporter integration and its end-to-end verification remain separate work.
+The distribution embeds `otel-desktop-viewer v0.8.1` through its `desktop`
+exporter and `duckdb` extension. All three shipped signal pipelines MUST use
+`desktop`; the extension MUST be enabled at `127.0.0.1:8000`. The existing OTLP
+listeners remain at `localhost:4317` and `localhost:4318`, with those ports
+advertised to the viewer. They are ingress endpoints.
+
+The shipped database path is `./bargeboard.duckdb`, relative to the process
+working directory. `db_max_size: "0"` disables automatic pruning. The extension
+owns the database and HTTP server. Collector extension ordering keeps storage
+available until batching and exporter queues drain during shutdown. Database
+startup errors MUST fail Collector startup rather than substitute an in-memory
+store. Viewer components use the pinned upstream
+[exporter defaults](https://github.com/CtrlSpice/otel-desktop-viewer/blob/v0.8.1/desktopexporter/factory.go)
+and [queue defaults](https://github.com/CtrlSpice/otel-desktop-viewer/blob/v0.8.1/desktopexporter/config.go).
+The extension's [instrumentation is disabled by default](https://github.com/CtrlSpice/otel-desktop-viewer/blob/v0.8.1/desktopexporter/duckdbextension/factory.go).
+The debug exporter remains compiled for diagnostic configs.
+
+Building the distribution and release binaries requires a native C/C++ toolchain
+with CGO enabled. The release targets are Linux on amd64 and arm64, macOS on
+arm64, and Windows on amd64. Intel macOS is not a release target.
+Native jobs MUST use `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15`, and
+`windows-2025`, respectively, with the authenticated Go toolchain. The macOS
+deployment target MUST be `13.0`, set explicitly in C, C++, and linker flags.
+
+Each native job MUST compare its candidate binary with an independent rebuild
+from the same commit using separate source and Go cache directories. Transfer
+both sets within the current workflow run using pinned `actions/upload-artifact`
+v7.0.2 and `actions/download-artifact` v8.0.2. Central GoReleaser prebuilt
+packaging MUST package each set independently and compare the complete archives,
+SBOMs, and checksums. Verification MUST require exactly the four target binaries
+in each set, reject missing or mismatched inputs, and retain canonical archive
+validation, deterministic `THIRD_PARTY_NOTICES`, and the pinned MPL source
+payloads described in the [release policy](../README.md#releases).
+Native checks MUST inspect build metadata and runtime-library requirements and
+execute the binary's version and configuration checks on its matching runner.
+The deployment target alone does not prove runtime compatibility on macOS 13.
+
+`scripts/build-native-release.sh` owns native build flags and executable checks.
+It clears Go's build ID with `-buildid=` because CGO include and library paths
+can make that ID depend on the source and module-cache directories despite
+`-trimpath`. Go version, dependency and VCS metadata remain embedded and MUST
+pass validation. Complete binary comparisons remain required; verification MUST
+NOT ignore or rewrite differing bytes.
+The version-resolution job uses the pinned GoReleaser to determine snapshot
+versions, including non-SemVer local tags. Release versions come from the
+separately validated signed tag. Artifact transfer carries raw binaries; central
+verification rejects extra entries, empty files, directories, and symbolic links,
+then checks each candidate against its reference and the expected Go/VCS/target
+metadata. The complete archive verifier compares each packaged binary with that
+target's transferred reference. It MUST NOT substitute a cross-compiled or
+CGO-disabled reference.
+
+Accepted racing mappings still require implementation. Pending source mappings
+remain non-binding. Normal OTLP ingress already reaches persistent viewer storage.
+
+Verification MUST check the complete shipped extension configuration and all
+three pipeline routes. A local integration test MUST send independently authored
+OTLP through the real receiver, batch processor and desktop exporter, stop the
+Collector, reopen the same database, and compare complete viewer exports with
+the original signals. It MUST verify stored row counts, nanosecond timestamps,
+integer precision, resource/scope association, typed bodies and attributes, and
+disabled pruning. Test-only readiness notifications and shutdown provide the
+synchronization; elapsed sleeps are not evidence of completed writes.
+Tests MUST also verify that unusable database paths fail startup and that an
+existing invalid database file remains unchanged.
 
 The current client consumes a token; it does not perform account login, token
 acquisition/refresh, or explicit device registration. Successful requests do not
@@ -671,6 +735,7 @@ The Go distribution currently compiles:
 - The standard OTLP receiver.
 - The batch processor.
 - The debug exporter.
+- The viewer's `desktop` exporter and `duckdb` extension.
 
 The shipped `config.yaml` runs both the F1 Live Timing and standard OTLP
 receivers. It contains no credentials: the F1 receiver resolves each user's
@@ -1295,8 +1360,8 @@ The shipped `service.telemetry.metrics` uses `level: basic` and an explicit
 `readers.pull.exporter.prometheus` reader on `127.0.0.1:8888`, with
 `without_scope_info`, `without_units`, and `without_type_suffix` true, matching
 the pinned defaults. `level: none` disables metrics, not terminal reporting.
-No extension is required. The internal metrics endpoint is separate from the
-configured racing pipelines and their debug exporter.
+Internal metrics need no extension. Their endpoint is separate from the
+configured racing pipelines and their desktop exporter.
 
 Verification MUST compare complete pure state and notices for initial waiting,
 first data, flapping, scheduled versus attempted retries, empty and nonempty
