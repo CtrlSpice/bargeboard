@@ -92,4 +92,19 @@ func TestBoundedJSONBody(t *testing.T) {
 	if body, err := ReadBoundedJSONBody(resp, 100); body != nil || err != ErrBodyRead {
 		t.Errorf("read failure: %q, %v", body, err)
 	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	resp = &http.Response{Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(iotest.ErrReader(errors.New("interrupted")))}
+	if body, err := ReadBoundedJSONBodyContext(cancelled, resp, 100); body != nil || !errors.Is(err, context.Canceled) {
+		t.Errorf("canceled read: %q, %v", body, err)
+	}
+	resp = &http.Response{Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(iotest.ErrReader(context.DeadlineExceeded))}
+	if body, err := ReadBoundedJSONBodyContext(context.Background(), resp, 100); body != nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("deadline read: %q, %v", body, err)
+	}
+	client := NewRestrictedHTTPClient(5 * time.Second)
+	tr, ok := client.Transport.(*http.Transport)
+	if !ok || !tr.DisableKeepAlives || !tr.DisableCompression || tr.Proxy != nil {
+		t.Fatalf("unexpected restricted transport: %#v", client.Transport)
+	}
 }
