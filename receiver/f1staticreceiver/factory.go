@@ -1,0 +1,87 @@
+package f1staticreceiver
+
+import (
+	"context"
+	"errors"
+	"sync"
+
+	"github.com/CtrlSpice/bargeboard/internal/f1id"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/consumer"
+	"go.opentelemetry.io/collector/receiver"
+)
+
+var Type = component.MustNewType("f1static")
+
+func NewFactory() receiver.Factory {
+	var mu sync.Mutex
+	type instanceKey struct {
+		cfg *Config
+		id  component.ID
+	}
+	instances := map[instanceKey]*staticReceiver{}
+	activeSessions := map[string]*staticReceiver{}
+	activeIdentities := map[f1id.SessionIdentity]*staticReceiver{}
+	// Signal pipelines are assembled before the Collector starts components.
+	register := func(settings receiver.Settings, config component.Config, attach func(*staticReceiver)) (component.Component, error) {
+		cfg, ok := config.(*Config)
+		if !ok || cfg == nil {
+			return nil, errors.New("invalid static replay config")
+		}
+		if err := cfg.Validate(); err != nil {
+			return nil, err
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		key := instanceKey{cfg, settings.ID}
+		r := instances[key]
+		if r == nil {
+			if cfg.Enabled {
+				if owner := activeSessions[cfg.SessionPath]; owner != nil {
+					return nil, errors.New("duplicate static replay session_path")
+				}
+			}
+			r = newReceiver(*cfg, settings)
+			instances[key] = r
+			if cfg.Enabled {
+				activeSessions[cfg.SessionPath] = r
+			}
+			r.claim = func(id f1id.SessionIdentity) error {
+				mu.Lock()
+				defer mu.Unlock()
+				if owner := activeIdentities[id]; owner != nil && owner != r {
+					return errors.New("duplicate static replay session identity")
+				}
+				activeIdentities[id] = r
+				return nil
+			}
+			r.remove = func() {
+				mu.Lock()
+				defer mu.Unlock()
+				if instances[key] == r {
+					delete(instances, key)
+				}
+				if cfg.Enabled && activeSessions[cfg.SessionPath] == r {
+					delete(activeSessions, cfg.SessionPath)
+				}
+				for id, owner := range activeIdentities {
+					if owner == r {
+						delete(activeIdentities, id)
+					}
+				}
+			}
+		}
+		attach(r)
+		return r, nil
+	}
+	return receiver.NewFactory(Type, func() component.Config { c := DefaultConfig(); return &c },
+		receiver.WithTraces(func(_ context.Context, s receiver.Settings, c component.Config, next consumer.Traces) (receiver.Traces, error) {
+			return register(s, c, func(r *staticReceiver) { r.traces = next })
+		}, component.StabilityLevelDevelopment),
+		receiver.WithMetrics(func(_ context.Context, s receiver.Settings, c component.Config, next consumer.Metrics) (receiver.Metrics, error) {
+			return register(s, c, func(r *staticReceiver) { r.metrics = next })
+		}, component.StabilityLevelDevelopment),
+		receiver.WithLogs(func(_ context.Context, s receiver.Settings, c component.Config, next consumer.Logs) (receiver.Logs, error) {
+			return register(s, c, func(r *staticReceiver) { r.logs = next })
+		}, component.StabilityLevelDevelopment))
+}

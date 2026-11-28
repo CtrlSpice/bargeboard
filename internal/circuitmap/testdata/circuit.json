@@ -1,0 +1,17 @@
+{
+  "circuitKey": 91,
+  "year": 2026,
+  "circuitName": "Test \uD83D\uDE80",
+  "rotation": 90,
+  "corners": [
+    {"number": 2, "letter": "B", "trackPosition": {"x": 60, "y": -80}},
+    {"number": 2, "letter": "A", "trackPosition": {"x": -60, "y": 80}},
+    {"number": 1, "trackPosition": {"x": 10000, "y": 0}}
+  ],
+  "marshalSectors": [
+    {"number": 12, "trackPosition": {"x": 300, "y": -400}},
+    {"number": 3, "trackPosition": {"x": -300, "y": 400}}
+  ],
+  "x": [10, 20],
+  "marshalLights": [{"number": 1, "trackPosition": {"x": 0, "y": 0}}]
+}

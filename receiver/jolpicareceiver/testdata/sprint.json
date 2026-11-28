@@ -1,0 +1,3 @@
+{"MRData":{"series":"f1","limit":"100","offset":"0","total":"1","RaceTable":{"season":"2025","round":"4","Races":[{"season":"2025","round":"4","SprintResults":[
+  {"number":"17","position":"1","positionText":"1","points":"8","grid":"3","laps":"6","status":"Finished","Driver":{"driverId":"elm","code":"ELM"},"Constructor":{"name":"Copper Works"}}
+]}]}}}
